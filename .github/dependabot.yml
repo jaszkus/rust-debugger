@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels: [dependencies]
+    groups:
+      # All minor/patch bumps land as one PR to keep the noise down;
+      # major bumps still come in as individual PRs.
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    groups:
+      github-actions:
+        patterns: ["*"]
