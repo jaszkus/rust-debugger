@@ -2,6 +2,7 @@
 name = "rust-debugger"
 version = "0.1.0"
 edition = "2021"
+authors = ["jaszkus"]
 description = "Ghidra/IDA-style binary analysis, decompilation and live-debugging workbench with a GPU GUI and an MCP server for AI agents"
 license = "Apache-2.0"
 
