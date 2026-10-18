@@ -1,0 +1,8 @@
+[files]
+extend-exclude = ["data/", "assets/", "target/"]
+
+[default]
+extend-ignore-re = [
+    # long hex literals (offsets, hashes, unicode escapes)
+    '(?i)\b[0-9a-f]{6,}\b',
+]

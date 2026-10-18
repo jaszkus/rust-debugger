@@ -1,0 +1,19 @@
+name: Dependency review
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Flags PRs that introduce vulnerable or disallowed dependencies,
+      # including Dependabot bumps.
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high

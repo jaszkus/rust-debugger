@@ -1,0 +1,32 @@
+name: Fuzz (scheduled)
+
+on:
+  schedule:
+    # Every night at 02:37 UTC.
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: fuzz harness (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The in-tree harness (src/tests/fuzz.rs) drives the release parser and
+      # analysis pipeline over mutated binaries: may fail, must never panic,
+      # abort or hang.
+      - name: Run fuzz tests
+        run: cargo test --release --locked --lib fuzz
