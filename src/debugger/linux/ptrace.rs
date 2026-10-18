@@ -628,7 +628,7 @@ impl PtraceDebugger {
                 let confirmed = ours.is_some()
                     && self
                         .read_memory(bp_addr, 1)
-                        .is_some_and(|b| b.first() == Some(&0xCC));
+                        .is_ok_and(|b| b.first() == Some(&0xCC));
                 if confirmed {
                     let mut regs = self.get_regs_raw_tid(tid)?;
                     regs.rip = bp_addr;

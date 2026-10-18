@@ -113,7 +113,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Measure coverage
-        run: cargo llvm-cov --locked --summary-only | tee coverage.txt
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo llvm-cov --locked --summary-only | tee coverage.txt
 
       - name: Publish coverage to job summary
         run: |
