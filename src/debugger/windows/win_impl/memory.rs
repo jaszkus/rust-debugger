@@ -481,7 +481,7 @@ impl WinDebugger {
         let mut ctx: CONTEXT64 = new_context(CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS);
         let prev_suspend = unsafe { SuspendThread(self.thread_handle) };
         let r = unsafe { GetThreadContext(self.thread_handle, &mut ctx) };
-        if r == BOOL(0) {
+        if !r.as_bool() {
             if prev_suspend != u32::MAX {
                 unsafe {
                     ResumeThread(self.thread_handle);
@@ -527,7 +527,7 @@ impl WinDebugger {
                 ResumeThread(self.thread_handle);
             }
         }
-        if r == BOOL(0) {
+        if !r.as_bool() {
             return Err("SetThreadContext failed".into());
         }
         Ok(())
@@ -543,7 +543,7 @@ impl WinDebugger {
         let mut ctx: CONTEXT64 = new_context(CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS);
         let prev_suspend = unsafe { SuspendThread(self.thread_handle) };
         let r = unsafe { GetThreadContext(self.thread_handle, &mut ctx) };
-        if r == BOOL(0) {
+        if !r.as_bool() {
             if prev_suspend != u32::MAX {
                 unsafe {
                     ResumeThread(self.thread_handle);
@@ -568,7 +568,7 @@ impl WinDebugger {
                 ResumeThread(self.thread_handle);
             }
         }
-        if r == BOOL(0) {
+        if !r.as_bool() {
             return Err("SetThreadContext failed".into());
         }
         Ok(())

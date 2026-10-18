@@ -13,10 +13,10 @@ jobs:
     if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Flags PRs that introduce vulnerable or disallowed dependencies,
       # including Dependabot bumps.
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high

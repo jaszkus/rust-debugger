@@ -64,8 +64,14 @@ pub(super) const CONTEXT_FULL: u32 = CONTEXT_CONTROL | CONTEXT_INTEGER | (CONTEX
 pub(super) const CONTEXT_DEBUG_REGISTERS: u32 = CONTEXT_AMD64 | 0x10;
 
 unsafe extern "system" {
-    pub(super) fn GetThreadContext(hthread: HANDLE, lpcontext: *mut CONTEXT64) -> BOOL;
-    pub(super) fn SetThreadContext(hthread: HANDLE, lpcontext: *const CONTEXT64) -> BOOL;
+    pub(super) fn GetThreadContext(
+        hthread: HANDLE,
+        lpcontext: *mut CONTEXT64,
+    ) -> windows::core::BOOL;
+    pub(super) fn SetThreadContext(
+        hthread: HANDLE,
+        lpcontext: *const CONTEXT64,
+    ) -> windows::core::BOOL;
 }
 
 pub struct WinDebugger {
@@ -124,7 +130,7 @@ impl WinDebugger {
         let result = unsafe {
             CreateProcessW(
                 None,
-                windows::core::PWSTR(wide_path.as_ptr() as *mut _),
+                Some(windows::core::PWSTR(wide_path.as_ptr() as *mut _)),
                 None,
                 None,
                 false,
@@ -227,7 +233,7 @@ impl WinDebugger {
         let mut context: CONTEXT64 = new_context(CONTEXT_FULL);
 
         let result = unsafe { GetThreadContext(self.thread_handle, &mut context) };
-        if result == BOOL(0) {
+        if !result.as_bool() {
             return Err("GetThreadContext failed".into());
         }
 
@@ -258,7 +264,7 @@ impl WinDebugger {
 
         let prev_suspend = unsafe { SuspendThread(self.thread_handle) };
         let result = unsafe { GetThreadContext(self.thread_handle, &mut context) };
-        if result == BOOL(0) {
+        if !result.as_bool() {
             if prev_suspend != u32::MAX {
                 unsafe {
                     ResumeThread(self.thread_handle);
@@ -275,7 +281,7 @@ impl WinDebugger {
                 ResumeThread(self.thread_handle);
             }
         }
-        if result == BOOL(0) {
+        if !result.as_bool() {
             return Err("SetThreadContext failed".into());
         }
         Ok(())
@@ -284,12 +290,12 @@ impl WinDebugger {
     pub fn set_rip(&self, rip: u64) -> Result<(), String> {
         let mut context: CONTEXT64 = new_context(CONTEXT_FULL);
         let result = unsafe { GetThreadContext(self.thread_handle, &mut context) };
-        if result == BOOL(0) {
+        if !result.as_bool() {
             return Err("GetThreadContext failed".into());
         }
         context.rip = rip;
         let result = unsafe { SetThreadContext(self.thread_handle, &context) };
-        if result == BOOL(0) {
+        if !result.as_bool() {
             return Err("SetThreadContext failed".into());
         }
         Ok(())

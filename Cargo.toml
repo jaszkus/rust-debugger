@@ -16,19 +16,19 @@ iced = { version = "0.14.0", default-features = false, features = [
     "wgpu", "wayland", "tokio", "canvas", "advanced", "svg",
     "thread-pool", "linux-theme-detection", "crisp",
 ] }
-goblin = "0.8"
+goblin = "0.10"
 pdb = "0.8"
 iced-x86 = "1.21"
 memmap2 = "0.9"
-rfd = "0.15"
-axum = "0.7"
+rfd = "0.17"
+axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1.12"
 rustc-hash = "2.0"
 memchr = "2.7"
-zstd = "0.13"
+zstd = "0.14"
 yaxpeax-arm = "0.5.0"
 gimli = "0.34.0"
 yaxpeax-arch = "0.3.2"
@@ -37,7 +37,7 @@ yaxpeax-arch = "0.3.2"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Threading",
     "Win32_Foundation",

@@ -22,7 +22,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Headless GUI regression tests create a real wgpu device; the runners
       # have no GPU, so Linux needs software Vulkan (lavapipe). Windows falls
@@ -60,7 +60,7 @@ jobs:
     name: lint (workflows, typos, fmt)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: actionlint — GitHub Actions workflow linter
         run: |
@@ -85,14 +85,14 @@ jobs:
     name: cargo-deny (advisories, licenses, bans)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   coverage:
     name: coverage (advisory report)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # cargo llvm-cov runs the full test suite, including the headless wgpu
       # GUI tests — they need software Vulkan on the runner (see "test" job).
@@ -126,7 +126,7 @@ jobs:
       - name: LCOV report
         run: cargo llvm-cov report --lcov --output-path lcov.info
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: lcov.info
