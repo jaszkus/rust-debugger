@@ -1,0 +1,56 @@
+[package]
+name = "rust-debugger"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# wgpu (GPU) renderer: text and geometry go through a glyph atlas on the
+# GPU instead of CPU rasterization in RAM. This replaces the previous
+# tiny-skia software backend (see `vendor/` — kept on disk, unused).
+iced = { version = "0.14.0", default-features = false, features = [
+    "wgpu", "wayland", "tokio", "canvas", "advanced", "svg",
+    "thread-pool", "linux-theme-detection", "crisp",
+] }
+goblin = "0.8"
+pdb = "0.8"
+iced-x86 = "1.21"
+memmap2 = "0.9"
+rfd = "0.15"
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.12"
+rustc-hash = "2.0"
+memchr = "2.7"
+zstd = "0.13"
+yaxpeax-arm = "0.5.0"
+gimli = "0.34.0"
+yaxpeax-arch = "0.3.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Kernel",
+    "Win32_System_ProcessStatus",
+    "Win32_System_LibraryLoader",
+] }
+
+[build-dependencies]
+# Windows .rc -> .res for the embedded program icon (assets/app.rc).
+embed-resource = "3"
+
+[dev-dependencies]# Same renderer/version as iced; construct it headlessly for modal input tests.
+iced_wgpu = "0.14"
+
+# NOTE: `vendor/iced_tiny_skia` (the old software-backend patch set) is kept
+# on disk but no longer wired in. The wgpu renderer path needs no patches.
+

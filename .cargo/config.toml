@@ -1,0 +1,5 @@
+# Test profile: optimize analysis-heavy tests (iced decode, auto_analyze)
+# so `cargo test` runs ~10x faster without --release.
+[profile.test]
+opt-level = 2
+debug = 1

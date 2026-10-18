@@ -1,0 +1,26 @@
+/target
+/secret/
+/samples
+*.rdb
+recent_projects.txt
+backup-*.zip
+*.zip
+
+# Local scratch: archives, ad-hoc test binary, helper scripts, file dumps.
+/x
+/kopiuj_rs.bat
+/pliki.txt
+/src/kopiuj_rs.bat
+/src/pliki.txt
+/src/strip_comments.py
+
+# Local-only: test fixtures, examples and tooling config
+# (kept on disk, intentionally not published).
+/tests/
+/examples/
+/opencode.json
+/scripts/
+/AGENTS.md
+
+# Tooling state.
+/.freebuff/
