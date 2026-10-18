@@ -30,6 +30,12 @@ pub struct PtraceDebugger {
     pub(super) task_cache: std::cell::RefCell<(std::time::Instant, Vec<u32>)>,
 }
 
+impl Default for PtraceDebugger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PtraceDebugger {
     pub fn new() -> Self {
         let ancient = std::time::Instant::now() - std::time::Duration::from_secs(3600);
@@ -153,7 +159,7 @@ impl PtraceDebugger {
             }
         }
         if !saw_exec {
-            let _ = self.terminate();
+            self.terminate();
             return Err("Launch handshake timed out (no exec trap)".into());
         }
         self.set_trace_options(pid);
@@ -297,12 +303,10 @@ impl PtraceDebugger {
             *libc::__errno_location() = 0;
             if libc::kill(pid, 0) == 0 {
                 if let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", self.process_id))
+                    && let Some(rparen) = stat.rfind(')')
+                    && stat[rparen..].split_whitespace().nth(1) == Some("Z")
                 {
-                    if let Some(rparen) = stat.rfind(')') {
-                        if stat[rparen..].split_whitespace().nth(1) == Some("Z") {
-                            return false;
-                        }
-                    }
+                    return false;
                 }
                 return true;
             }
@@ -501,7 +505,6 @@ impl PtraceDebugger {
             *status = st;
             return Some(w);
         }
-        if w < 0 && errno() != libc::ECHILD && errno() != libc::EINTR {}
         let mut st2 = 0;
         let w2 = unsafe {
             libc::waitpid(
@@ -592,7 +595,7 @@ impl PtraceDebugger {
                 let rip = state.registers.rip;
                 if let Some((entry, orig)) = self.entry_bp.take() {
                     if rip.wrapping_sub(1) == entry {
-                        let mut regs = self.get_regs_raw_tid(tid).map_err(|e| e)?;
+                        let mut regs = self.get_regs_raw_tid(tid)?;
                         regs.rip = entry;
                         let _ = self.set_regs_raw_tid(tid, &regs);
                         state.registers.rip = entry;
@@ -625,9 +628,9 @@ impl PtraceDebugger {
                 let confirmed = ours.is_some()
                     && self
                         .read_memory(bp_addr, 1)
-                        .map_or(false, |b| b.first() == Some(&0xCC));
+                        .is_some_and(|b| b.first() == Some(&0xCC));
                 if confirmed {
-                    let mut regs = self.get_regs_raw_tid(tid).map_err(|e| e)?;
+                    let mut regs = self.get_regs_raw_tid(tid)?;
                     regs.rip = bp_addr;
                     let _ = self.set_regs_raw_tid(tid, &regs);
                     state.registers.rip = bp_addr;
@@ -693,20 +696,20 @@ impl PtraceDebugger {
 
 #[allow(dead_code)]
 fn clear_tf(dbg: &PtraceDebugger) {
-    if let Ok(mut regs) = dbg.get_regs_raw() {
-        if regs.eflags & 0x100 != 0 {
-            regs.eflags &= !0x100;
-            let _ = dbg.set_regs_raw(&regs);
-        }
+    if let Ok(mut regs) = dbg.get_regs_raw()
+        && regs.eflags & 0x100 != 0
+    {
+        regs.eflags &= !0x100;
+        let _ = dbg.set_regs_raw(&regs);
     }
 }
 
 fn clear_tf_tid(dbg: &PtraceDebugger, tid: libc::pid_t) {
-    if let Ok(mut regs) = dbg.get_regs_raw_tid(tid) {
-        if regs.eflags & 0x100 != 0 {
-            regs.eflags &= !0x100;
-            let _ = dbg.set_regs_raw_tid(tid, &regs);
-        }
+    if let Ok(mut regs) = dbg.get_regs_raw_tid(tid)
+        && regs.eflags & 0x100 != 0
+    {
+        regs.eflags &= !0x100;
+        let _ = dbg.set_regs_raw_tid(tid, &regs);
     }
 }
 

@@ -37,10 +37,10 @@ impl PtraceDebugger {
             if mapped != canon {
                 continue;
             }
-            if let Some(s0) = range.split('-').next() {
-                if let Ok(start) = u64::from_str_radix(s0, 16) {
-                    base = Some(base.map_or(start, |b: u64| b.min(start)));
-                }
+            if let Some(s0) = range.split('-').next()
+                && let Ok(start) = u64::from_str_radix(s0, 16)
+            {
+                base = Some(base.map_or(start, |b: u64| b.min(start)));
             }
         }
         let entry = if e_type == ET_EXEC {
@@ -462,10 +462,11 @@ impl PtraceDebugger {
     }
 
     pub(super) fn maps_lines(&self) -> Result<std::rc::Rc<Vec<String>>, String> {
-        if let Ok(cache) = self.maps_cache.try_borrow() {
-            if !cache.1.is_empty() && cache.0.elapsed() < std::time::Duration::from_millis(250) {
-                return Ok(cache.1.clone());
-            }
+        if let Ok(cache) = self.maps_cache.try_borrow()
+            && !cache.1.is_empty()
+            && cache.0.elapsed() < std::time::Duration::from_millis(250)
+        {
+            return Ok(cache.1.clone());
         }
         let text = std::fs::read_to_string(format!("/proc/{}/maps", self.process_id))
             .map_err(|e| format!("Cannot read target maps: {}", e))?;
@@ -489,10 +490,11 @@ impl PtraceDebugger {
     }
 
     pub(super) fn cached_threads(&self) -> Vec<u32> {
-        if let Ok(cache) = self.task_cache.try_borrow() {
-            if !cache.1.is_empty() && cache.0.elapsed() < std::time::Duration::from_millis(100) {
-                return cache.1.clone();
-            }
+        if let Ok(cache) = self.task_cache.try_borrow()
+            && !cache.1.is_empty()
+            && cache.0.elapsed() < std::time::Duration::from_millis(100)
+        {
+            return cache.1.clone();
         }
         let tids = self.read_task_dir();
         if let Ok(mut cache) = self.task_cache.try_borrow_mut() {
@@ -505,10 +507,10 @@ impl PtraceDebugger {
         let mut tids = Vec::new();
         if let Ok(dir) = std::fs::read_dir(format!("/proc/{}/task", self.process_id)) {
             for entry in dir.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Ok(tid) = name.parse::<u32>() {
-                        tids.push(tid);
-                    }
+                if let Some(name) = entry.file_name().to_str()
+                    && let Ok(tid) = name.parse::<u32>()
+                {
+                    tids.push(tid);
                 }
             }
             tids.sort_unstable();
@@ -613,7 +615,7 @@ impl PtraceDebugger {
         }
         let tids = self.cached_threads();
         if tids.is_empty() {
-            return Err(format!("Cannot list target threads (task gone?)"));
+            return Err("Cannot list target threads (task gone?)".into());
         }
         Ok(tids)
     }
@@ -625,7 +627,7 @@ impl PtraceDebugger {
         }
         let tids = self.read_task_dir();
         if tids.is_empty() {
-            return Err(format!("Cannot list target threads (task gone?)"));
+            return Err("Cannot list target threads (task gone?)".into());
         }
         Ok(tids)
     }
