@@ -1,0 +1,52 @@
+name: Release-plz
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+# release-plz keeps CHANGELOG.md up to date, opens a "release" PR with the
+# next version bump, and (once that PR is merged) creates the git tag +
+# GitHub Release. The crate is git-only (publish = false), nothing goes to
+# crates.io.
+#
+# NOTE: if you add a RELEASE_PLZ_TOKEN secret (a PAT with contents +
+# pull-requests write), the release PR runs CI automatically and the created
+# tag triggers the binary build in release.yml. With the default GITHUB_TOKEN
+# tags created here do NOT trigger other workflows, so build the release
+# binaries manually (or re-push the tag) in that case.
+jobs:
+  release-plz-release:
+    name: release-plz release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+  release-plz-pr:
+    name: release-plz PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}

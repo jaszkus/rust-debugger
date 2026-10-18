@@ -37,6 +37,16 @@ jobs:
         if: runner.os == 'Linux'
         run: tar -C target/release -czf rust-debugger-linux-x86_64.tar.gz rust-debugger
 
+      - name: Generate SBOM (Linux)
+        if: runner.os == 'Linux'
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -48,6 +58,7 @@ jobs:
           path: |
             *.tar.gz
             *.zip
+            sbom.spdx.json
           if-no-files-found: error
 
   release:
@@ -67,3 +78,4 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.json
