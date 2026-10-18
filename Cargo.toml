@@ -2,6 +2,8 @@
 name = "rust-debugger"
 version = "0.1.0"
 edition = "2021"
+description = "Ghidra/IDA-style binary analysis, decompilation and live-debugging workbench with a GPU GUI and an MCP server for AI agents"
+license = "Apache-2.0"
 
 [dependencies]
 # wgpu (GPU) renderer: text and geometry go through a glyph atlas on the
@@ -48,7 +50,8 @@ windows = { version = "0.58", features = [
 # Windows .rc -> .res for the embedded program icon (assets/app.rc).
 embed-resource = "3"
 
-[dev-dependencies]# Same renderer/version as iced; construct it headlessly for modal input tests.
+[dev-dependencies]
+# Same renderer/version as iced; construct it headlessly for modal input tests.
 iced_wgpu = "0.14"
 
 # NOTE: `vendor/iced_tiny_skia` (the old software-backend patch set) is kept

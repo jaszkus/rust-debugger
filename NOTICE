@@ -1,0 +1,19 @@
+rust-debugger
+Copyright 2026 rust-debugger contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes data derived from Ghidra
+(https://github.com/NationalSecurityAgency/ghidra), developed at the
+National Security Agency and licensed under the Apache License, Version 2.0:
+
+  data/StringModel.sng
+      An unmodified copy of
+      Ghidra/Features/Base/data/stringngrams/StringModel.sng
+      (Ghidra 12.1.4; upstream repo file c91e9aac).
+
+  data/StringModelLLR.bin
+      A precomputed log-likelihood-ratio lookup table generated from
+      StringModel.sng by the rust-debugger string-classification pipeline.
+
+See also data/README.md for provenance details.
