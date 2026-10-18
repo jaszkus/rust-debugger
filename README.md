@@ -2,7 +2,7 @@
 
 <!-- <img src="assets/icon.png" alt="rust-debugger logo" width="128" /> -->
 
-# rust-debugger
+# Rust Debugger
 
 ### Ghidra / IDA-style reverse engineering — written in Rust
 
@@ -49,7 +49,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 
 ---
 
-## Why rust-debugger?
+## Why Rust Debugger?
 
 | | |
 | --- | --- |
@@ -197,7 +197,7 @@ rust-debugger sample.exe      # open a binary straight away
 
 ## MCP server (for AI agents)
 
-rust-debugger speaks **JSON-RPC over HTTP** on `127.0.0.1` and exposes **200+ Ghidra-compatible tool names**, so
+Rust Debugger speaks **JSON-RPC over HTTP** on `127.0.0.1` and exposes **200+ Ghidra-compatible tool names**, so
 existing Ghidra-MCP clients and prompts work without changes.
 
 ```sh
@@ -352,14 +352,14 @@ Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
 - Third-party Rust crates keep their own licenses.
 
 > [!IMPORTANT]
-> rust-debugger is intended for **security research, malware analysis, interoperability and education**.
+> Rust Debugger is intended for **security research, malware analysis, interoperability and education**.
 > Use it only on software you are authorized to analyze.
 
 ---
 
 <div align="center">
 
-**If you find rust-debugger useful, consider giving it a star — it really helps the project grow!**
+**If you find Rust Debugger useful, consider giving it a star — it really helps the project grow!**
 
 [![Star History Chart](https://api.star-history.com/svg?repos=jaszkus/rust-debugger&type=Date)](https://star-history.com/#jaszkus/rust-debugger&Date)
 
