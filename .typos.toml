@@ -6,3 +6,24 @@ extend-ignore-re = [
     # long hex literals (offsets, hashes, unicode escapes)
     '(?i)\b[0-9a-f]{6,}\b',
 ]
+
+# Domain jargon and short identifiers that are not spelling mistakes:
+# ELF/PE/x86 terms, icon constants, local variable names, and lexicon entries
+# in src/parser/strings/string_model.rs (which intentionally includes
+# misspellings found in real-world symbol names).
+[default.extend-words]
+aad = "aad"
+aam = "aam"
+aranges = "aranges"
+accesory = "accesory"
+ba = "ba"
+critera = "critera"
+fo = "fo"
+pn = "pn"
+rela = "rela"
+seh = "seh"
+setp = "setp"
+thr = "thr"
+unparseable = "unparseable"
+vas = "vas"
+wil = "wil"
