@@ -16,7 +16,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 [![Rust](https://img.shields.io/badge/Rust-2024%20edition-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational?style=for-the-badge)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-200%2B%20tools-8A2BE2?style=for-the-badge)](#mcp-server-for-ai-agents)
-[![Status](https://img.shields.io/badge/status-0.1.0%20·%20active%20development-yellow?style=for-the-badge)](#)
+[![Status](https://img.shields.io/badge/status-0.2.0%20·%20active%20development-yellow?style=for-the-badge)](#)
 
 [![Stars](https://img.shields.io/github/stars/jaszkus/rust-debugger?style=flat-square&logo=github)](https://github.com/jaszkus/rust-debugger/stargazers)
 [![Issues](https://img.shields.io/github/issues/jaszkus/rust-debugger?style=flat-square)](https://github.com/jaszkus/rust-debugger/issues)
@@ -37,7 +37,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 <br/>
 
 > [!WARNING]
-> **Under active development (`0.1.0`).** Features, APIs and project-file formats may change.
+> **Under active development (`0.2.0`).** Features, APIs and project-file formats may change.
 > **I'm actively looking for contributors** — see [Contributing](#contributing).
 
 <!--
