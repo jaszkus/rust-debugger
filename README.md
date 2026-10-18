@@ -10,7 +10,8 @@ to AI agents through a Ghidra-compatible MCP server.
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational)
 
-> **Status:** active development (`0.1.0`). Features, APIs and project-file formats may change.
+> **Status:** 🚧 under active development (`0.1.0`) — features, APIs and project-file
+> formats may change. I'm actively looking for contributors — see [Contributing](#contributing).
 
 ## Features
 
@@ -146,6 +147,18 @@ assets/        GUI fonts and icon
 cargo test                     # unit + integration suites
 cargo check --all-targets      # quick compile check
 ```
+
+## Contributing
+
+The project is in active development and **I'm looking for contributors** — this is a
+great moment to get involved, whatever your experience level:
+
+- 🐛 **Bugs & feature ideas** — open an [issue](https://github.com/jaszkus/rust-debugger/issues)
+- 🔧 **Pull requests** — fixes, new analysis passes, format parsers, MCP tools, GUI polish, docs
+- 🧪 **Testing** — run it on your own binaries (PE/ELF/Mach-O/.NET) and report what breaks
+- 📖 **Docs** — anything unclear in the README or the code is worth a fix
+
+Not sure where to start? Open an issue and I'll help you get oriented.
 
 ## License
 
