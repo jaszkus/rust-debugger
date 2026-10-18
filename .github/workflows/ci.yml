@@ -94,6 +94,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # cargo llvm-cov runs the full test suite, including the headless wgpu
+      # GUI tests — they need software Vulkan on the runner (see "test" job).
+      - name: Install software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
