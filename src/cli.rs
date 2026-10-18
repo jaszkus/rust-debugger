@@ -299,7 +299,9 @@ fn run_batch_analyze(path: &str, fresh: bool) -> Result<(), String> {
     let started = Instant::now();
 
     if std::env::var_os("RD_MAX_DECOMP").is_none() {
-        std::env::set_var("RD_MAX_DECOMP", "0");
+        
+        
+        unsafe { std::env::set_var("RD_MAX_DECOMP", "0") };
     }
 
     let bin = crate::parser::parse_file(std::path::Path::new(path))

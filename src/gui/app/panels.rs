@@ -378,7 +378,12 @@ impl std::hash::Hash for SharedWatch {
         std::hash::Hash::hash(&(Arc::as_ptr(&self.0) as usize), h);
     }
 }
-pub(crate) fn state_watch(shared: &SharedWatch) -> impl iced::futures::Stream<Item = Message> {
+
+
+
+pub(crate) fn state_watch(
+    shared: &SharedWatch,
+) -> impl iced::futures::Stream<Item = Message> + use<> {
     let app = shared.0.clone();
     iced::futures::stream::unfold(
         (app, None, std::time::Instant::now()),
@@ -428,9 +433,10 @@ pub(crate) fn state_watch(shared: &SharedWatch) -> impl iced::futures::Stream<It
     )
 }
 
+
 pub(crate) fn toast_wake(
     deadline: &std::time::Instant,
-) -> impl iced::futures::Stream<Item = Message> {
+) -> impl iced::futures::Stream<Item = Message> + use<> {
     let deadline = *deadline;
     iced::futures::stream::once(async move {
         tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;

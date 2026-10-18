@@ -330,7 +330,7 @@ impl DebugSignal {
         let start = *g;
         match self
             .condvar
-            .wait_timeout_while(g, timeout, |gen| *gen == start)
+            .wait_timeout_while(g, timeout, |cur| *cur == start)
         {
             Ok((_, res)) => !res.timed_out(),
             Err(_) => false,

@@ -13,7 +13,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 <br/>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-2021-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-2024%20edition-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational?style=for-the-badge)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-200%2B%20tools-8A2BE2?style=for-the-badge)](#mcp-server-for-ai-agents)
 [![Status](https://img.shields.io/badge/status-0.1.0%20·%20active%20development-yellow?style=for-the-badge)](#)
@@ -139,7 +139,7 @@ Listing · Hex · Decompiler · Pcode · CFG · Xrefs · Strings · Symbols · S
 
 ## Requirements
 
-- **Rust** stable toolchain (edition 2021)
+- **Rust** stable toolchain (edition 2024, rustc ≥ 1.85)
 - **Windows 10+** or **Linux** (Wayland / X11)
 - A GPU with **Vulkan, DX12 or Metal** support for the GUI
 

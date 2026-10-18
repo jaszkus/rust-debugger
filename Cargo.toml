@@ -1,7 +1,8 @@
 [package]
 name = "rust-debugger"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 authors = ["jaszkus"]
 publish = false
 description = "Ghidra/IDA-style binary analysis, decompilation and live-debugging workbench with a GPU GUI and an MCP server for AI agents"

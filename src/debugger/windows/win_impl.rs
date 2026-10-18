@@ -63,7 +63,7 @@ const CONTEXT_INTEGER: u32 = CONTEXT_AMD64 | 0x02;
 pub(super) const CONTEXT_FULL: u32 = CONTEXT_CONTROL | CONTEXT_INTEGER | (CONTEXT_AMD64 | 0x08);
 pub(super) const CONTEXT_DEBUG_REGISTERS: u32 = CONTEXT_AMD64 | 0x10;
 
-extern "system" {
+unsafe extern "system" {
     pub(super) fn GetThreadContext(hthread: HANDLE, lpcontext: *mut CONTEXT64) -> BOOL;
     pub(super) fn SetThreadContext(hthread: HANDLE, lpcontext: *const CONTEXT64) -> BOOL;
 }
