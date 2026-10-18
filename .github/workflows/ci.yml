@@ -72,6 +72,9 @@ jobs:
       - name: typos — spellcheck code and docs
         run: typos
 
+      - name: MCP tool table in README matches registry.rs
+        run: python3 scripts/check_mcp_tools_sync.py
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
