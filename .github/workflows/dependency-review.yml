@@ -8,6 +8,9 @@ permissions:
 jobs:
   dependency-review:
     name: dependency review
+    # Dependency review requires GHAS on private repositories; it activates
+    # automatically once the repository is public.
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
