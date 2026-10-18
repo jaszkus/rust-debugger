@@ -44,11 +44,10 @@ pub(crate) struct SharedMaps {
 }
 
 fn shared_maps(shell: &Shell, version: u64, build: impl FnOnce() -> SharedMaps) -> SharedMaps {
-    if let Some((v, m)) = shell.listing_maps.borrow().as_ref() {
-        if *v == version {
+    if let Some((v, m)) = shell.listing_maps.borrow().as_ref()
+        && *v == version {
             return m.clone();
         }
-    }
     let m = build();
     *shell.listing_maps.borrow_mut() = Some((version, m.clone()));
     m
@@ -231,8 +230,8 @@ impl VListData for &ListingSnap {
         hover: bool,
         frame: &mut iced::widget::canvas::Frame,
     ) {
-        if let Some(insn) = self.instructions.get(i) {
-            if self.selected == Some(insn.address) || self.rip == insn.address {
+        if let Some(insn) = self.instructions.get(i)
+            && (self.selected == Some(insn.address) || self.rip == insn.address) {
                 frame.fill_rectangle(
                     iced::Point::new(0.0, top),
                     iced::Size::new(3.0, line_h),
@@ -243,7 +242,6 @@ impl VListData for &ListingSnap {
                     },
                 );
             }
-        }
         if let Some(insn) = self.instructions.get(i) {
             let cx = 12.5;
             let cy = top + line_h / 2.0;
@@ -550,15 +548,14 @@ fn build_row_tokens(snap: &ListingSnap, i: usize, char_w: f32) -> Vec<RowToken> 
                 t.annot,
             );
         }
-    } else if let Some(target) = first_addr_in_operands(&insn.ops()) {
-        if let Some(s) = snap.string_at.get(&target) {
+    } else if let Some(target) = first_addr_in_operands(&insn.ops())
+        && let Some(s) = snap.string_at.get(&target) {
             let preview: &str = match s.char_indices().nth(60) {
                 Some((idx, _)) => &s[..idx],
                 None => s,
             };
             emit(eol_x, format!("; \"{preview}\""), t.string);
         }
-    }
     out
 }
 

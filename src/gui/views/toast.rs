@@ -78,11 +78,10 @@ impl Toasts {
     }
 
     pub fn dismiss(&mut self, id: u64, now: Instant) {
-        if let Some(t) = self.list.iter_mut().find(|t| t.id == id) {
-            if t.out_at.is_none() {
+        if let Some(t) = self.list.iter_mut().find(|t| t.id == id)
+            && t.out_at.is_none() {
                 t.out_at = Some(now);
             }
-        }
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -102,8 +101,8 @@ impl Toasts {
             .last_admit
             .map(|l| now.saturating_duration_since(l).as_millis() as u64 >= ADMIT_MS)
             .unwrap_or(true);
-        if visible < MAX_VISIBLE && ready {
-            if let Some(p) = self.queue.pop_front() {
+        if visible < MAX_VISIBLE && ready
+            && let Some(p) = self.queue.pop_front() {
                 self.next_id += 1;
                 self.list.push(Toast {
                     id: self.next_id,
@@ -116,7 +115,6 @@ impl Toasts {
                 });
                 self.last_admit = Some(now);
             }
-        }
     }
 
     pub fn deadline(&self) -> Option<Instant> {
@@ -129,12 +127,11 @@ impl Toasts {
                 None => t.born + Duration::from_millis(LIFE_MS),
             })
             .min();
-        if !self.queue.is_empty() && self.list.len() < MAX_VISIBLE {
-            if let Some(last) = self.last_admit {
+        if !self.queue.is_empty() && self.list.len() < MAX_VISIBLE
+            && let Some(last) = self.last_admit {
                 let admit = last + Duration::from_millis(ADMIT_MS);
                 next = Some(next.map_or(admit, |n| n.min(admit)));
             }
-        }
         next
     }
 

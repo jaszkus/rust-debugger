@@ -42,11 +42,9 @@ jobs:
       - name: Check
         run: cargo check --all-targets --locked
 
-      # Informational: a handful of clippy lints remain; tighten to
-      # `-- -D warnings` once they are cleaned up.
       - name: Clippy
         if: runner.os == 'Linux'
-        run: cargo clippy --all-targets --locked
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - uses: taiki-e/install-action@nextest
 

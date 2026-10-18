@@ -58,11 +58,10 @@ fn find_flag(args: &[String], names: &[&str]) -> Option<usize> {
 }
 
 fn parse_port(s: &str) -> Result<u16, String> {
-    if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
-        if let Ok(p) = s.parse::<u16>() {
+    if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(p) = s.parse::<u16>() {
             return Ok(p);
         }
-    }
     Err(format!(
         "Bad port '{}' (want 0..=65535, 0 = pick a free port, default {})",
         s, DEFAULT_PORT
@@ -314,13 +313,11 @@ fn run_batch_analyze(path: &str, fresh: bool) -> Result<(), String> {
     let bin_mtime = file_mtime(path);
     let db_mtime = file_mtime(&db_path);
     let cache_usable = cache_is_fresh(bin_mtime, db_mtime);
-    if !fresh && !cache_usable {
-        if let (Some(b), Some(d)) = (bin_mtime, db_mtime) {
-            if d < b {
+    if !fresh && !cache_usable
+        && let (Some(b), Some(d)) = (bin_mtime, db_mtime)
+            && d < b {
                 eprintln!("[rddb stale: {db_path} is older than {path}; re-analyzing]");
             }
-        }
-    }
 
     let cached = if fresh || !cache_usable {
         None
@@ -666,8 +663,8 @@ fn run_gui(initial_file: Option<String>) -> Result<(), String> {
     install_gui_panic_log();
     let mut app_state = AppState::new();
 
-    if let Some(path) = initial_file {
-        if let Err(e) = crate::gui::open_file_into_program_with_auto_analysis(
+    if let Some(path) = initial_file
+        && let Err(e) = crate::gui::open_file_into_program_with_auto_analysis(
             &mut app_state,
             &path,
             None,
@@ -675,7 +672,6 @@ fn run_gui(initial_file: Option<String>) -> Result<(), String> {
         ) {
             eprintln!("Load failed: {e}");
         }
-    }
 
     let shared = Arc::new(Mutex::new(app_state));
     shared

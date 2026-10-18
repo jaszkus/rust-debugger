@@ -389,11 +389,10 @@ impl canvas::Program<Message> for CfgView {
                 }
                 let cam_mut = state.cam.as_mut().unwrap();
                 cam_mut.selected = hit;
-                if let Some(bi) = hit {
-                    if let Some((start, _)) = self.ranges.get(bi) {
+                if let Some(bi) = hit
+                    && let Some((start, _)) = self.ranges.get(bi) {
                         return Some(canvas::Action::publish(Message::RowGoto(*start)));
                     }
-                }
                 Some(canvas::Action::request_redraw())
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
@@ -406,15 +405,14 @@ impl canvas::Program<Message> for CfgView {
                 None
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if state.dragging {
-                    if let (Some(start), Some(pan0)) = (state.drag_start, state.pan_at_drag) {
+                if state.dragging
+                    && let (Some(start), Some(pan0)) = (state.drag_start, state.pan_at_drag) {
                         let now = cursor.position().unwrap_or(start);
                         let cam = state.cam.as_mut().unwrap();
                         cam.pan =
                             Point::new(pan0.x + (now.x - start.x), pan0.y + (now.y - start.y));
                         return Some(canvas::Action::request_redraw());
                     }
-                }
                 None
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)) => {

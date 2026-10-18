@@ -185,15 +185,13 @@ fn extract_pascal(data: &[u8], min_len: usize) -> Vec<Candidate> {
             if body.iter().all(|&b| (0x20..0x7F).contains(&b)) {
                 let after = i + 1 + len;
                 let terminated = after >= data.len() || data[after] == 0 || data[after] < 0x20;
-                if terminated {
-                    if let Some(sc) = string_model::score_probable(body) {
-                        if let Ok(s) = std::str::from_utf8(body) {
+                if terminated
+                    && let Some(sc) = string_model::score_probable(body)
+                        && let Ok(s) = std::str::from_utf8(body) {
                             out.push((i as u64, s.to_string(), Some(sc)));
                             i = after;
                             continue;
                         }
-                    }
-                }
             }
         }
         i += 1;

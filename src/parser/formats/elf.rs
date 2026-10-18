@@ -144,12 +144,11 @@ pub(crate) fn parse_elf(
             if rel.r_type != jump_slot_type {
                 continue;
             }
-            if let Some(sym) = elf.dynsyms.get(rel.r_sym) {
-                if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+            if let Some(sym) = elf.dynsyms.get(rel.r_sym)
+                && let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
                     import_addrs
                         .insert(name.to_string(), plt.wrapping_add(header + i * entry_size));
                 }
-            }
             i += 1;
         }
     }

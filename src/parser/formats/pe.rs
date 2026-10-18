@@ -5,7 +5,7 @@ pub(crate) fn parse_pe(
     pe: &goblin::pe::PE,
     data: &std::sync::Arc<Vec<u8>>,
 ) -> Result<ParsedBinary, String> {
-    let image_base = pe.image_base as u64;
+    let image_base = pe.image_base;
     let sections: Vec<Section> = pe
         .sections
         .iter()
@@ -211,14 +211,13 @@ fn pe_overlay(data: &[u8], pe: &goblin::pe::PE) -> Option<(u64, u64)> {
             end = s_end.min(data.len());
         }
     }
-    if let Some(oh) = &pe.header.optional_header {
-        if let Some(dd) = oh.data_directories.get_certificate_table() {
+    if let Some(oh) = &pe.header.optional_header
+        && let Some(dd) = oh.data_directories.get_certificate_table() {
             let c_end = dd.virtual_address as usize + dd.size as usize;
             if c_end > end && c_end <= data.len() {
                 end = c_end;
             }
         }
-    }
     if end < data.len() {
         Some((end as u64, (data.len() - end) as u64))
     } else {
@@ -321,7 +320,7 @@ fn pe_tls_callbacks(data: &[u8], pe: &goblin::pe::PE, _image_base: u64) -> Vec<u
     if cb_va == 0 {
         return out;
     }
-    let image_base = pe.image_base as u64;
+    let image_base = pe.image_base;
     let cb_rva = match cb_va.checked_sub(image_base) {
         Some(v) if v <= u32::MAX as u64 => v as u32,
         _ => return out,
@@ -437,15 +436,14 @@ fn pe_delay_imports(data: &[u8], pe: &goblin::pe::PE, image_base: u64) -> Vec<Im
 }
 
 fn pe_export_ordinal(pe: &goblin::pe::PE, exp: &goblin::pe::export::Export, idx: usize) -> u32 {
-    if let Some(ed) = &pe.export_data {
-        if let Some(&ord_index) = ed.export_ordinal_table.get(idx) {
+    if let Some(ed) = &pe.export_data
+        && let Some(&ord_index) = ed.export_ordinal_table.get(idx) {
             let ordinal = ed
                 .export_directory_table
                 .ordinal_base
                 .wrapping_add(ord_index as u32);
             return ordinal;
         }
-    }
     match &exp.reexport {
         Some(goblin::pe::export::Reexport::DLLOrdinal { ordinal, .. }) => *ordinal as u32,
         _ => 0,

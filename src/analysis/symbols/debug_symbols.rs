@@ -53,11 +53,10 @@ impl DebugSymbolsAnalyzer {
             return;
         };
         let mut candidates: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from(&pdb_path)];
-        if let Some(dir) = source_path.and_then(|p| std::path::Path::new(p).parent()) {
-            if let Some(name) = std::path::Path::new(&pdb_path).file_name() {
+        if let Some(dir) = source_path.and_then(|p| std::path::Path::new(p).parent())
+            && let Some(name) = std::path::Path::new(&pdb_path).file_name() {
                 candidates.push(dir.join(name));
             }
-        }
         let Some(path) = candidates.into_iter().find(|p| p.is_file()) else {
             return;
         };
@@ -135,8 +134,8 @@ impl DebugSymbolsAnalyzer {
                 }
                 let _ = seen_files;
             }
-            if let Ok(symbols) = info.symbols() {
-                if let Ok(syms) = symbols.collect::<Vec<pdb::Symbol>>() {
+            if let Ok(symbols) = info.symbols()
+                && let Ok(syms) = symbols.collect::<Vec<pdb::Symbol>>() {
                     for sym in syms {
                         let Ok(pdb::SymbolData::Public(public)) = sym.parse() else {
                             continue;
@@ -158,7 +157,6 @@ impl DebugSymbolsAnalyzer {
                         }
                     }
                 }
-            }
             if self.line_numbers.len() >= 8_192 {
                 break;
             }
@@ -197,8 +195,8 @@ impl DebugSymbolsAnalyzer {
                 while end < data.len() && data[end] != 0 && end - path_start < 512 {
                     end += 1;
                 }
-                if end > path_start {
-                    if let Ok(p) = std::str::from_utf8(&data[path_start..end]) {
+                if end > path_start
+                    && let Ok(p) = std::str::from_utf8(&data[path_start..end]) {
                         let p = p.trim();
                         if !p.is_empty()
                             && p.to_ascii_lowercase().ends_with(".pdb")
@@ -207,7 +205,6 @@ impl DebugSymbolsAnalyzer {
                             self.source_files.push(p.to_string());
                         }
                     }
-                }
                 pos = end.saturating_add(1);
                 continue;
             }

@@ -21,11 +21,9 @@ pub(crate) fn functions_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::
             && cache.1 == s.modification_number
             && cache.2 == filter_lc
             && cache.3 == sort
-        {
-            if let Some(rows) = &cache.4 {
+            && let Some(rows) = &cache.4 {
                 return rows.clone();
             }
-        }
         let rows: Arc<Vec<FuncRow>> = match &s.analysis {
             None => Arc::new(Vec::new()),
             Some(a) => {

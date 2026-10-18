@@ -145,11 +145,10 @@ impl TypeReconstructor {
         for (base_key, off) in pointer_fields {
             if let Some(&tsid) = self.base_to_struct.get(&base_key) {
                 let ptr_id = self.create_pointer_type(tsid);
-                if let Some(ReconstructedType { fields, .. }) = self.types.get_mut(&tsid) {
-                    if let Some(f) = fields.iter_mut().find(|f| f.offset == off) {
+                if let Some(ReconstructedType { fields, .. }) = self.types.get_mut(&tsid)
+                    && let Some(f) = fields.iter_mut().find(|f| f.offset == off) {
                         f.type_id = ptr_id;
                     }
-                }
             }
         }
     }
@@ -165,11 +164,10 @@ impl TypeReconstructor {
         for op in &pi.ops {
             match op {
                 POp::Load { dst, addr, size } => {
-                    if let Some((base, off)) = direct_mem(addr, base_names) {
-                        if let PVar::Reg(r) = dst {
+                    if let Some((base, off)) = direct_mem(addr, base_names)
+                        && let PVar::Reg(r) = dst {
                             prov.insert(r, (base, off));
                         }
-                    }
                     if let Some((base_key, offset, ptr_field)) = resolve_mem(addr, prov, base_names)
                     {
                         if let Some(pf) = ptr_field {
@@ -204,16 +202,14 @@ impl TypeReconstructor {
                     }
                 }
                 POp::Copy { dst, src, .. } => {
-                    if let (PVar::Reg(d), PVar::Reg(s)) = (dst, src) {
-                        if let Some(p) = prov.get(*s).cloned() {
+                    if let (PVar::Reg(d), PVar::Reg(s)) = (dst, src)
+                        && let Some(p) = prov.get(*s).cloned() {
                             prov.insert(d, p);
                         }
-                    }
-                    if let (PVar::Reg(d), PVar::Mem(..)) = (dst, src) {
-                        if let Some((base, off)) = direct_mem(src, base_names) {
+                    if let (PVar::Reg(d), PVar::Mem(..)) = (dst, src)
+                        && let Some((base, off)) = direct_mem(src, base_names) {
                             prov.insert(d, (base, off));
                         }
-                    }
                 }
                 POp::Call { .. } => {
                     for r in CALL_CLOBBERED {

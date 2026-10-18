@@ -53,8 +53,8 @@ pub fn search_snapshot(
         }
     }
     let q_hex = q.chars().all(|c| c.is_ascii_hexdigit());
-    if (kind == 0 || kind == 2) && results.len() < 5000 {
-        if let Some(a) = analysis {
+    if (kind == 0 || kind == 2) && results.len() < 5000
+        && let Some(a) = analysis {
             for f in &a.functions {
                 if results.len() >= 5000 {
                     break;
@@ -74,7 +74,6 @@ pub fn search_snapshot(
                 }
             }
         }
-    }
     if kind == 0 || kind == 3 {
         for s in &bin.symbols {
             if results.len() >= 5000 {

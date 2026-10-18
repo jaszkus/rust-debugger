@@ -48,11 +48,10 @@ pub fn first_addr_in_operands(ops: &str) -> Option<u64> {
             while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
                 j += 1;
             }
-            if j > start {
-                if let Ok(v) = u64::from_str_radix(&ops[start..j], 16) {
+            if j > start
+                && let Ok(v) = u64::from_str_radix(&ops[start..j], 16) {
                     return Some(v);
                 }
-            }
             i = j;
         } else {
             i += 1;

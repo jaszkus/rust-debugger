@@ -53,13 +53,11 @@ pub(crate) fn f2i_trunc(f: f64, size: u32) -> u64 {
 impl<'a> Emulator<'a> {
     #[inline]
     pub(crate) fn find_region(&self, addr: u64) -> Option<usize> {
-        if let Some(i) = self.region_cache.get() {
-            if let Some(&(base, size, _)) = self.regions.get(i) {
-                if addr >= base && addr < base.wrapping_add(size) {
+        if let Some(i) = self.region_cache.get()
+            && let Some(&(base, size, _)) = self.regions.get(i)
+                && addr >= base && addr < base.wrapping_add(size) {
                     return Some(i);
                 }
-            }
-        }
         let n = self.regions.partition_point(|(base, _, _)| *base <= addr);
         let idx = n.checked_sub(1).filter(|&i| {
             let (base, size, _) = self.regions[i];

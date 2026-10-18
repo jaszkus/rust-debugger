@@ -284,13 +284,11 @@ pub(crate) fn fmt_load(
             } else {
                 if *off < 0 { format!("local_{:X}", off.unsigned_abs()) } else { format!("arg_{:X}", off) }
             };
-            if let Some(h) = hints {
-                if let Some(vn) = &h.var_names {
-                    if vn.size_of.get(&name).copied() == Some(size) {
+            if let Some(h) = hints
+                && let Some(vn) = &h.var_names
+                    && vn.size_of.get(&name).copied() == Some(size) {
                         return name;
                     }
-                }
-            }
             format!("*({0} *)&{1}", ty, name)
         }
         PVar::Addr(a) => format!("*({0} *)&DAT_{1:X}", ty, a),
@@ -481,11 +479,10 @@ pub(crate) fn recover_condition(
                         .map(|d| d.ops().to_ascii_lowercase().starts_with("ah"))
                         .unwrap_or(false);
                 if is_ah {
-                    if ah_float_cmp.is_some() {
-                        if let PVar::Const(m) = b {
+                    if ah_float_cmp.is_some()
+                        && let PVar::Const(m) = b {
                             ah_test_mask = Some(*m);
                         }
-                    }
                 } else {
                     cmp_pair = Some((a.clone(), b.clone(), true));
                 }
@@ -514,13 +511,12 @@ pub(crate) fn recover_condition(
         }
     }
 
-    if !jcc_mnemonic.is_empty() {
-        if let (Some(mask), Some((fa, fb))) = (ah_test_mask, ah_float_cmp.clone()) {
+    if !jcc_mnemonic.is_empty()
+        && let (Some(mask), Some((fa, fb))) = (ah_test_mask, ah_float_cmp.clone()) {
             let av = cv(&fa);
             let bv = cv(&fb);
             return float_cc_via_mask(&jcc_mnemonic, mask, &av, &bv);
         }
-    }
 
     if let Some((a, b, is_test)) = cmp_pair {
         let av = cv(&a);

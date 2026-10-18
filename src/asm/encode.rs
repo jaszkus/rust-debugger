@@ -72,14 +72,12 @@ fn check_hint(mem: &Operand, size: OpSize, mnemonic: &str) -> Result<(), String>
         has_hint: true,
         ..
     } = mem
-    {
-        if *msz != size {
+        && *msz != size {
             return Err(format!(
                 "{} operand size mismatch ({:?} vs {:?})",
                 mnemonic, size, msz
             ));
         }
-    }
     Ok(())
 }
 
@@ -991,15 +989,14 @@ pub(crate) fn nop_bytes(ctx: &Ctx, ops: &[Operand]) -> Result<Vec<u8>, String> {
                 out.push(0x66);
             }
             let (mut modrm, sib, mut disp, rex_b, rex_x) = encode_mem(ctx, op, 0)?;
-            if disp.is_empty() {
-                if let Operand::Mem {
+            if disp.is_empty()
+                && let Operand::Mem {
                     base,
                     index,
                     disp: d,
                     ..
                 } = op
-                {
-                    if index.is_none()
+                    && index.is_none()
                         && *d == 0
                         && base
                             .as_deref()
@@ -1010,8 +1007,6 @@ pub(crate) fn nop_bytes(ctx: &Ctx, ops: &[Operand]) -> Result<Vec<u8>, String> {
                         modrm = (modrm & 0x3F) | 0x40;
                         disp = vec![0x00];
                     }
-                }
-            }
             emit_rex(&mut out, false, 0, rex_x, rex_b, is_64(ctx));
             out.push(0x0F);
             out.push(0x1F);

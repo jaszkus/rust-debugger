@@ -17,11 +17,10 @@ pub(crate) fn signatures_tab(shell: &Shell) -> Element<'_, Message, Theme, iced:
             .map(|a| a.function_signatures.len())
             .unwrap_or(0);
         let mut cache = lock(&shell.table_cache.signatures);
-        if cache.0 == s.modification_number && cache.1 == s.fid_epoch && cache.2 == len {
-            if let Some(rows) = &cache.3 {
+        if cache.0 == s.modification_number && cache.1 == s.fid_epoch && cache.2 == len
+            && let Some(rows) = &cache.3 {
                 return rows.clone();
             }
-        }
         let rows: Arc<Vec<(u64, String, String, usize)>> = match &s.analysis {
             None => Arc::new(Vec::new()),
             Some(a) => {

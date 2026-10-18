@@ -181,7 +181,7 @@ impl WinDebugger {
                     false,
                     tid,
                 )
-                .unwrap_or(HANDLE::default())
+                .unwrap_or_default()
             },
             None => HANDLE::default(),
         };

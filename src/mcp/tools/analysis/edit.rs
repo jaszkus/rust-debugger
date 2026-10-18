@@ -8,14 +8,12 @@ use super::common::*;
 pub fn cancel_analysis(state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
     let mut s = state.lock().map_err(|_| "lock poisoned".to_string())?;
     let was_running = s.analysis_progress.is_some();
-    if let Some(arc) = &s.analysis_progress {
-        if let Ok(mut g) = arc.lock() {
-            if !g.done {
+    if let Some(arc) = &s.analysis_progress
+        && let Ok(mut g) = arc.lock()
+            && !g.done {
                 g.cancel = true;
                 g.message = "Cancelling...".into();
             }
-        }
-    }
     s.status_msg = "Analysis cancelling...".into();
     Ok(json!({
         "ok": true,

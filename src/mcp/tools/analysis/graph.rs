@@ -150,13 +150,12 @@ pub fn find_users_of_import(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
     let mut targets: HashSet<u64> = import_addrs.iter().copied().collect();
     let mut thunk_entries: HashSet<u64> = HashSet::new();
     for (stub_addr, stub) in &analysis.stubs {
-        if let Some((lib, name)) = stub.target_name.split_once('!') {
-            if import_name_matches(&import_name, lib, name) {
+        if let Some((lib, name)) = stub.target_name.split_once('!')
+            && import_name_matches(&import_name, lib, name) {
                 targets.insert(*stub_addr);
                 targets.insert(stub.func_entry);
                 thunk_entries.insert(stub.func_entry);
             }
-        }
     }
 
     let mut callers: HashSet<u64> = HashSet::new();

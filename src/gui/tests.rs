@@ -203,11 +203,10 @@ fn cancel_aborts_tickless_phase_promptly() {
         }
     }
     assert!(saw_phase, "worker never reached Reference Analysis");
-    if let Some(a) = &s.analysis_progress {
-        if let Ok(mut g) = a.lock() {
+    if let Some(a) = &s.analysis_progress
+        && let Ok(mut g) = a.lock() {
             g.cancel = true;
         }
-    }
     let t0 = std::time::Instant::now();
     while std::time::Instant::now() < deadline {
         poll_analysis(&mut s);

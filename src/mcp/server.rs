@@ -143,7 +143,8 @@ fn origin_ok(headers: &HeaderMap) -> bool {
         return true;
     };
     let origin = origin.to_str().unwrap_or("");
-    let ok = origin
+
+    origin
         .strip_prefix("http://")
         .or_else(|| origin.strip_prefix("https://"))
         .map(|rest| {
@@ -152,8 +153,7 @@ fn origin_ok(headers: &HeaderMap) -> bool {
             let host = host.trim_start_matches('[').trim_end_matches(']');
             host == "127.0.0.1" || host == "localhost" || host == "::1"
         })
-        .unwrap_or(false);
-    ok
+        .unwrap_or(false)
 }
 
 fn auth_ok(headers: &HeaderMap, token: &str) -> bool {

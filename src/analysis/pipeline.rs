@@ -287,7 +287,7 @@ pub fn auto_analyze_with_progress(
     };
     if functions.len() >= crate::util::parallel::PAR_FUNCS {
         use rayon::prelude::*;
-        crate::util::parallel::install(|| functions.par_iter_mut().for_each(&rename));
+        crate::util::parallel::install(|| functions.par_iter_mut().for_each(rename));
     } else {
         functions.iter_mut().for_each(&rename);
     }
@@ -504,11 +504,10 @@ pub fn auto_analyze_with_progress(
                     cp.propagate(&disasm.instructions, *func_entry, *func_end);
                     last_entry = Some(*func_entry);
                 }
-                if let Some(constprop::RegValue::Known(v)) = cp.get_register_value(reg) {
-                    if v != 0 && xref::direct_target_ok(binary, v) {
+                if let Some(constprop::RegValue::Known(v)) = cp.get_register_value(reg)
+                    && v != 0 && xref::direct_target_ok(binary, v) {
                         recovered.push((*site, v, *is_call));
                     }
-                }
             }
             let mut known: HashSet<u64> = functions.iter().map(|f| f.entry).collect();
             for &(site, target, is_call) in &recovered {

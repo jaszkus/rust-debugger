@@ -580,21 +580,19 @@ pub fn poll_load_install(app: &mut AppState) {
                 app.analysis_seq = app.analysis_seq.wrapping_add(1);
                 app.analysis_error = None;
                 crate::project::apply_annotations(&mut app.program, &ann);
-                if let Some(name) = lp.project_name {
-                    if !name.is_empty() {
+                if let Some(name) = lp.project_name
+                    && !name.is_empty() {
                         app.current_program_name = name;
                     }
-                }
                 crate::gui::state::invalidate_analysis_caches(app);
             } else {
                 app.analysis = None;
                 crate::gui::state::invalidate_analysis_caches(app);
             }
-            if let Some(name) = app.pending_project_name.take() {
-                if !name.is_empty() {
+            if let Some(name) = app.pending_project_name.take()
+                && !name.is_empty() {
                     app.current_program_name = name;
                 }
-            }
             touch_recent(app, &lp.path);
             app.db_last_save_attempt = Some(std::time::Instant::now());
             app.status_msg = if from_db {
@@ -705,11 +703,10 @@ pub(crate) fn update(shell: &mut Shell, message: Message) -> Task<Message> {
         }
         Message::CancelAnalysis => {
             shell.with(|s| {
-                if let Some(p) = &s.analysis_progress {
-                    if let Ok(mut g) = p.try_lock() {
+                if let Some(p) = &s.analysis_progress
+                    && let Ok(mut g) = p.try_lock() {
                         g.cancel = true;
                     }
-                }
                 s.status_msg = "Cancelling analysis...".into();
             });
             Task::none()
@@ -727,11 +724,10 @@ pub(crate) fn update(shell: &mut Shell, message: Message) -> Task<Message> {
         Message::ListingClicked(addr) => {
             shell.with(|s| {
                 s.selected_insn = Some(addr);
-                if let Some(a) = &s.analysis {
-                    if let Some(f) = a.functions.iter().find(|f| addr >= f.entry && addr < f.end) {
+                if let Some(a) = &s.analysis
+                    && let Some(f) = a.functions.iter().find(|f| addr >= f.entry && addr < f.end) {
                         s.selected_func = Some(f.entry);
                     }
-                }
             });
             Task::none()
         }
@@ -923,11 +919,10 @@ pub(crate) fn update(shell: &mut Shell, message: Message) -> Task<Message> {
         Message::AiEventGoto(addr) => {
             shell.with(|s| {
                 s.selected_insn = Some(addr);
-                if let Some(a) = &s.analysis {
-                    if let Some(f) = a.functions.iter().find(|f| addr >= f.entry && addr < f.end) {
+                if let Some(a) = &s.analysis
+                    && let Some(f) = a.functions.iter().find(|f| addr >= f.entry && addr < f.end) {
                         s.selected_func = Some(f.entry);
                     }
-                }
             });
             goto_addr(shell, addr);
             Task::none()

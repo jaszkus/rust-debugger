@@ -53,12 +53,11 @@ pub fn parse_msvc_map(text: &str) -> Vec<Symbol> {
                 continue;
             }
             let h = t.trim_start_matches("0x").trim_start_matches("0X");
-            if h.len() >= 4 && h.chars().all(|c| c.is_ascii_hexdigit()) {
-                if let Ok(v) = u64::from_str_radix(h, 16) {
+            if h.len() >= 4 && h.chars().all(|c| c.is_ascii_hexdigit())
+                && let Ok(v) = u64::from_str_radix(h, 16) {
                     addr = v;
                     break;
                 }
-            }
         }
         if addr == 0 || name.is_empty() {
             continue;

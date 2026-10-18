@@ -139,7 +139,7 @@ Listing · Hex · Decompiler · Pcode · CFG · Xrefs · Strings · Symbols · S
 
 ## Requirements
 
-- **Rust** stable toolchain (edition 2024, rustc ≥ 1.85)
+- **Rust** stable toolchain (edition 2024, rustc ≥ 1.88)
 - **Windows 10+** or **Linux** (Wayland / X11)
 - A GPU with **Vulkan, DX12 or Metal** support for the GUI
 

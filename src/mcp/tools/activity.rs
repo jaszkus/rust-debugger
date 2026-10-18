@@ -192,11 +192,10 @@ pub fn extract_addr(args: &Value) -> Option<u64> {
                 }
                 Some(Value::String(s)) => {
                     let t = s.trim().trim_start_matches("0x").trim_start_matches("0X");
-                    if !t.is_empty() && t.len() <= 16 && t.chars().all(|c| c.is_ascii_hexdigit()) {
-                        if let Ok(v) = u64::from_str_radix(t, 16) {
+                    if !t.is_empty() && t.len() <= 16 && t.chars().all(|c| c.is_ascii_hexdigit())
+                        && let Ok(v) = u64::from_str_radix(t, 16) {
                             return Some(v);
                         }
-                    }
                 }
                 _ => {}
             }
@@ -227,11 +226,10 @@ pub fn summarize_ok(payload: &Value) -> String {
             }
         }
         for k in ["version", "status", "job_id", "name", "program"] {
-            if let Some(s) = o.get(k).and_then(|v| v.as_str()) {
-                if !s.is_empty() {
+            if let Some(s) = o.get(k).and_then(|v| v.as_str())
+                && !s.is_empty() {
                     return truncate(s, MAX_SUMMARY);
                 }
-            }
         }
     }
     "ok".to_string()

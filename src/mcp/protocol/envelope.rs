@@ -333,11 +333,10 @@ pub fn call_enveloped(name: &str, raw_args: &Value, state: &Arc<Mutex<AppState>>
             }
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("ok".into(), json!(true));
-                if want_snapshot_ok && !obj.contains_key("state") {
-                    if let Ok(s) = state.lock() {
+                if want_snapshot_ok && !obj.contains_key("state")
+                    && let Ok(s) = state.lock() {
                         obj.insert("state".into(), state_snapshot(&s));
                     }
-                }
             }
             if let Some(had) = analysis_before {
                 let dropped = had && state.lock().map(|s| s.analysis.is_none()).unwrap_or(false);
@@ -366,11 +365,10 @@ pub fn call_enveloped(name: &str, raw_args: &Value, state: &Arc<Mutex<AppState>>
             if let Some(hint) = error_hint(&msg) {
                 obj.insert("hint".into(), json!(hint));
             }
-            if want_snapshot_err {
-                if let Ok(s) = state.lock() {
+            if want_snapshot_err
+                && let Ok(s) = state.lock() {
                     obj.insert("state".into(), state_snapshot(&s));
                 }
-            }
             Value::Object(obj)
         }
     }
@@ -498,12 +496,11 @@ pub fn run_async(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, St
                 Ok(r) => r,
                 Err(_) => Err("Internal error: tool panicked".into()),
             };
-            if let Ok(mut map) = jobs().lock() {
-                if let Some(job) = map.get_mut(&job_id) {
+            if let Ok(mut map) = jobs().lock()
+                && let Some(job) = map.get_mut(&job_id) {
                     job.done = true;
                     job.result = Some(result);
                 }
-            }
             job_leave();
         })
     {

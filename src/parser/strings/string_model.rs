@@ -120,11 +120,10 @@ fn build_model(src: &str) -> TrigramModel {
             continue;
         }
         if parts[0] == "[^]" {
-            if parts[2] != "[$]" {
-                if let (Some(a), Some(b)) = (parse_token(parts[1]), parse_token(parts[2])) {
+            if parts[2] != "[$]"
+                && let (Some(a), Some(b)) = (parse_token(parts[1]), parse_token(parts[2])) {
                     *begin.entry((a, b)).or_insert(0) += count;
                 }
-            }
         } else if parts[2] == "[$]" {
             if let (Some(a), Some(b)) = (parse_token(parts[0]), parse_token(parts[1])) {
                 *end.entry((a, b)).or_insert(0) += count;
@@ -361,8 +360,8 @@ pub fn accept_threshold(n: usize) -> f64 {
 }
 
 pub fn analyze(s: &[u8], ctx: Context) -> Option<Verdict> {
-    if !s.is_ascii() {
-        if let Ok(text) = std::str::from_utf8(s) {
+    if !s.is_ascii()
+        && let Ok(text) = std::str::from_utf8(s) {
             if kind_script(text) {
                 return Some(text_verdict(Kind::Script, text.chars().count()));
             }
@@ -370,7 +369,6 @@ pub fn analyze(s: &[u8], ctx: Context) -> Option<Verdict> {
                 return Some(text_verdict(Kind::Diacritic, text.chars().count()));
             }
         }
-    }
     SCRATCH.with(|cell| {
         let mut guard = cell.borrow_mut();
         analyze_normalized(s, ctx, &mut guard)
@@ -378,7 +376,7 @@ pub fn analyze(s: &[u8], ctx: Context) -> Option<Verdict> {
 }
 
 pub fn is_string(s: &[u8]) -> bool {
-    analyze(s, Context::default()).map_or(false, |v| v.accepted)
+    analyze(s, Context::default()).is_some_and(|v| v.accepted)
 }
 
 pub fn confidence(s: &[u8]) -> f32 {
@@ -403,12 +401,12 @@ struct Scratch {
 }
 
 thread_local! {
-    static SCRATCH: RefCell<Scratch> = RefCell::new(Scratch {
+    static SCRATCH: RefCell<Scratch> = const { RefCell::new(Scratch {
         t: Vec::new(),
         low: Vec::new(),
         tv: Vec::new(),
         tok: Vec::new(),
-    });
+    }) };
 }
 
 const NFEAT: usize = 26;
@@ -698,7 +696,7 @@ fn kind_url(t: &[u8]) -> bool {
         Some(k) => k,
         None => return false,
     };
-    if k < 1 || k > 10 || !is_alpha(t[0]) {
+    if !(1..=10).contains(&k) || !is_alpha(t[0]) {
         return false;
     }
     if !t[..k].iter().all(|&b| is_alnum(b) || in_set(b"+.-", b)) {
@@ -817,7 +815,7 @@ fn kind_unixpath(t: &[u8]) -> bool {
         return false;
     };
     let mut segs: Vec<&[u8]> = body.split(|&b| b == b'/').collect();
-    if segs.last().map_or(false, |s| s.is_empty()) {
+    if segs.last().is_some_and(|s| s.is_empty()) {
         segs.pop();
     }
     if segs.len() < 2 || segs.iter().any(|s| s.is_empty()) {
@@ -858,7 +856,7 @@ fn kind_java(t: &[u8]) -> bool {
 
 fn kind_section(t: &[u8]) -> bool {
     let n = t.len();
-    if n < 4 || n > 32 || t[0] != b'.' || !is_alpha(t[1]) {
+    if !(4..=32).contains(&n) || t[0] != b'.' || !is_alpha(t[1]) {
         return false;
     }
     let ok = t[1..]
@@ -869,7 +867,7 @@ fn kind_section(t: &[u8]) -> bool {
 
 fn kind_base64(t: &[u8], lex_frac: f64) -> bool {
     let n = t.len();
-    if n < 24 || n % 4 != 0 || lex_frac >= 0.3 {
+    if n < 24 || !n.is_multiple_of(4) || lex_frac >= 0.3 {
         return false;
     }
     let mut body_len = n;
@@ -1061,7 +1059,7 @@ fn opcode_noise(t: &[u8]) -> bool {
 
 fn seq_noise(low: &[u8]) -> bool {
     let n = low.len();
-    if n < 6 || n >= 40 {
+    if !(6..40).contains(&n) {
         return false;
     }
     let (mut asc, mut desc) = (0usize, 0usize);

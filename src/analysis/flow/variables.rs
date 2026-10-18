@@ -408,9 +408,9 @@ fn build_block_ops<'a>(cfg: &CFG, pinstrs: &'a [PInstr]) -> Vec<Vec<(u64, &'a PO
     let mut idx: Vec<usize> = (0..pinstrs.len()).collect();
     idx.sort_by_key(|&i| pinstrs[i].address);
     let mut out: Vec<Vec<(u64, &'a POp)>> = vec![Vec::new(); n];
-    for b in 0..n {
-        let start = cfg.blocks[b].start;
-        let end = cfg.blocks[b].end;
+    for (b, block) in cfg.blocks.iter().enumerate() {
+        let start = block.start;
+        let end = block.end;
         let lo = idx.partition_point(|&i| pinstrs[i].address < start);
         for &i in &idx[lo..] {
             let pi = &pinstrs[i];
@@ -449,8 +449,8 @@ fn reverse_postorder(cfg: &CFG, entry: usize) -> (Vec<usize>, Vec<bool>) {
         }
     }
     post.reverse();
-    for b in 0..n {
-        if !seen[b] { post.push(b); }
+    for (b, s) in seen.iter().enumerate() {
+        if !*s { post.push(b); }
     }
     (post, seen)
 }
@@ -459,18 +459,18 @@ fn reverse_postorder(cfg: &CFG, entry: usize) -> (Vec<usize>, Vec<bool>) {
 fn is_sp(r: &str) -> bool { r == "rsp" || r == "esp" }
 fn is_bp(r: &str) -> bool { r == "rbp" || r == "ebp" }
 fn is_xmm(r: &str) -> bool { r.starts_with("xmm") || r.starts_with("ymm") }
-fn is_sp_var(v: &PVar) -> bool { pvar_reg(v).map_or(false, is_sp) }
-fn is_bp_var(v: &PVar) -> bool { pvar_reg(v).map_or(false, is_bp) }
+fn is_sp_var(v: &PVar) -> bool { pvar_reg(v).is_some_and(is_sp) }
+fn is_bp_var(v: &PVar) -> bool { pvar_reg(v).is_some_and(is_bp) }
 
 fn step_stack(op: &POp, rsp: &mut i64, rbp: &mut Option<i64>) {
     match op {
         POp::Push { size, .. } => *rsp -= *size as i64,
         POp::Pop { size, .. } => *rsp += *size as i64,
-        POp::IntSub { dst, b, .. } if is_sp_var(dst) => {
-            if let PVar::Const(c) = b { *rsp -= *c; }
+        POp::IntSub { dst, b: PVar::Const(c), .. } if is_sp_var(dst) => {
+            *rsp -= *c;
         }
-        POp::IntAdd { dst, b, .. } if is_sp_var(dst) => {
-            if let PVar::Const(c) = b { *rsp += *c; }
+        POp::IntAdd { dst, b: PVar::Const(c), .. } if is_sp_var(dst) => {
+            *rsp += *c;
         }
         POp::Copy { dst, src, .. } => {
             if is_sp_var(dst) && is_bp_var(src) {
@@ -511,12 +511,11 @@ fn compute_deltas(
             for &b in order {
                 if block_entry[b].is_none() {
                     for &p in &cfg.blocks[b].predecessors {
-                        if p < n {
-                            if let Some(v) = block_exit[p] {
+                        if p < n
+                            && let Some(v) = block_exit[p] {
                                 block_entry[b] = Some(v);
                                 break;
                             }
-                        }
                     }
                 }
                 let mut rsp = match block_entry[b] {
@@ -537,8 +536,8 @@ fn compute_deltas(
         if round == 0 {
             match block_exit[entry] {
                 Some(fallback) => {
-                    for b in 0..n {
-                        if block_entry[b].is_none() { block_entry[b] = Some(fallback); }
+                    for entry_slot in block_entry.iter_mut() {
+                        if entry_slot.is_none() { *entry_slot = Some(fallback); }
                     }
                 }
                 None => break,
@@ -661,7 +660,7 @@ fn write_loc(op: &POp) -> Option<Loc> {
 
 fn addr_taken(op: &POp) -> Option<(u8, i64)> {
     if let POp::AddrOf { dst, base: Some(b), disp, .. } = op {
-        if pvar_reg(dst).map_or(false, |r| is_sp(r) || is_bp(r)) {
+        if pvar_reg(dst).is_some_and(|r| is_sp(r) || is_bp(r)) {
             return None;
         }
         match pvar_reg(b) {
@@ -679,9 +678,7 @@ fn spill_target(op: &POp) -> Option<(u8, i64)> {
         POp::Store { addr, src, .. } => (addr, src),
         _ => return None,
     };
-    if pvar_reg(src).is_none() {
-        return None;
-    }
+    pvar_reg(src)?;
     match dst {
         PVar::StackSlot { base, off } => Some((base_id(base), *off)),
         _ => None,
@@ -705,16 +702,16 @@ fn write_size(op: &POp) -> u32 {
 
 fn read_size(op: &POp) -> u32 {
     match op {
-        POp::Zext { from_size, .. } => *from_size as u32,
+        POp::Zext { from_size, .. } => *from_size,
         POp::Sext { .. } | POp::Cvt { .. } => 0,
-        POp::Push { size, .. } => *size as u32,
-        POp::Pop { size, .. } => *size as u32,
+        POp::Push { size, .. } => *size,
+        POp::Pop { size, .. } => *size,
         _ => write_size(op),
     }
 }
 
 fn float_hint(op: &POp) -> Option<u32> {
-    let is_x = |v: &PVar| pvar_reg(v).map_or(false, is_xmm);
+    let is_x = |v: &PVar| pvar_reg(v).is_some_and(is_xmm);
     match op {
         POp::FloatBinop { size, .. } => Some(*size),
         POp::Copy { dst, src, size, .. } => if is_x(dst) || is_x(src) { Some(*size) } else { None },
@@ -810,10 +807,10 @@ fn transfer_mask(ops: &[(u64, &POp)], mut mask: u32, mut rec: Option<&mut Vec<In
         rlocs.clear();
         collect_reads(op, &mut rlocs);
         for &(rl, _) in &rlocs {
-            if let Loc::Reg(r) = rl {
-                if let Some(bit) = reg_bit(r) {
-                    if mask & (1u32 << bit) != 0 {
-                        if let Some(v) = rec.as_deref_mut() {
+            if let Loc::Reg(r) = rl
+                && let Some(bit) = reg_bit(r)
+                    && mask & (1u32 << bit) != 0
+                        && let Some(v) = rec.as_deref_mut() {
                             v.push(InputRead {
                                 reg: r,
                                 pc,
@@ -822,13 +819,9 @@ fn transfer_mask(ops: &[(u64, &POp)], mut mask: u32, mut rec: Option<&mut Vec<In
                                 spill: spill_target(op),
                             });
                         }
-                    }
-                }
-            }
         }
-        if let Some(Loc::Reg(w)) = write_loc(op) {
-            if let Some(bit) = reg_bit(w) { mask &= !(1u32 << bit); }
-        }
+        if let Some(Loc::Reg(w)) = write_loc(op)
+            && let Some(bit) = reg_bit(w) { mask &= !(1u32 << bit); }
         if matches!(op, POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. }) {
             for r in CALL_CLOBBERED {
                 if let Some(bit) = reg_bit(r) { mask &= !(1u32 << bit); }
@@ -898,9 +891,8 @@ fn detect_abi<F: Fn(u8, i64, u64) -> i64>(reads: &[InputRead], norm: &F) -> Abi 
                     sysv_real = true;
                 }
             }
-            "rcx" | "rdx" | "r8" | "r9" => {
-                if !r.push && !is_spill { ms_plain = true; }
-            }
+            "rcx" | "rdx" | "r8" | "r9"
+                if !r.push && !is_spill => { ms_plain = true; }
             _ => {}
         }
     }
@@ -955,8 +947,7 @@ fn build_reg_params(abi: Abi, usage: &HashMap<&'static str, RegUse>) -> Vec<RegP
                 if usage.contains_key(r) { hi = Some(i); }
             }
             let n_int = hi.map_or(0, |h| h + 1);
-            for i in 0..n_int {
-                let reg = ABI_X64_SYSV[i];
+            for (i, &reg) in ABI_X64_SYSV.iter().take(n_int).enumerate() {
                 out.push(make_int_param(i + 1, reg, usage.get(reg)));
             }
             let mut k = 0usize;
@@ -1108,13 +1099,12 @@ fn rewrite_idents(s: &str, map: &[(&'static str, String)], first_only: bool) -> 
             let start = i;
             while i < bytes.len() && is_ident_char(bytes[i]) { i += 1; }
             let tok = &s[start..i];
-            if !(first_only && replaced) {
-                if let Some(rep) = lookup(map, tok) {
+            if !(first_only && replaced)
+                && let Some(rep) = lookup(map, tok) {
                     out.push_str(rep);
                     replaced = true;
                     continue;
                 }
-            }
             out.push_str(tok);
         } else if c.is_ascii_digit() {
             let start = i;

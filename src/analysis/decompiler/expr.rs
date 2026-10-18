@@ -224,11 +224,10 @@ impl Expr {
 }
 
 fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
-    if let (Expr::C(x), Expr::C(y)) = (&a, &b) {
-        if !(matches!(op, BinOp::Div) && *y == 0) {
+    if let (Expr::C(x), Expr::C(y)) = (&a, &b)
+        && !(matches!(op, BinOp::Div) && *y == 0) {
             return Expr::C(op.fold(*x, *y));
         }
-    }
     let is_c = |e: &Expr, v: i64| matches!(e, Expr::C(c) if *c == v);
     let same = a == b;
 
@@ -248,11 +247,9 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(c2),
             ) = (&a, &b)
-            {
-                if let Expr::C(c1v) = &**c1 {
+                && let Expr::C(c1v) = &**c1 {
                     return Expr::bin(BinOp::Add, (**x).clone(), Expr::C(c1v.wrapping_add(*c2)));
                 }
-            }
             if let (
                 Expr::Bin {
                     op: BinOp::Add,
@@ -261,11 +258,9 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(c2),
             ) = (&a, &b)
-            {
-                if let Expr::C(c1v) = &**c1 {
+                && let Expr::C(c1v) = &**c1 {
                     return Expr::bin(BinOp::Add, (**x).clone(), Expr::C(c1v.wrapping_add(*c2)));
                 }
-            }
             if let (Expr::C(_), _) = (&a, &b) {
                 return Expr::bin(op, b, a);
             }
@@ -288,11 +283,9 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(c2),
             ) = (&a, &b)
-            {
-                if let Expr::C(c1v) = &**c1 {
+                && let Expr::C(c1v) = &**c1 {
                     return Expr::bin(BinOp::Sub, (**x).clone(), Expr::C(c1v.wrapping_add(*c2)));
                 }
-            }
         }
         BinOp::Mul => {
             if is_c(&b, 1) {
@@ -307,11 +300,10 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
             if is_c(&b, -1) {
                 return Expr::bin(BinOp::Sub, Expr::C(0), a);
             }
-            if let Expr::C(c) = &b {
-                if *c > 0 && (*c as u64).is_power_of_two() {
+            if let Expr::C(c) = &b
+                && *c > 0 && (*c as u64).is_power_of_two() {
                     return Expr::bin(BinOp::Shl, a, Expr::C(c.trailing_zeros() as i64));
                 }
-            }
             if let (Expr::C(_), _) = (&a, &b) {
                 return Expr::bin(op, b, a);
             }
@@ -345,11 +337,9 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(c2),
             ) = (&a, &b)
-            {
-                if let Expr::C(c1v) = &**c1 {
+                && let Expr::C(c1v) = &**c1 {
                     return Expr::bin(BinOp::And, (**x).clone(), Expr::C(c1v & c2));
                 }
-            }
             if let (
                 Expr::Bin {
                     op: BinOp::Shl,
@@ -358,13 +348,10 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(m),
             ) = (&a, &b)
-            {
-                if let Expr::C(c) = &**c1 {
-                    if *c > 0 && *c < 64 && *m == (!0i64).wrapping_shl(*c as u32) {
+                && let Expr::C(c) = &**c1
+                    && *c > 0 && *c < 64 && *m == (!0i64).wrapping_shl(*c as u32) {
                         return a;
                     }
-                }
-            }
             if let (Expr::C(_), _) = (&a, &b) {
                 return Expr::bin(op, b, a);
             }
@@ -390,11 +377,9 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(c2),
             ) = (&a, &b)
-            {
-                if let Expr::C(c1v) = &**c1 {
+                && let Expr::C(c1v) = &**c1 {
                     return Expr::bin(BinOp::Or, (**x).clone(), Expr::C(c1v | c2));
                 }
-            }
             if let (Expr::C(_), _) = (&a, &b) {
                 return Expr::bin(op, b, a);
             }
@@ -443,11 +428,9 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 },
                 Expr::C(c2),
             ) = (&a, &b)
-            {
-                if let Expr::C(c1v) = &**c1 {
+                && let Expr::C(c1v) = &**c1 {
                     return Expr::bin(BinOp::Xor, (**x).clone(), Expr::C(c1v ^ c2));
                 }
-            }
             if let (Expr::C(_), _) = (&a, &b) {
                 return Expr::bin(op, b, a);
             }
@@ -464,18 +447,14 @@ fn simplify_bin(op: BinOp, a: Expr, b: Expr) -> Expr {
                 a: x,
                 b: c1e,
             } = &a
-            {
-                if *op2 == op {
-                    if let Expr::C(c1) = &**c1e {
-                        if let Expr::C(c2) = &b {
+                && *op2 == op
+                    && let Expr::C(c1) = &**c1e
+                        && let Expr::C(c2) = &b {
                             let combined = (*c1).wrapping_add(*c2);
                             if (0..64).contains(&combined) {
                                 return Expr::bin(op, (**x).clone(), Expr::C(combined));
                             }
                         }
-                    }
-                }
-            }
         }
     }
     let _ = same;

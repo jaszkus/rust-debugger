@@ -924,11 +924,10 @@ fn dispatched_tool_names() -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     for line in src.lines() {
         let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix('"') {
-            if let Some(arrow) = rest.find("\" =>") {
+        if let Some(rest) = t.strip_prefix('"')
+            && let Some(arrow) = rest.find("\" =>") {
                 names.insert(rest[..arrow].to_string());
             }
-        }
     }
     names
 }

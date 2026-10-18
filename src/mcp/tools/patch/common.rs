@@ -83,11 +83,10 @@ pub fn apply_patch_internal_impl(
         let ranges = [(off, new_bytes.len())];
         if let (Some(bin), Some(old)) = (state_lock.binary.as_ref(), state_lock.disasm.as_ref()) {
             state_lock.disasm = Some(crate::disasm::rebuild_after_patch(bin, old, &ranges));
-        } else if let Some(bin) = state_lock.binary.as_ref() {
-            if let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
+        } else if let Some(bin) = state_lock.binary.as_ref()
+            && let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
                 state_lock.disasm = Some(disasm);
             }
-        }
     }
     if invalidate_analysis {
         crate::gui::drop_analysis(state_lock);

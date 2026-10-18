@@ -160,14 +160,13 @@ pub fn detect_functions_with_extra_opt(
         }
     } else {
         for (idx, insn) in insns.iter().enumerate() {
-            if insn.mnemonic.starts_with("call") {
-                if let Some(target) = parse_addr_operand(&insn.ops()) {
+            if insn.mnemonic.starts_with("call")
+                && let Some(target) = parse_addr_operand(&insn.ops()) {
                     let fall = insns.get(idx + 1).is_some_and(|n| n.address == target);
                     if !fall {
                         push_entry(&mut entries, &mut entry_set, target, FuncSource::CallTarget);
                     }
                 }
-            }
         }
 
         for i in 0..insns.len() {
@@ -276,27 +275,21 @@ pub fn detect_functions_with_extra_opt(
             if m == "ret" || m == "retn" {
                 continue;
             } else if m == "jmp" {
-                if let Some(t) = parse_addr_operand(&insn.ops()) {
-                    if t >= entry && t < limit {
-                        if let Some(ti) = idx_of(t) {
-                            if visited[ti] != *stamp {
+                if let Some(t) = parse_addr_operand(&insn.ops())
+                    && t >= entry && t < limit
+                        && let Some(ti) = idx_of(t)
+                            && visited[ti] != *stamp {
                                 visited[ti] = *stamp;
                                 work.push(ti);
                             }
-                        }
-                    }
-                }
             } else if m.starts_with('j') {
-                if let Some(t) = parse_addr_operand(&insn.ops()) {
-                    if t >= entry && t < limit {
-                        if let Some(ti) = idx_of(t) {
-                            if visited[ti] != *stamp {
+                if let Some(t) = parse_addr_operand(&insn.ops())
+                    && t >= entry && t < limit
+                        && let Some(ti) = idx_of(t)
+                            && visited[ti] != *stamp {
                                 visited[ti] = *stamp;
                                 work.push(ti);
                             }
-                        }
-                    }
-                }
                 if next_idx < n && insns[next_idx].address < limit && visited[next_idx] != *stamp {
                     visited[next_idx] = *stamp;
                     work.push(next_idx);
@@ -310,11 +303,10 @@ pub fn detect_functions_with_extra_opt(
         }
         *stamp = stamp.wrapping_add(1).max(1);
 
-        if let Some(m) = reachable_max {
-            if m < end {
+        if let Some(m) = reachable_max
+            && m < end {
                 end = m;
             }
-        }
 
         if end <= entry {
             if let Some(insn) = insns.get(start_idx) {
@@ -324,9 +316,9 @@ pub fn detect_functions_with_extra_opt(
             }
         }
 
-        if *src == FuncSource::CallTarget {
-            if let Some(s) = idx_of(entry) {
-                if let Some(insn) = insns.get(s) {
+        if *src == FuncSource::CallTarget
+            && let Some(s) = idx_of(entry)
+                && let Some(insn) = insns.get(s) {
                     let insn_end = insn.address.saturating_add(insn.bytes.len() as u64);
                     if insn.address == entry
                         && insn_end == end
@@ -337,8 +329,6 @@ pub fn detect_functions_with_extra_opt(
                         return None;
                     }
                 }
-            }
-        }
 
         let (has_frame, stack_size) = analyze_frame(insns, entry, end);
         let name = match src {
@@ -452,11 +442,10 @@ pub fn apply_noreturn_ends(
             }
             i += 1;
         }
-        if let Some(c) = clip {
-            if c < func.end {
+        if let Some(c) = clip
+            && c < func.end {
                 func.end = c;
             }
-        }
     }
 }
 
@@ -549,14 +538,13 @@ fn matches_prologue(insns: &[DisasmInstruction], idx: usize) -> bool {
         && (starts_with_trim_ci(&insns[idx].ops(), "rsp,")
             || starts_with_trim_ci(&insns[idx].ops(), "esp,"))
     {
-        if let Some(next) = insns.get(idx + 1) {
-            if matches!(
+        if let Some(next) = insns.get(idx + 1)
+            && matches!(
                 next.mnemonic,
                 "push" | "mov" | "lea" | "sub" | "endbr64" | "endbr32"
             ) {
                 return true;
             }
-        }
         return false;
     }
 
@@ -568,28 +556,23 @@ fn matches_prologue(insns: &[DisasmInstruction], idx: usize) -> bool {
         ]
         .iter()
         .any(|cand| eq_ci(r, cand))
-        {
-            if let Some(next) = insns.get(idx + 1) {
-                if next.mnem() == "push" || (next.mnem() == "sub" && next.ops().contains("rsp")) {
+            && let Some(next) = insns.get(idx + 1)
+                && (next.mnem() == "push" || (next.mnem() == "sub" && next.ops().contains("rsp"))) {
                     return true;
                 }
-            }
-        }
     }
 
     if insns[idx].mnem() == "mov" {
         let ops_owned = insns[idx].ops();
         let ops = ops_owned.trim_start();
-        if starts_with_trim_ci(ops, "qword ptr [rsp") || starts_with_trim_ci(ops, "[rsp") {
-            if let Some(next) = insns.get(idx + 1) {
-                if next.mnem() == "mov"
+        if (starts_with_trim_ci(ops, "qword ptr [rsp") || starts_with_trim_ci(ops, "[rsp"))
+            && let Some(next) = insns.get(idx + 1)
+                && next.mnem() == "mov"
                     && (starts_with_trim_ci(&next.ops(), "qword ptr [rsp")
                         || starts_with_trim_ci(&next.ops(), "[rsp"))
                 {
                     return true;
                 }
-            }
-        }
     }
 
     if insns[idx].mnem() == "endbr64" || insns[idx].mnem() == "endbr32" {
@@ -728,11 +711,10 @@ fn parse_addr_operand(operands: &str) -> Option<u64> {
     }
     if tok.len() > 1 && (tok.ends_with('h') || tok.ends_with('H')) {
         let hex = &tok[..tok.len() - 1];
-        if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            if let Ok(v) = u64::from_str_radix(hex, 16) {
+        if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())
+            && let Ok(v) = u64::from_str_radix(hex, 16) {
                 return Some(v);
             }
-        }
     }
     if let Ok(v) = tok.parse::<u64>() {
         return Some(v);

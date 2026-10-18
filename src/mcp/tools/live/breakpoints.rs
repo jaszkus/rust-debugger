@@ -53,12 +53,11 @@ pub fn set_hardware_breakpoint(
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.hw_bp_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.hw_bp_result
+                && *rid == id {
                     let (_, r) = s.debug_state.hw_bp_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,
@@ -124,12 +123,11 @@ pub fn clear_hardware_breakpoint(
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.hw_bp_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.hw_bp_result
+                && *rid == id {
                     let (_, r) = s.debug_state.hw_bp_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,
@@ -172,12 +170,11 @@ pub fn arm_software_breakpoint(
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.arm_int3_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.arm_int3_result
+                && *rid == id {
                     let (_, r) = s.debug_state.arm_int3_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,

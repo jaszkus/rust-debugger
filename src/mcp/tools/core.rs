@@ -157,8 +157,8 @@ pub fn run_analysis(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
 
 pub fn get_analysis_status(state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
     let s = state.lock().map_err(|_| "lock poisoned".to_string())?;
-    if let Some(arc) = &s.analysis_progress {
-        if let Ok(g) = arc.lock() {
+    if let Some(arc) = &s.analysis_progress
+        && let Ok(g) = arc.lock() {
             return Ok(json!({
                 "running": !g.done,
                 "phase": g.phase,
@@ -170,7 +170,6 @@ pub fn get_analysis_status(state: &Arc<Mutex<AppState>>) -> Result<Value, String
                 "error": s.analysis_error
             }));
         }
-    }
     let analyzed = s.analysis.is_some();
     let mut out = json!({ "running": false, "analyzed": analyzed, "seq": s.analysis_seq, "error": s.analysis_error });
     if !analyzed {
@@ -222,11 +221,10 @@ pub fn int_convert(args: &Value) -> Result<Value, String> {
 
 pub fn list_functions(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
     let (limit, limit_requested) = super::schemas::arg_ranged(args, "limit", 100, 1, 1000)?;
-    if let Some(v) = args.get("offset") {
-        if !v.is_number() {
+    if let Some(v) = args.get("offset")
+        && !v.is_number() {
             return Err("Invalid params: offset must be integer".to_string());
         }
-    }
     let s = state.lock().map_err(|_| "lock poisoned".to_string())?;
     let analysis = s
         .analysis
@@ -388,11 +386,10 @@ pub fn decompile_function(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<
         let mut s = super::lock::lock_state(state)?;
         if let Some(a) = s.analysis.as_mut() {
             let a = std::sync::Arc::make_mut(a);
-            if let std::collections::hash_map::Entry::Vacant(e) = a.pseudocode.entry(entry) {
-                if let Some(fresh) = working.pseudocode.get(&entry) {
+            if let std::collections::hash_map::Entry::Vacant(e) = a.pseudocode.entry(entry)
+                && let Some(fresh) = working.pseudocode.get(&entry) {
                     e.insert(fresh.clone());
                 }
-            }
         }
     }
     Ok(json!({

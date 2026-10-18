@@ -52,11 +52,10 @@ pub fn analyze_stack(
     {
         for op in &pi.ops {
             if let POp::Push { src, .. } = op {
-                if let PVar::Reg(r) = src {
-                    if is_callee_saved_reg(r) {
+                if let PVar::Reg(r) = src
+                    && is_callee_saved_reg(r) {
                         prologue_saved += 1;
                     }
-                }
             } else {
                 break;
             }

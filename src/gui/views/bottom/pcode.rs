@@ -11,11 +11,10 @@ pub(crate) fn pcode_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Rend
     let rows: Arc<Vec<(u64, String, String)>> = shell.read(|s| {
         let entry = s.selected_func;
         let mut cache = lock(&shell.table_cache.pcode);
-        if cache.0 == s.analysis_version && cache.1 == s.modification_number && cache.2 == entry {
-            if let Some(rows) = &cache.3 {
+        if cache.0 == s.analysis_version && cache.1 == s.modification_number && cache.2 == entry
+            && let Some(rows) = &cache.3 {
                 return rows.clone();
             }
-        }
         let rows: Arc<Vec<(u64, String, String)>> = match (&s.analysis, &s.disasm, entry) {
             (Some(a), Some(d), Some(entry)) => {
                 match a.functions.iter().find(|f| f.entry == entry) {

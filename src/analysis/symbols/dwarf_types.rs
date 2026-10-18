@@ -232,11 +232,10 @@ pub fn dwarf_function_names(bin: &ParsedBinary) -> Vec<(u64, String)> {
             if let (Some(addr), Some(name)) = (
                 attr_u64(entry, gimli::DW_AT_low_pc),
                 attr_str(&dwarf, &unit, entry, gimli::DW_AT_name),
-            ) {
-                if addr != 0 && !out.iter().any(|(a, _)| *a == addr) {
+            )
+                && addr != 0 && !out.iter().any(|(a, _)| *a == addr) {
                     out.push((addr, name));
                 }
-            }
         }
     }
     out.sort_by_key(|(a, _)| *a);
@@ -359,13 +358,11 @@ fn collect_unit(
                     if let (Some(n), Some(v)) = (
                         attr_str(dwarf, unit, entry, gimli::DW_AT_name),
                         attr_i64(entry, gimli::DW_AT_const_value),
-                    ) {
-                        if let Some(t) = types.get_mut(&ek) {
-                            if let DieKind::Enum { variants, .. } = &mut t.kind {
+                    )
+                        && let Some(t) = types.get_mut(&ek)
+                            && let DieKind::Enum { variants, .. } = &mut t.kind {
                                 variants.push((n, v));
                             }
-                        }
-                    }
                 }
             }
             gimli::DW_TAG_member => {
@@ -383,15 +380,14 @@ fn collect_unit(
                         continue;
                     };
                     let off = attr_u64(entry, gimli::DW_AT_data_member_location).unwrap_or(0);
-                    if let Some(t) = types.get_mut(&ck) {
-                        if let DieKind::Composite { members, .. } = &mut t.kind {
+                    if let Some(t) = types.get_mut(&ck)
+                        && let DieKind::Composite { members, .. } = &mut t.kind {
                             members.push(Member {
                                 name,
                                 offset: off,
                                 ty,
                             });
                         }
-                    }
                 }
             }
             gimli::DW_TAG_array_type => match type_ref(entry, unit_idx) {
@@ -415,11 +411,10 @@ fn collect_unit(
                             attr_u64(entry, gimli::DW_AT_upper_bound).map(|ub| ub.wrapping_add(1))
                         })
                         .unwrap_or(0);
-                    if let Some(t) = types.get_mut(&ak) {
-                        if let DieKind::Array { count: c, .. } = &mut t.kind {
+                    if let Some(t) = types.get_mut(&ak)
+                        && let DieKind::Array { count: c, .. } = &mut t.kind {
                             *c = count;
                         }
-                    }
                 }
             }
             gimli::DW_TAG_typedef => {
@@ -467,11 +462,10 @@ fn collect_unit(
                 if let (Some(addr), Some(name)) = (
                     attr_u64(entry, gimli::DW_AT_low_pc),
                     attr_str(dwarf, unit, entry, gimli::DW_AT_name),
-                ) {
-                    if addr != 0 {
+                )
+                    && addr != 0 {
                         named_funcs.push((addr, name));
                     }
-                }
             }
             _ => {}
         }

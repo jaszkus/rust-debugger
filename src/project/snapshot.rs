@@ -155,11 +155,10 @@ pub fn save_project_db(program: &ProgramData, path: &str) -> Result<(), String> 
         w.u32(*v);
     }
 
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty() {
             let _ = std::fs::create_dir_all(parent);
         }
-    }
     let tmp = format!("{}.{}.tmp", path, std::process::id());
     let mut data = w.buf;
     let hash = fnv1a64(&data);

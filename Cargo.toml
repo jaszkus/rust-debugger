@@ -2,16 +2,13 @@
 name = "rust-debugger"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["jaszkus"]
 publish = false
 description = "Ghidra/IDA-style binary analysis, decompilation and live-debugging workbench with a GPU GUI and an MCP server for AI agents"
 license = "Apache-2.0"
 
 [dependencies]
-# wgpu (GPU) renderer: text and geometry go through a glyph atlas on the
-# GPU instead of CPU rasterization in RAM. This replaces the previous
-# tiny-skia software backend (see `vendor/` — kept on disk, unused).
 iced = { version = "0.14.0", default-features = false, features = [
     "wgpu", "wayland", "tokio", "canvas", "advanced", "svg",
     "thread-pool", "linux-theme-detection", "crisp",
@@ -50,13 +47,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [build-dependencies]
-# Windows .rc -> .res for the embedded program icon (assets/app.rc).
 embed-resource = "3"
 
 [dev-dependencies]
-# Same renderer/version as iced; construct it headlessly for modal input tests.
 iced_wgpu = "0.14"
-
-# NOTE: `vendor/iced_tiny_skia` (the old software-backend patch set) is kept
-# on disk but no longer wired in. The wgpu renderer path needs no patches.
-

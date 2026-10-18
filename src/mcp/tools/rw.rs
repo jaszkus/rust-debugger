@@ -277,8 +277,8 @@ pub fn read_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Result
                 continue;
             }
         };
-        if let Some(res) = &s.debug_state.mem_read_result {
-            if res.id == id {
+        if let Some(res) = &s.debug_state.mem_read_result
+            && res.id == id {
                 let res = s.debug_state.mem_read_result.take().unwrap();
                 let bytes = res.data?;
                 let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
@@ -299,7 +299,6 @@ pub fn read_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Result
                     "ascii": ascii,
                 }));
             }
-        }
         let sig = s.debug_state.signal.clone();
         drop(s);
         sig.wait(std::time::Duration::from_millis(5));
@@ -358,8 +357,8 @@ pub fn write_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
                 continue;
             }
         };
-        if let Some(res) = &s.debug_state.mem_write_result {
-            if res.id == id {
+        if let Some(res) = &s.debug_state.mem_write_result
+            && res.id == id {
                 let res = s.debug_state.mem_write_result.take().unwrap();
                 let written = res.written?;
                 return Ok(json!({
@@ -369,7 +368,6 @@ pub fn write_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
                     "ok": true,
                 }));
             }
-        }
         let sig = s.debug_state.signal.clone();
         drop(s);
         sig.wait(std::time::Duration::from_millis(5));
@@ -412,11 +410,10 @@ pub fn get_debugger_status(state: &Arc<Mutex<AppState>>) -> Result<Value, String
 
 pub fn debugger_start(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
     let mut s = state.lock().map_err(|_| "lock poisoned".to_string())?;
-    if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
-        if !p.is_empty() {
+    if let Some(p) = args.get("path").and_then(|v| v.as_str())
+        && !p.is_empty() {
             s.file_path = p.to_string();
         }
-    }
     if s.file_path.is_empty() {
         return Err("Set state.file_path first (Open a binary, or pass `path`)".into());
     }

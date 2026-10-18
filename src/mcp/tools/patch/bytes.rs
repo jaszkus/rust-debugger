@@ -361,11 +361,10 @@ pub fn search_and_replace_bytes(
             "original_bytes": hex(&original),
         }));
     }
-    if let Some(bin) = s.binary.as_ref() {
-        if let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
+    if let Some(bin) = s.binary.as_ref()
+        && let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
             s.disasm = Some(disasm);
         }
-    }
     if invalidate {
         crate::gui::drop_analysis(&mut s);
     }

@@ -78,8 +78,8 @@ pub fn pclntab_functions(data: &[u8], exec: &[(u64, u64)]) -> Vec<u64> {
                 direct += 1;
             }
         }
-        if direct == 0 {
-            if let Some(&min_entry) = raw.iter().filter(|&&a| a != 0).min() {
+        if direct == 0
+            && let Some(&min_entry) = raw.iter().filter(|&&a| a != 0).min() {
                 let slide = min_exec.wrapping_sub(min_entry);
                 for &a in &raw {
                     if a == 0 {
@@ -94,7 +94,6 @@ pub fn pclntab_functions(data: &[u8], exec: &[(u64, u64)]) -> Vec<u64> {
                     }
                 }
             }
-        }
     }
     out.sort_unstable();
     out.dedup();

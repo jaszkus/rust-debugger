@@ -61,11 +61,10 @@ pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) ->
                 leaders.insert(insns[i + 1].address);
             }
         } else if is_uncond_jmp(m) || is_cond_jump(m) {
-            if let Some(target) = parse_addr(&ins.ops()) {
-                if target >= func_entry && target < func_end {
+            if let Some(target) = parse_addr(&ins.ops())
+                && target >= func_entry && target < func_end {
                     leaders.insert(target);
                 }
-            }
             if i + 1 < end {
                 leaders.insert(insns[i + 1].address);
             }
@@ -125,14 +124,13 @@ pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) ->
                 }
             }
         } else if is_cond_jump(m) {
-            if let Some(target) = parse_addr(&last.ops()) {
-                if let Some(&tid) = block_at.get(&target) {
+            if let Some(target) = parse_addr(&last.ops())
+                && let Some(&tid) = block_at.get(&target) {
                     blk.successors.push(Edge {
                         target: tid,
                         kind: EdgeKind::BranchTrue,
                     });
                 }
-            }
             if let Some(&fid) = block_at.get(&block_end) {
                 blk.successors.push(Edge {
                     target: fid,
@@ -170,11 +168,10 @@ pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) ->
             if is_uncond_jmp(last.mnemonic) {
                 match parse_addr(&last.ops()) {
                     Some(target) => {
-                        if target < func_entry || target >= func_end {
-                            if let Some(&fid) = block_at.get(&blk.end) {
+                        if (target < func_entry || target >= func_end)
+                            && let Some(&fid) = block_at.get(&blk.end) {
                                 pinned[fid] = true;
                             }
-                        }
                     }
                     None => {
                         if let Some(&fid) = block_at.get(&blk.end) {
@@ -298,11 +295,10 @@ fn parse_addr(s: &str) -> Option<u64> {
     }
     if tok.len() > 1 && (tok.ends_with('h') || tok.ends_with('H')) {
         let hex = &tok[..tok.len() - 1];
-        if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            if let Ok(v) = u64::from_str_radix(hex, 16) {
+        if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit())
+            && let Ok(v) = u64::from_str_radix(hex, 16) {
                 return Some(v);
             }
-        }
     }
     if tok.starts_with('-') || tok.starts_with('+') {
         return None;

@@ -156,15 +156,12 @@ impl ProgramData {
     }
 
     fn sync_analysis_rename_raw(&mut self, addr: u64, name: Option<&str>) {
-        if let Some(a) = self.analysis.as_mut() {
-            if let Some(a) = std::sync::Arc::get_mut(a) {
-                if let Some(f) = a.functions.iter_mut().find(|f| f.entry == addr) {
-                    if let Some(n) = name {
+        if let Some(a) = self.analysis.as_mut()
+            && let Some(a) = std::sync::Arc::get_mut(a)
+                && let Some(f) = a.functions.iter_mut().find(|f| f.entry == addr)
+                    && let Some(n) = name {
                         f.name = n.to_string();
                     }
-                }
-            }
-        }
     }
 
     pub(crate) fn apply_change_raw(&mut self, change: &AnnotationChange, forward: bool) {

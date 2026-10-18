@@ -67,13 +67,11 @@ impl ConstantPropagator {
             } else {
                 self.registers.insert(dst.to_string(), RegValue::Unknown);
             }
-        } else if dst.starts_with('[') {
-            if let Some(addr) = self.resolve_address(dst, insn.address, insn.bytes.len()) {
-                if let Some(val) = self.parse_value(src) {
+        } else if dst.starts_with('[')
+            && let Some(addr) = self.resolve_address(dst, insn.address, insn.bytes.len())
+                && let Some(val) = self.parse_value(src) {
                     self.memory.insert(addr, val);
                 }
-            }
-        }
     }
 
     fn handle_lea(&mut self, insn: &DisasmInstruction) {
@@ -256,11 +254,10 @@ impl ConstantPropagator {
             .or_else(|| inner.strip_prefix("0X"))
         {
             let hex = hex.trim();
-            if !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-                if let Ok(addr) = u64::from_str_radix(hex, 16) {
+            if !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())
+                && let Ok(addr) = u64::from_str_radix(hex, 16) {
                     return Some(addr);
                 }
-            }
         }
 
         None

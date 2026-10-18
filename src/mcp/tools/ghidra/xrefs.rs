@@ -136,16 +136,14 @@ pub fn remove_reference(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Va
         if x.from != from || x.to != to {
             return true;
         }
-        if let Some(k) = kind {
-            if x.kind != k {
+        if let Some(k) = kind
+            && x.kind != k {
                 return true;
             }
-        }
-        if let Some(o) = op {
-            if x.op_index != o {
+        if let Some(o) = op
+            && x.op_index != o {
                 return true;
             }
-        }
         false
     });
     Ok(json!({ "ok": true, "removed": before - s.user_xrefs.len() }))

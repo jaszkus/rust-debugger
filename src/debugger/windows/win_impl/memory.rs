@@ -257,15 +257,14 @@ impl WinDebugger {
             let heap = u64::from_le_bytes(heap_b.try_into().unwrap());
             if heap != 0 {
                 for off in [0x70u64, 0x74u64] {
-                    if let Ok(cur) = self.read_memory(heap + off, 4) {
-                        if cur.len() == 4 {
+                    if let Ok(cur) = self.read_memory(heap + off, 4)
+                        && cur.len() == 4 {
                             let v = u32::from_le_bytes(cur.try_into().unwrap());
                             if v != 0 && v < 0x10000 {
                                 let _ = self.write_memory(heap + off, &[0, 0, 0, 0]);
                                 patched += 1;
                             }
                         }
-                    }
                 }
             }
         }
@@ -276,12 +275,11 @@ impl WinDebugger {
         let modules = self.list_modules()?;
         let mut main_base: Option<u64> = None;
         for m in &modules {
-            if let Ok(hdr) = self.read_memory(m.base, 2) {
-                if hdr.as_slice() == b"MZ" {
+            if let Ok(hdr) = self.read_memory(m.base, 2)
+                && hdr.as_slice() == b"MZ" {
                     main_base = Some(m.base);
                     break;
                 }
-            }
         }
         let base = main_base.ok_or("No MZ module found in target")?;
 

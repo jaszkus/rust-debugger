@@ -10,11 +10,10 @@ use crate::gui::widgets::vlist::{vlist, VListData};
 pub(crate) fn comments_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer> {
     let rows: Arc<Vec<(u64, String, String)>> = shell.read(|s| {
         let mut cache = lock(&shell.table_cache.comments);
-        if cache.0 == s.modification_number && cache.1 == s.comments_ex.len() {
-            if let Some(rows) = &cache.2 {
+        if cache.0 == s.modification_number && cache.1 == s.comments_ex.len()
+            && let Some(rows) = &cache.2 {
                 return rows.clone();
             }
-        }
         let mut v: Vec<(u64, String, String)> = s
             .comments_ex
             .iter()

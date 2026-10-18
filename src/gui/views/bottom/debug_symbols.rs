@@ -16,11 +16,10 @@ pub(crate) fn debug_symbols_tab(shell: &Shell) -> Element<'_, Message, Theme, ic
             .map(|ds| ds.symbols.len())
             .unwrap_or(0);
         let mut cache = lock(&shell.table_cache.debug);
-        if cache.0 == s.analysis_version && cache.1 == s.modification_number && cache.2 == len {
-            if let Some(rows) = &cache.3 {
+        if cache.0 == s.analysis_version && cache.1 == s.modification_number && cache.2 == len
+            && let Some(rows) = &cache.3 {
                 return rows.clone();
             }
-        }
         let rows: Arc<Vec<(u64, String, bool)>> = match &s.analysis {
             Some(a) => match &a.debug_symbols {
                 Some(ds) => Arc::new(

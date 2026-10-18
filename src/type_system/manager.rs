@@ -182,11 +182,10 @@ impl DataTypeManager {
         if t.len() > MAX_TYPE_EXPR_LEN {
             return Err(format!("Type expression too long ({} bytes)", t.len()));
         }
-        if t != name {
-            if let Some(&id) = self.by_name.get(t.as_str()) {
+        if t != name
+            && let Some(&id) = self.by_name.get(t.as_str()) {
                 return Ok(id);
             }
-        }
 
         let stripped = strip_qualifiers(&t);
         if stripped.len() != t.len() {
@@ -207,9 +206,9 @@ impl DataTypeManager {
             return Ok(id);
         }
 
-        if t.ends_with(']') {
-            if let Some(open) = t.find('[') {
-                if let Some(rel_close) = t[open..].find(']') {
+        if t.ends_with(']')
+            && let Some(open) = t.find('[')
+                && let Some(rel_close) = t[open..].find(']') {
                     let close = open + rel_close;
                     let count: usize = t[open + 1..close]
                         .trim()
@@ -219,8 +218,6 @@ impl DataTypeManager {
                     let eid = self.resolve_type_name(&element_name)?;
                     return self.create_array(eid, count.max(1));
                 }
-            }
-        }
 
         let lower = t.to_ascii_lowercase();
         if let Some(canonical) = alias_target(&lower, self.pointer_size) {
@@ -334,11 +331,10 @@ impl DataTypeManager {
 
     pub fn rename(&mut self, id: TypeId, new_name: &str) -> Result<(), String> {
         Self::validate_name(new_name)?;
-        if let Some(&owner) = self.by_name.get(new_name) {
-            if owner != id {
+        if let Some(&owner) = self.by_name.get(new_name)
+            && owner != id {
                 return Err(format!("Data type '{}' already exists", new_name));
             }
-        }
         let slot = self
             .types
             .get_mut(&id)

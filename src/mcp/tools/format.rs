@@ -104,16 +104,14 @@ pub fn protections_report(r: &ProtectionsReport) -> Value {
                 && g.0.source == f.source
         }) {
             g.1 += 1;
-            if let Some(a) = f.address {
-                if g.2.len() < 8 && !g.2.contains(&a) {
+            if let Some(a) = f.address
+                && g.2.len() < 8 && !g.2.contains(&a) {
                     g.2.push(a);
                 }
-            }
-            if let Some(e) = &f.evidence {
-                if g.3.len() < 3 && !g.3.contains(e) {
+            if let Some(e) = &f.evidence
+                && g.3.len() < 3 && !g.3.contains(e) {
                     g.3.push(e.clone());
                 }
-            }
         } else {
             groups.push((
                 f,

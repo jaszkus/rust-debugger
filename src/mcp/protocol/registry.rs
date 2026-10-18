@@ -485,11 +485,10 @@ pub fn search_tools(args: &Value) -> Result<Value, String> {
     for (idx, (name, desc, _)) in ALL_TOOLS.iter().enumerate() {
         let cat = tool_category(name);
         *categories.entry(cat).or_insert(0) += 1;
-        if let Some(c) = &category {
-            if cat != c.as_str() {
+        if let Some(c) = &category
+            && cat != c.as_str() {
                 continue;
             }
-        }
         if tokens.is_empty() {
             hits.push((0, 0, idx));
             continue;

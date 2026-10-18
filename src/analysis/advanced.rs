@@ -73,22 +73,21 @@ fn detect_stubs(
         if count >= 4 {
             return None;
         }
-        if let Some(p) = last {
-            if !is_prefix_shape(p) {
+        if let Some(p) = last
+            && !is_prefix_shape(p) {
                 prefix_ok = false;
             }
-        }
         prev = last;
         last = Some(i);
         count += 1;
     }
     let last = last?;
 
-    if count == 2 {
-        if let Some(p) = prev {
-            if p.mnem() == "push" && last.mnem() == "ret" {
-                if let Some(target) = parse_addr(p.ops().trim()) {
-                    if target != func_entry {
+    if count == 2
+        && let Some(p) = prev
+            && p.mnem() == "push" && last.mnem() == "ret" {
+                if let Some(target) = parse_addr(p.ops().trim())
+                    && target != func_entry {
                         if let Some(imp) = import_by_off.get(&target) {
                             return Some(StubInfo {
                                 func_entry,
@@ -112,11 +111,8 @@ fn detect_stubs(
                             });
                         }
                     }
-                }
                 return None;
             }
-        }
-    }
 
     if last.mnem() != "jmp" {
         return None;
@@ -140,8 +136,8 @@ fn detect_stubs(
         if ops.starts_with('[') || ops.contains("ptr [") {
             let insn_addr = last.address;
             let insn_size = last.bytes.len() as u64;
-            if let Some(slot) = extract_iat_slot(ops, insn_addr, insn_size) {
-                if let Some(imp) = import_by_off.get(&slot) {
+            if let Some(slot) = extract_iat_slot(ops, insn_addr, insn_size)
+                && let Some(imp) = import_by_off.get(&slot) {
                     let full = if imp.library.is_empty() {
                         imp.name.clone()
                     } else {
@@ -155,7 +151,6 @@ fn detect_stubs(
                         jump_addr: last.address,
                     });
                 }
-            }
             return Some(StubInfo {
                 func_entry,
                 kind: StubKind::ImportThunk,
@@ -266,22 +261,19 @@ fn switch_at(insns: &[DisasmInstruction], binary: &ParsedBinary, i: usize) -> Op
     let mut case_limit: Option<u32> = None;
 
     for prev in &insns[i.saturating_sub(8)..i] {
-        if prev.mnem() == "lea" {
-            if let Some(addr) = extract_lea_addr(&prev.ops(), prev.address, prev.bytes.len() as u64)
+        if prev.mnem() == "lea"
+            && let Some(addr) = extract_lea_addr(&prev.ops(), prev.address, prev.bytes.len() as u64)
             {
                 table_addr = Some(addr);
             }
-        }
         if prev.mnem() == "cmp" {
             let prev_ops = prev.ops();
             let parts: Vec<&str> = prev_ops.split(',').map(|s| s.trim()).collect();
-            if parts.len() == 2 {
-                if let Some(n) = parse_addr(parts[1]) {
-                    if n < 1000 {
+            if parts.len() == 2
+                && let Some(n) = parse_addr(parts[1])
+                    && n < 1000 {
                         case_limit = Some(n as u32);
                     }
-                }
-            }
         }
     }
 
@@ -387,13 +379,11 @@ fn msvc_rva_switch(
             }
             "cmp" => {
                 let parts: Vec<&str> = ops.split(',').map(str::trim).collect();
-                if parts.len() == 2 {
-                    if let Some(n) = parse_addr(parts[1]) {
-                        if n < 1000 {
+                if parts.len() == 2
+                    && let Some(n) = parse_addr(parts[1])
+                        && n < 1000 {
                             case_limit = Some(n as u32);
                         }
-                    }
-                }
             }
             _ => {}
         }
@@ -627,8 +617,8 @@ pub fn build_stub_map(
                 _ => break,
             }
         }
-        if let (Some(final_t), true) = (cur, hops > 0) {
-            if let Some(stub) = map.get_mut(&k) {
+        if let (Some(final_t), true) = (cur, hops > 0)
+            && let Some(stub) = map.get_mut(&k) {
                 stub.target_addr = Some(final_t);
                 if let Some(name) = sym_by_addr.get(&final_t) {
                     stub.target_name = name.to_string();
@@ -636,7 +626,6 @@ pub fn build_stub_map(
                     stub.target_name = format!("sub_{:X}", final_t);
                 }
             }
-        }
     }
     map
 }

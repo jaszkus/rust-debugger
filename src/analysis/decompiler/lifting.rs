@@ -166,7 +166,7 @@ fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeSca
     let mut floats: HashSet<String> = HashSet::default();
     let mut float_slots: HashSet<i64> = HashSet::default();
     for di in imap {
-        if !is_float_mnemonic(&di.mnemonic) {
+        if !is_float_mnemonic(di.mnemonic) {
             continue;
         }
         for tok in di.ops().split(',') {
@@ -207,16 +207,14 @@ fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeSca
                         }
                     }
                     POp::Store { addr, src, .. } => {
-                        if floats.contains(&fmt_var(src)) {
-                            if let PVar::StackSlot { off: o, .. } = addr {
+                        if floats.contains(&fmt_var(src))
+                            && let PVar::StackSlot { off: o, .. } = addr {
                                 float_slots.insert(*o);
                             }
-                        }
-                        if let PVar::StackSlot { off: o, .. } = addr {
-                            if *o >= 0 {
+                        if let PVar::StackSlot { off: o, .. } = addr
+                            && *o >= 0 {
                                 written_pos_slots.insert(*o);
                             }
-                        }
                     }
                     POp::FloatBinop { a, b, .. }
                     | POp::Cmp { a, b, .. }
@@ -385,7 +383,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             let off = match v.storage {
                 variables::Loc::Stack { base, off } => {
                     let reg = if base == 0 { bp } else { sp };
-                    fmt_frame_slot(reg, off as i64)
+                    fmt_frame_slot(reg, off)
                 }
                 _ => String::new(),
             };

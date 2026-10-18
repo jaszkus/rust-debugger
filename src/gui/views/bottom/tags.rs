@@ -10,11 +10,10 @@ use crate::gui::widgets::vlist::{vlist, VListData};
 pub(crate) fn tags_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer> {
     let rows: Arc<Vec<(u64, Vec<String>)>> = shell.read(|s| {
         let mut cache = lock(&shell.table_cache.tags);
-        if cache.0 == s.modification_number && cache.1 == s.function_tags.len() {
-            if let Some(rows) = &cache.2 {
+        if cache.0 == s.modification_number && cache.1 == s.function_tags.len()
+            && let Some(rows) = &cache.2 {
                 return rows.clone();
             }
-        }
         let mut v: Vec<(u64, Vec<String>)> = s
             .function_tags
             .iter()

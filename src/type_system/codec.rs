@@ -175,11 +175,10 @@ impl DataTypeManager {
             let created: Option<TypeId> = match kind {
                 "struct" => {
                     let id = self.create_struct(&unique).ok();
-                    if let Some(id) = id {
-                        if e.get("packed").and_then(Value::as_bool) == Some(true) {
+                    if let Some(id) = id
+                        && e.get("packed").and_then(Value::as_bool) == Some(true) {
                             let _ = self.set_packed(id, true);
                         }
-                    }
                     id
                 }
                 "union" => self.create_union(&unique).ok(),
@@ -248,28 +247,23 @@ impl DataTypeManager {
                     }
                 }
                 "typedef" => {
-                    if let Some(t) = json_id(e, "target").and_then(|t| self.remap_ref(&id_map, t)) {
-                        if !self.embeds(t, new_id) {
-                            if let Some(DataType::Typedef { target, .. }) =
+                    if let Some(t) = json_id(e, "target").and_then(|t| self.remap_ref(&id_map, t))
+                        && !self.embeds(t, new_id)
+                            && let Some(DataType::Typedef { target, .. }) =
                                 self.types.get_mut(&new_id)
                             {
                                 *target = t;
                             }
-                        }
-                    }
                 }
                 "enum" => {
                     if let Some(u) =
                         json_id(e, "underlying").and_then(|u| self.remap_ref(&id_map, u))
-                    {
-                        if !self.embeds(u, new_id) {
-                            if let Some(DataType::Enum { underlying, .. }) =
+                        && !self.embeds(u, new_id)
+                            && let Some(DataType::Enum { underlying, .. }) =
                                 self.types.get_mut(&new_id)
                             {
                                 *underlying = u;
                             }
-                        }
-                    }
                     if let Some(variants) = e.get("variants").and_then(Value::as_array) {
                         for v in variants {
                             let vname = v.get("name").and_then(Value::as_str).unwrap_or("");

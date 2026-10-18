@@ -41,12 +41,11 @@ pub fn read_proc_mem_blocking(
                 continue;
             }
         };
-        if let Some(res) = &s.debug_state.mem_read_result {
-            if res.id == id {
+        if let Some(res) = &s.debug_state.mem_read_result
+            && res.id == id {
                 let res = s.debug_state.mem_read_result.take().unwrap();
                 return res.data;
             }
-        }
         drop(s);
         if std::time::Instant::now() >= deadline {
             return Err("Timed out reading process memory".into());
@@ -160,11 +159,10 @@ pub fn search_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resu
         .collect::<Result<Vec<_>, String>>()?;
     let matches_at = |data: &[u8], i: usize, plan: &NeedlePlan| -> bool {
         for (k, want) in plan.bytes.iter().enumerate() {
-            if let Some(w) = want {
-                if data[i + k] != *w {
+            if let Some(w) = want
+                && data[i + k] != *w {
                     return false;
                 }
-            }
         }
         true
     };
@@ -181,12 +179,11 @@ pub fn search_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resu
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.mem_regions_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.mem_regions_result
+                && *rid == id {
                     let (_, r) = s.debug_state.mem_regions_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,
@@ -204,12 +201,11 @@ pub fn search_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resu
                 Ok(id)
             },
             |s, id| {
-                if let Some((rid, _)) = &s.debug_state.modules_result {
-                    if *rid == id {
+                if let Some((rid, _)) = &s.debug_state.modules_result
+                    && *rid == id {
                         let (_, r) = s.debug_state.modules_result.take().unwrap();
                         return Some(r);
                     }
-                }
                 None
             },
             3000,

@@ -87,11 +87,10 @@ fn gpr_code(name: &str) -> Option<(u8, OpWidth)> {
             } else {
                 (rest, OpWidth::B8)
             };
-            if let Ok(num) = num.parse::<u8>() {
-                if (8..16).contains(&num) {
+            if let Ok(num) = num.parse::<u8>()
+                && (8..16).contains(&num) {
                     return Some((num, width));
                 }
-            }
             return None;
         }
     };

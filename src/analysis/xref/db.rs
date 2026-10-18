@@ -412,8 +412,8 @@ fn scan_range(
                 } else {
                     1
                 };
-                if let Some((target, is_write)) = mov_data_ref(dst, src, insn) {
-                    if target != 0 {
+                if let Some((target, is_write)) = mov_data_ref(dst, src, insn)
+                    && target != 0 {
                         let from_imm =
                             matches!(src, Operand::Addr(_)) && !matches!(dst, Operand::Mem { .. });
                         if from_imm {
@@ -435,7 +435,6 @@ fn scan_range(
                             );
                         }
                     }
-                }
             }
         } else if matches!(
             m,
@@ -461,11 +460,10 @@ fn scan_range(
                     add_addr_operand_ref(db, lk, insn, *a, op_idx as i32);
                 }
             }
-        } else if matches!(m, "movabs" | "movq") {
-            if let [_, Operand::Addr(a)] = parsed.as_slice() {
+        } else if matches!(m, "movabs" | "movq")
+            && let [_, Operand::Addr(a)] = parsed.as_slice() {
                 add_addr_operand_ref(db, lk, insn, *a, 1);
             }
-        }
     }
     false
 }

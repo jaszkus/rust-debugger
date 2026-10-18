@@ -219,8 +219,8 @@ impl<'a, D: VListData> canvas::Program<D::Message> for VList<'a, D> {
         let row_visible = |top: f32| top < bounds.height && top + line_h > 0.0;
 
         let row_top = |i: usize| (i - start) as f32 * line_h;
-        if let Some(i) = state.keyboard_row.or(self.data.selected()) {
-            if i >= start && i < end && row_visible(row_top(i)) {
+        if let Some(i) = state.keyboard_row.or(self.data.selected())
+            && i >= start && i < end && row_visible(row_top(i)) {
                 wash.fill_rectangle(
                     Point::new(0.0, row_top(i)),
                     Size::new(bounds.width, line_h),
@@ -232,16 +232,14 @@ impl<'a, D: VListData> canvas::Program<D::Message> for VList<'a, D> {
                     tokens.mint,
                 );
             }
-        }
-        if let Some(i) = state.hover {
-            if i >= start && i < end && Some(i) != self.data.selected() && row_visible(row_top(i)) {
+        if let Some(i) = state.hover
+            && i >= start && i < end && Some(i) != self.data.selected() && row_visible(row_top(i)) {
                 wash.fill_rectangle(
                     Point::new(0.0, row_top(i)),
                     Size::new(bounds.width, line_h),
                     tokens.hover,
                 );
             }
-        }
         for i in start..end {
             let top = row_top(i);
             if !row_visible(top) {
@@ -553,8 +551,8 @@ impl<'a, D: VListData> canvas::Program<D::Message> for VList<'a, D> {
             }
 
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                if let Some(p) = pos(&cursor) {
-                    if len <= visible || p.x < bounds.width - TRACK_HIT {
+                if let Some(p) = pos(&cursor)
+                    && (len <= visible || p.x < bounds.width - TRACK_HIT) {
                         let row = first + (p.y / line_h) as usize;
                         if row < len && !self.data.menu_entries(row).is_empty() {
                             state.menu = Some(MenuState {
@@ -565,7 +563,6 @@ impl<'a, D: VListData> canvas::Program<D::Message> for VList<'a, D> {
                             return Some(canvas::Action::capture());
                         }
                     }
-                }
                 None
             }
 
@@ -579,13 +576,12 @@ impl<'a, D: VListData> canvas::Program<D::Message> for VList<'a, D> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Interaction {
-        if let Some(p) = cursor.position_in(bounds) {
-            if self.data.len() > visible_rows(bounds.height, self.line_h)
+        if let Some(p) = cursor.position_in(bounds)
+            && self.data.len() > visible_rows(bounds.height, self.line_h)
                 && p.x >= bounds.width - TRACK_HIT
             {
                 return Interaction::Grab;
             }
-        }
         Interaction::None
     }
 }

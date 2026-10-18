@@ -147,11 +147,10 @@ pub(crate) fn gpr_part(key: u64) -> Option<RegPart> {
 #[inline]
 pub(crate) fn reg_part(name: &str) -> Option<RegPart> {
     let b = name.as_bytes();
-    if b.len() <= 4 {
-        if let Some(r) = gpr_part(pack_reg_name(b)) {
+    if b.len() <= 4
+        && let Some(r) = gpr_part(pack_reg_name(b)) {
             return Some(r);
         }
-    }
     if b.len() >= 4 {
         let vec_prefix = (b[0] == b'x'
             || b[0] == b'X'

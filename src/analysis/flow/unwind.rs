@@ -215,11 +215,10 @@ fn read_eh_encoded(
 
 fn elf_eh_starts(binary: &ParsedBinary) -> Vec<u64> {
     let addr_size = if binary.arch == "x86_64" { 8 } else { 4 };
-    if let Some(v) = eh_frame_hdr_starts(binary, addr_size) {
-        if !v.is_empty() {
+    if let Some(v) = eh_frame_hdr_starts(binary, addr_size)
+        && !v.is_empty() {
             return v;
         }
-    }
     eh_frame_scan(binary, addr_size)
 }
 
@@ -382,11 +381,10 @@ fn eh_frame_scan(binary: &ParsedBinary, addr_size: usize) -> Vec<u64> {
                 .map(|(_, c)| c.fde_enc)
                 .unwrap_or(EH_ABSPTR);
             let fv = vaddr.wrapping_add(p as u64);
-            if let Some(loc) = read_eh_encoded(data, &mut p, fde_enc, addr_size, fv, vaddr) {
-                if loc != 0 && is_exec(binary, loc) {
+            if let Some(loc) = read_eh_encoded(data, &mut p, fde_enc, addr_size, fv, vaddr)
+                && loc != 0 && is_exec(binary, loc) {
                     out.push(loc);
                 }
-            }
         }
         pos = rec_end;
     }
@@ -455,19 +453,17 @@ fn macho_function_starts(binary: &ParsedBinary) -> Vec<u64> {
             }
         } else if cmd == LC_SEGMENT {
             let segname = &d[off + 8..off + 24];
-            if segname.starts_with(b"__TEXT") {
-                if let Some(vm) = rd32(off + 24) {
+            if segname.starts_with(b"__TEXT")
+                && let Some(vm) = rd32(off + 24) {
                     text_vmaddr = Some(vm as u64);
                 }
-            }
-        } else if cmd == LC_FUNCTION_STARTS {
-            if let (Some(dataoff), Some(datasize)) = (rd32(off + 8), rd32(off + 12)) {
+        } else if cmd == LC_FUNCTION_STARTS
+            && let (Some(dataoff), Some(datasize)) = (rd32(off + 8), rd32(off + 12)) {
                 let (dataoff, datasize) = (dataoff as usize, datasize as usize);
                 if datasize > 0 && datasize < 0x1000_0000 && dataoff + datasize <= d.len() {
                     fs_data = Some((dataoff, datasize));
                 }
             }
-        }
         off += cmdsize;
     }
     let Some((dataoff, datasize)) = fs_data else {

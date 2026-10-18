@@ -197,11 +197,10 @@ pub(crate) fn run_analysis(state: &mut AppState) {
             }));
             {
                 let mut g = lock_recover(&progress);
-                if !g.cancel {
-                    if let Ok(r) = result {
+                if !g.cancel
+                    && let Ok(r) = result {
                         g.result = Some(r);
                     }
-                }
                 g.done = true;
             }
         });
@@ -305,8 +304,8 @@ pub(crate) fn spawn_async_load(
             if raw_base.is_none() {
                 let db_path = crate::project::resolve_db_path(&path);
                 set_phase("loading project DB");
-                if let Some(snap) = crate::project::load_project_db(&db_path) {
-                    if snap.source_path == path {
+                if let Some(snap) = crate::project::load_project_db(&db_path)
+                    && snap.source_path == path {
                         let mut analysis = snap.analysis;
                         let mut pe = crate::analysis::pe_resources::PEResourceAnalyzer::new();
                         pe.analyze(&bin);
@@ -328,7 +327,6 @@ pub(crate) fn spawn_async_load(
                             project_name: Some(snap.project_name),
                         });
                     }
-                }
             }
 
             set_phase("disassembling");
@@ -395,20 +393,18 @@ pub(crate) fn poll_load(state: &mut AppState) {
                 state.analysis_seq = state.analysis_seq.wrapping_add(1);
                 state.analysis_error = None;
                 crate::project::apply_annotations(&mut state.program, &ann);
-                if let Some(name) = lp.project_name {
-                    if !name.is_empty() {
+                if let Some(name) = lp.project_name
+                    && !name.is_empty() {
                         state.current_program_name = name;
                     }
-                }
                 crate::gui::state::invalidate_analysis_caches(state);
             } else {
                 crate::gui::state::invalidate_analysis_caches(state);
             }
-            if let Some(name) = state.pending_project_name.take() {
-                if !name.is_empty() {
+            if let Some(name) = state.pending_project_name.take()
+                && !name.is_empty() {
                     state.current_program_name = name;
                 }
-            }
             touch_recent(state, &lp.path);
             state.db_last_save_attempt = Some(std::time::Instant::now());
             if from_db {
@@ -510,12 +506,11 @@ pub(crate) fn goto_address(state: &mut AppState, addr: u64) {
             found = true;
         }
     }
-    if let Some(ref bin) = state.binary {
-        if let Some(off) = offset_for_va(&bin.sections, addr) {
+    if let Some(ref bin) = state.binary
+        && let Some(off) = offset_for_va(&bin.sections, addr) {
             state.hex_offset = off as usize;
             found = true;
         }
-    }
 
     if found && !state.navigating {
         if state.history_idx + 1 < state.history.len() {

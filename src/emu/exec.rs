@@ -184,13 +184,11 @@ impl<'a> Emulator<'a> {
             self.trace_count = self.trace_count.wrapping_add(1);
             match self.exec_ops(&pin, next_fall, float_single) {
                 OpFlow::Continue => {
-                    if next_fall != rip {
-                        if let Some(n) = self.insns.get(idx + 1) {
-                            if n.address == next_fall {
+                    if next_fall != rip
+                        && let Some(n) = self.insns.get(idx + 1)
+                            && n.address == next_fall {
                                 seq_idx = Some(idx + 1);
                             }
-                        }
-                    }
                     rip = next_fall;
                 }
                 OpFlow::Jump(t) => rip = t,

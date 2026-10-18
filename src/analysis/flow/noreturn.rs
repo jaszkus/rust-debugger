@@ -143,11 +143,10 @@ impl NoReturnAnalyzer {
     #[allow(dead_code)]
     pub fn is_noreturn_call_at(&self, insn: &DisasmInstruction) -> bool {
         if insn.mnem() == "call" {
-            if let Some(target) = parse_call_target(&insn.ops()) {
-                if self.noreturn_functions.contains(&target) {
+            if let Some(target) = parse_call_target(&insn.ops())
+                && self.noreturn_functions.contains(&target) {
                     return true;
                 }
-            }
             if let Some(slot) = resolve_mem_target(insn) {
                 return self.noreturn_functions.contains(&slot);
             }

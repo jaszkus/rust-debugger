@@ -10,11 +10,10 @@ pub(crate) fn apply_ctx_action(
         C::Select => {
             shell.with(|s| {
                 s.selected_insn = Some(addr);
-                if let Some(a) = &s.analysis {
-                    if let Some(f) = a.functions.iter().find(|f| addr >= f.entry && addr < f.end) {
+                if let Some(a) = &s.analysis
+                    && let Some(f) = a.functions.iter().find(|f| addr >= f.entry && addr < f.end) {
                         s.selected_func = Some(f.entry);
                     }
-                }
             });
         }
         C::ToggleBp => shell.with(|s| actions::toggle_breakpoint(s, addr)),
@@ -159,13 +158,12 @@ impl ToastEvent {
         if m == "MCP server stopped" {
             return ToastEvent::McpStopped(8765);
         }
-        if m.starts_with("BP set ") {
-            if let Ok(a) = u64::from_str_radix(m.trim_start_matches("BP set "), 16) {
+        if m.starts_with("BP set ")
+            && let Ok(a) = u64::from_str_radix(m.trim_start_matches("BP set "), 16) {
                 return ToastEvent::BreakpointSet(a);
             }
-        }
-        if m.starts_with("BP removed ") {
-            if let Ok(a) = u64::from_str_radix(
+        if m.starts_with("BP removed ")
+            && let Ok(a) = u64::from_str_radix(
                 m.trim_start_matches("BP removed ")
                     .split_whitespace()
                     .next()
@@ -174,7 +172,6 @@ impl ToastEvent {
             ) {
                 return ToastEvent::BreakpointRemoved(a);
             }
-        }
         if let Some(rest) = m.strip_prefix("BP failed ") {
             return ToastEvent::OpError {
                 title: "Breakpoint".into(),

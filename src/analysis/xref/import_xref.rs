@@ -28,11 +28,10 @@ pub fn resolve_iat_slot(bin: &ParsedBinary, query: &str) -> Option<u64> {
     };
     let lib_filter_lower = lib_filter.as_ref().map(|s| s.to_lowercase());
     for imp in &bin.imports {
-        if let Some(lib) = &lib_filter_lower {
-            if imp.library.to_lowercase() != *lib {
+        if let Some(lib) = &lib_filter_lower
+            && imp.library.to_lowercase() != *lib {
                 continue;
             }
-        }
         if imp.name == name {
             return Some(imp.offset);
         }
@@ -66,8 +65,8 @@ fn scan_direct(disasm: &DisasmResult, iat_slot: u64) -> (Vec<u64>, Vec<CallSite>
             None
         };
 
-        if let Some(t) = target_abs {
-            if t == iat_slot {
+        if let Some(t) = target_abs
+            && t == iat_slot {
                 let asm = format!("{} {}", insn.mnemonic, insn.operands);
                 let site = CallSite {
                     address: insn.address,
@@ -87,7 +86,6 @@ fn scan_direct(disasm: &DisasmResult, iat_slot: u64) -> (Vec<u64>, Vec<CallSite>
                     calls.push(site);
                 }
             }
-        }
     }
 
     (thunks, calls, jumps)

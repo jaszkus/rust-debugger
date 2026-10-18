@@ -13,11 +13,10 @@ pub(crate) fn xrefs_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Rend
     let rows: Arc<Vec<XrefRow>> = shell.read(|s| {
         let len = s.analysis.as_ref().map(|a| a.xrefs.all.len()).unwrap_or(0);
         let mut cache = lock(&shell.table_cache.xrefs);
-        if cache.0 == s.analysis_version && cache.1 == s.modification_number && cache.2 == len {
-            if let Some(rows) = &cache.3 {
+        if cache.0 == s.analysis_version && cache.1 == s.modification_number && cache.2 == len
+            && let Some(rows) = &cache.3 {
                 return rows.clone();
             }
-        }
         let rows: Arc<Vec<XrefRow>> = match &s.analysis {
             None => Arc::new(Vec::new()),
             Some(a) => Arc::new(

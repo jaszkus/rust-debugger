@@ -47,11 +47,10 @@ pub fn undo_last_patch(state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
         }
         Arc::make_mut(&mut bin.data)[p.offset..end].copy_from_slice(&p.original);
     }
-    if let Some(bin) = s.binary.as_ref() {
-        if let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
+    if let Some(bin) = s.binary.as_ref()
+        && let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
             s.disasm = Some(disasm);
         }
-    }
     crate::gui::drop_analysis(&mut s);
     s.status_msg = format!("Undid patch #{} at {:#x}", p.id, p.vaddr);
     Ok(json!({
@@ -82,11 +81,10 @@ pub fn undo_patch_at(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
         }
         Arc::make_mut(&mut bin.data)[p.offset..end].copy_from_slice(&p.original);
     }
-    if let Some(bin) = s.binary.as_ref() {
-        if let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
+    if let Some(bin) = s.binary.as_ref()
+        && let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
             s.disasm = Some(disasm);
         }
-    }
     crate::gui::drop_analysis(&mut s);
     s.status_msg = format!("Undid patch #{} at {:#x}", p.id, p.vaddr);
     Ok(json!({
@@ -110,11 +108,10 @@ pub fn revert_all_patches(state: &Arc<Mutex<AppState>>) -> Result<Value, String>
             }
         }
     }
-    if let Some(bin) = s.binary.as_ref() {
-        if let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
+    if let Some(bin) = s.binary.as_ref()
+        && let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
             s.disasm = Some(disasm);
         }
-    }
     crate::gui::drop_analysis(&mut s);
     s.status_msg = format!("Reverted {} patches", total);
     Ok(json!({ "reverted": total, "ok": true }))
@@ -184,8 +181,8 @@ pub fn import_patches(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Valu
             .and_then(|v| v.as_str())
             .ok_or("missing new")?;
         let new_bytes = parse_hex_pattern(new_hex)?;
-        if verify_originals {
-            if let Some(orig_hex) = entry.get("original").and_then(|v| v.as_str()) {
+        if verify_originals
+            && let Some(orig_hex) = entry.get("original").and_then(|v| v.as_str()) {
                 let original = parse_hex_pattern(orig_hex)?;
                 let bin = s.binary.as_ref().ok_or("No binary loaded")?;
                 let end = off
@@ -199,7 +196,6 @@ pub fn import_patches(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Valu
                     continue;
                 }
             }
-        }
         let desc = entry
             .get("description")
             .and_then(|v| v.as_str())
@@ -209,11 +205,10 @@ pub fn import_patches(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Valu
         applied += 1;
     }
 
-    if let Some(bin) = s.binary.as_ref() {
-        if let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
+    if let Some(bin) = s.binary.as_ref()
+        && let Ok(disasm) = crate::disasm::disassemble_binary(bin) {
             s.disasm = Some(disasm);
         }
-    }
     if invalidate {
         crate::gui::drop_analysis(&mut s);
     }

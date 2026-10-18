@@ -367,13 +367,12 @@ where
         let insn = decoder.decode();
         if insn.code() == Code::INVALID {
             invalid_run += 1;
-            if invalid_run > MAX_INVALID_RUN {
-                if let Some(tp) = next_valid_offset(arch, code, base_addr, decoder.position()) {
+            if invalid_run > MAX_INVALID_RUN
+                && let Some(tp) = next_valid_offset(arch, code, base_addr, decoder.position()) {
                     let _ = decoder.set_position(tp);
                     decoder.set_ip(base_addr.wrapping_add(tp as u64));
                     invalid_run = 0;
                 }
-            }
             continue;
         }
         invalid_run = 0;

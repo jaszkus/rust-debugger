@@ -142,11 +142,10 @@ pub(crate) fn autosave_check(state: &mut AppState) {
     let fp = if modif == state.db_fp_modif && state.db_fp_value != 0 {
         state.db_fp_value
     } else {
-        if let Some(t) = state.db_fp_checked {
-            if now.duration_since(t).as_millis() < 1000 {
+        if let Some(t) = state.db_fp_checked
+            && now.duration_since(t).as_millis() < 1000 {
                 return;
             }
-        }
         let fp = db_fingerprint(state);
         state.db_fp_modif = modif;
         state.db_fp_value = fp;

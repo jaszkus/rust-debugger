@@ -91,29 +91,26 @@ pub fn parse_operand(s: &str) -> Operand {
         return Operand::Unknown(String::new());
     }
 
-    if let (Some(open), Some(close)) = (s.find('['), s.rfind(']')) {
-        if open < close {
+    if let (Some(open), Some(close)) = (s.find('['), s.rfind(']'))
+        && open < close {
             let mut mem = parse_memory(&s[open + 1..close]);
             if let Operand::Mem { size, .. } = &mut mem {
                 *size = ptr_prefix_size(s);
             }
             return mem;
         }
-    }
 
-    if let Some(hex) = strip_hex_prefix(s) {
-        if let Ok(v) = u64::from_str_radix(hex, 16) {
+    if let Some(hex) = strip_hex_prefix(s)
+        && let Ok(v) = u64::from_str_radix(hex, 16) {
             return classify_unsigned(v);
         }
-    }
     if let Ok(v) = s.parse::<i64>() {
         return Operand::Imm(v);
     }
-    if let Some(hex) = s.strip_prefix('-').and_then(strip_hex_prefix) {
-        if let Ok(v) = u64::from_str_radix(hex, 16) {
+    if let Some(hex) = s.strip_prefix('-').and_then(strip_hex_prefix)
+        && let Ok(v) = u64::from_str_radix(hex, 16) {
             return Operand::Imm((v as i64).wrapping_neg());
         }
-    }
 
     if is_register(s) {
         return Operand::Reg(intern_static_lower(s));

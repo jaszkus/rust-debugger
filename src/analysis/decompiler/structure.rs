@@ -164,14 +164,13 @@ pub(crate) fn walk_block(
     let mut push_args: Vec<PVal> = Vec::new();
 
     for (i, (addr, op)) in ops.iter().enumerate() {
-        if !block_has_jcc && is_pure(op) {
-            if let Some(dst_reg) = written_reg(op) {
+        if !block_has_jcc && is_pure(op)
+            && let Some(dst_reg) = written_reg(op) {
                 let dead_local = last_use.get(dst_reg).map(|&u| u <= i).unwrap_or(true);
                 if dead_local && !live_out.contains(dst_reg) {
                     continue;
                 }
             }
-        }
         if dead.contains(&(block_id, i)) {
             continue;
         }
@@ -180,9 +179,9 @@ pub(crate) fn walk_block(
         } else {
             None
         };
-        if let Some((ref key, _)) = ck {
-            if let Some(holder) = cse_map.get(key).map(|(h, _)| *h) {
-                if let Some(dst) = written_reg(op) {
+        if let Some((ref key, _)) = ck
+            && let Some(holder) = cse_map.get(key).map(|(h, _)| *h)
+                && let Some(dst) = written_reg(op) {
                     if holder != dst {
                         let dstv = PVar::Reg(canonical_reg(dst));
                         track(&mut reg_values, &dstv, PVal::E(holder.to_string()));
@@ -196,8 +195,6 @@ pub(crate) fn walk_block(
                     cse_invalidate(&mut cse_map, dst);
                     continue;
                 }
-            }
-        }
         let rendered = render_op(
             op,
             *addr,
@@ -207,11 +204,10 @@ pub(crate) fn walk_block(
             hints,
             &mut push_args,
         );
-        if !block_has_jcc {
-            if let Some(w) = written_reg(op) {
+        if !block_has_jcc
+            && let Some(w) = written_reg(op) {
                 cse_invalidate(&mut cse_map, w);
             }
-        }
         if let Some((text, kind)) = rendered {
             lines.push(PseudoLine {
                 indent,
@@ -219,11 +215,10 @@ pub(crate) fn walk_block(
                 kind,
                 source_addr: Some(*addr),
             });
-            if let Some((key, oregs)) = ck {
-                if let Some(dst) = written_reg(op) {
+            if let Some((key, oregs)) = ck
+                && let Some(dst) = written_reg(op) {
                     cse_map.insert(key, (dst, oregs));
                 }
-            }
         }
     }
 
@@ -239,8 +234,8 @@ pub(crate) fn walk_block(
     let emitted: usize = lines[lines_before..].iter().map(|l| l.text.len() + 8).sum();
     hints.out_bytes.set(hints.out_bytes.get() + emitted);
     let succs = &block.successors;
-    if let Some(&last_addr) = addrs.last() {
-        if let Some(di) = imap_get(imap, last_addr) {
+    if let Some(&last_addr) = addrs.last()
+        && let Some(di) = imap_get(imap, last_addr) {
             let m = di.mnemonic;
             let has_true = succs.iter().any(|e| e.kind == EdgeKind::BranchTrue);
             if m.starts_with('j') && m != "jmp" && m != "jecxz" && !has_true {
@@ -255,35 +250,34 @@ pub(crate) fn walk_block(
                 });
             }
         }
-    }
     if succs.is_empty() {
-        if let Some((last_addr, last_op)) = ops.last() {
-            if let POp::Branch { target } = &**last_op {
-                let target = *target;
-                let args = take_call_args(&reg_values, is64, &mut push_args);
-                let (text, kind) = match func_lookup.get(&target) {
-                    Some(name) if args.is_empty() => {
-                        (format!("return {}();  // tail call", name), LineKind::Return)
-                    }
-                    Some(name) => (
-                        format!("return {}({});  // tail call", name, args.join(", ")),
-                        LineKind::Return,
+        if let Some((last_addr, last_op)) = ops.last()
+            && let POp::Branch { target } = &**last_op
+        {
+            let target = *target;
+            let args = take_call_args(&reg_values, is64, &mut push_args);
+            let (text, kind) = match func_lookup.get(&target) {
+                Some(name) if args.is_empty() => {
+                    (format!("return {}();  // tail call", name), LineKind::Return)
+                }
+                Some(name) => (
+                    format!("return {}({});  // tail call", name, args.join(", ")),
+                    LineKind::Return,
+                ),
+                None => (
+                    format!(
+                        "goto 0x{:x};  // tail call - target outside this function",
+                        target
                     ),
-                    None => (
-                        format!(
-                            "goto 0x{:x};  // tail call - target outside this function",
-                            target
-                        ),
-                        LineKind::Branch,
-                    ),
-                };
-                lines.push(PseudoLine {
-                    indent,
-                    text,
-                    kind,
-                    source_addr: Some(*last_addr),
-                });
-            }
+                    LineKind::Branch,
+                ),
+            };
+            lines.push(PseudoLine {
+                indent,
+                text,
+                kind,
+                source_addr: Some(*last_addr),
+            });
         }
     } else if succs.len() == 1 {
         let edge = &succs[0];

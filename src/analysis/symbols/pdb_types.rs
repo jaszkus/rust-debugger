@@ -114,8 +114,8 @@ pub fn import_pdb_types(
                         }
                     }
                 };
-                if let Ok(item) = finder.find(e.fields) {
-                    if let Ok(TypeData::FieldList(fl)) = item.parse() {
+                if let Ok(item) = finder.find(e.fields)
+                    && let Ok(TypeData::FieldList(fl)) = item.parse() {
                         for f in &fl.fields {
                             if let TypeData::Enumerate(en) = f {
                                 let vname = en.name.to_string().into_owned();
@@ -137,7 +137,6 @@ pub fn import_pdb_types(
                             cont = next.continuation;
                         }
                     }
-                }
                 stats_out.enums += 1;
             }
             _ => {}

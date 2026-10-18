@@ -26,12 +26,11 @@ pub fn list_memory_regions(args: &Value, state: &Arc<Mutex<AppState>>) -> Result
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.mem_regions_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.mem_regions_result
+                && *rid == id {
                     let (_, r) = s.debug_state.mem_regions_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,
@@ -88,12 +87,11 @@ pub fn list_modules(_args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.modules_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.modules_result
+                && *rid == id {
                     let (_, r) = s.debug_state.modules_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,
@@ -135,12 +133,11 @@ pub fn list_threads(_args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.threads_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.threads_result
+                && *rid == id {
                     let (_, r) = s.debug_state.threads_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         3000,

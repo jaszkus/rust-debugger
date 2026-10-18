@@ -81,11 +81,10 @@ pub(crate) fn field_read(
     ops: &mut Vec<POp>,
     tmp: &mut u32,
 ) -> PVar {
-    if let Operand::Reg(r) = op {
-        if let Some((base, off, w)) = subreg_part(r) {
+    if let Operand::Reg(r) = op
+        && let Some((base, off, w)) = subreg_part(r) {
             return extract_field(ops, PVar::Reg(base), off, w, tmp);
         }
-    }
     to_pvar(op, insn)
 }
 
@@ -196,11 +195,10 @@ pub(crate) fn binop<F>(
 }
 
 pub(crate) fn mem_size(op: &Operand) -> u32 {
-    if let Operand::Mem { size, .. } = op {
-        if *size > 0 {
+    if let Operand::Mem { size, .. } = op
+        && *size > 0 {
             return *size;
         }
-    }
     8
 }
 

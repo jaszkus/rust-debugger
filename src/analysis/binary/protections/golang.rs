@@ -12,11 +12,10 @@ pub fn golang_version(data: &[u8]) -> Option<String> {
             {
                 end += 1;
             }
-            if end > i + 4 {
-                if let Ok(v) = std::str::from_utf8(&data[i..end]) {
+            if end > i + 4
+                && let Ok(v) = std::str::from_utf8(&data[i..end]) {
                     return Some(v.to_string());
                 }
-            }
         }
     }
     None
@@ -54,8 +53,8 @@ pub fn detect_golang(bin: &ParsedBinary) -> Vec<Finding> {
             confidence: 1.0,
         });
     }
-    if let Some(v) = ver {
-        if !has_pclntab {
+    if let Some(v) = ver
+        && !has_pclntab {
             out.push(Finding {
                 category: Category::Golang,
                 severity: Severity::Info,
@@ -67,7 +66,6 @@ pub fn detect_golang(bin: &ParsedBinary) -> Vec<Finding> {
                 confidence: 0.9,
             });
         }
-    }
     if !out.is_empty() {
         return out;
     }

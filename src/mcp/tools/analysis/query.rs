@@ -98,8 +98,8 @@ pub fn address_info(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
                 "name": f.name,
                 "size": f.end - f.entry
             }));
-            if let Some(cfg) = analysis.cfgs.get(&f.entry) {
-                if let Some(bb) = cfg.blocks.iter().find(|b| addr >= b.start && addr < b.end) {
+            if let Some(cfg) = analysis.cfgs.get(&f.entry)
+                && let Some(bb) = cfg.blocks.iter().find(|b| addr >= b.start && addr < b.end) {
                     basic_block = Some(json!({
                         "id": bb.id,
                         "start": format!("{:#x}", bb.start),
@@ -109,7 +109,6 @@ pub fn address_info(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
                         "successors": bb.successors.len()
                     }));
                 }
-            }
         }
         xrefs_to_count = analysis
             .xrefs
@@ -125,15 +124,14 @@ pub fn address_info(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
             .unwrap_or(0);
     }
 
-    if let Some(ref disasm) = s.disasm {
-        if let Some(ins) = disasm.instructions.iter().find(|i| i.address == addr) {
+    if let Some(ref disasm) = s.disasm
+        && let Some(ins) = disasm.instructions.iter().find(|i| i.address == addr) {
             instruction = Some(json!({
                 "mnemonic": ins.mnemonic,
                 "operands": ins.ops().as_ref(),
                 "bytes": ins.bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
             }));
         }
-    }
 
     let string_here = bin.strings.iter().find(|s| s.vaddr == addr).map(|s| {
         let enc = match s.encoding {
@@ -309,13 +307,11 @@ pub fn get_function_summary(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
         .collect();
     let mut used_imports: HashSet<&str> = HashSet::new();
     for ins in &disasm.instructions[s_idx..e_idx] {
-        if ins.mnemonic.starts_with("call") || ins.mnem() == "jmp" {
-            if let Some(target) = parse_addr(extract_hex_token(&ins.ops()).unwrap_or(&ins.ops())) {
-                if let Some(name) = import_addrs.get(&target) {
+        if (ins.mnemonic.starts_with("call") || ins.mnem() == "jmp")
+            && let Some(target) = parse_addr(extract_hex_token(&ins.ops()).unwrap_or(&ins.ops()))
+                && let Some(name) = import_addrs.get(&target) {
                     used_imports.insert(name);
                 }
-            }
-        }
     }
 
     let mut used_strings: Vec<Value> = Vec::new();
@@ -411,13 +407,11 @@ pub fn get_annotated_disasm(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
         if let Some(c) = s.comments.get(&ins.address) {
             annotations.push(format!("// {}", c));
         }
-        if ins.mnemonic.starts_with("call") || ins.mnem() == "jmp" {
-            if let Some(target) = parse_addr(extract_hex_token(&ins.ops()).unwrap_or(&ins.ops())) {
-                if let Some(name) = func_lookup.get(&target) {
+        if (ins.mnemonic.starts_with("call") || ins.mnem() == "jmp")
+            && let Some(target) = parse_addr(extract_hex_token(&ins.ops()).unwrap_or(&ins.ops()))
+                && let Some(name) = func_lookup.get(&target) {
                     annotations.push(format!("→ {}", name));
                 }
-            }
-        }
         if let Some(refs) = analysis.xrefs.by_from.get(&ins.address) {
             for &i in refs {
                 let xr = &analysis.xrefs.all[i];

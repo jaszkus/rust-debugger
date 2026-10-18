@@ -118,11 +118,10 @@ pub fn search_bytes(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
                 break;
             }
             for (i, p) in pat.iter().enumerate() {
-                if let Some(b) = p {
-                    if data[start + i] != *b {
+                if let Some(b) = p
+                    && data[start + i] != *b {
                         continue 'outer;
                     }
-                }
             }
             seen += 1;
             if seen <= offset {

@@ -103,8 +103,8 @@ pub fn find_pe_headers(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Val
                 data[i + 0x3F],
             ]) as usize;
             let pe_off = i.checked_add(e_lfanew);
-            if let Some(po) = pe_off {
-                if po + 24 <= data.len()
+            if let Some(po) = pe_off
+                && po + 24 <= data.len()
                     && data[po] == b'P'
                     && data[po + 1] == b'E'
                     && data[po + 2] == 0
@@ -197,7 +197,6 @@ pub fn find_pe_headers(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Val
                     i += 64;
                     continue;
                 }
-            }
         }
         i += 1;
     }
@@ -241,22 +240,18 @@ pub fn find_xor_loops(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Valu
             if matches!(
                 b.mnemonic,
                 "jne" | "jnz" | "jl" | "jb" | "jbe" | "jge" | "ja" | "jmp"
-            ) {
-                if let Some(target_str) = b.ops().split_whitespace().next() {
-                    if let Some(t) = target_str
+            )
+                && let Some(target_str) = b.ops().split_whitespace().next()
+                    && let Some(t) = target_str
                         .strip_prefix("0x")
                         .and_then(|h| u64::from_str_radix(h, 16).ok())
-                    {
-                        if t <= a.address && t >= a.address.saturating_sub(0x40) {
+                        && t <= a.address && t >= a.address.saturating_sub(0x40) {
                             backward_branch = Some((b.address, t));
                             break;
                         }
-                    }
-                }
-            }
         }
-        if saw_inc {
-            if let Some((br_at, br_to)) = backward_branch {
+        if saw_inc
+            && let Some((br_at, br_to)) = backward_branch {
                 hits.push(json!({
                     "address": format!("{:#x}", a.address),
                     "asm": format!("{} {}", a.mnemonic, a.operands),
@@ -267,7 +262,6 @@ pub fn find_xor_loops(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Valu
                     break;
                 }
             }
-        }
     }
 
     Ok(json!({

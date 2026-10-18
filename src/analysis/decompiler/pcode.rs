@@ -273,11 +273,10 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
     } else {
         None
     };
-    if let Some(segment) = segment {
-        if let Some(seg_op) = lift_segment(insn, segment, ctr) {
+    if let Some(segment) = segment
+        && let Some(seg_op) = lift_segment(insn, segment, ctr) {
             return finish(insn, vec![seg_op]);
         }
-    }
     let parsed: Vec<Operand> = parse_insn_operands(insn);
     let mut ops = Vec::new();
 
@@ -285,8 +284,8 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
     match m {
         "mov" => {
             if let [dst, src] = parsed.as_slice() {
-                if let Operand::Reg(r) = dst {
-                    if let Some((base, off, w)) = subreg_part(r) {
+                if let Operand::Reg(r) = dst
+                    && let Some((base, off, w)) = subreg_part(r) {
                         let value = if matches!(src, Operand::Mem { .. }) {
                             let t = PVar::Tmp(next_tmp(ctr));
                             ops.push(POp::Load {
@@ -301,7 +300,6 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
                         rmw_store(&mut ops, PVar::Reg(base), off, w, value, ctr);
                         return finish(insn, ops);
                     }
-                }
                 if matches!(src, Operand::Mem { .. }) {
                     ops.push(POp::Load {
                         dst: to_pvar(dst, insn),

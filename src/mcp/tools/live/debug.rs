@@ -124,12 +124,11 @@ pub fn debugger_attach(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Val
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.attach_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.attach_result
+                && *rid == id {
                     let (_, r) = s.debug_state.attach_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         5000,
@@ -149,12 +148,11 @@ pub fn debugger_detach(_args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Va
             Ok(id)
         },
         |s, id| {
-            if let Some((rid, _)) = &s.debug_state.detach_result {
-                if *rid == id {
+            if let Some((rid, _)) = &s.debug_state.detach_result
+                && *rid == id {
                     let (_, r) = s.debug_state.detach_result.take().unwrap();
                     return Some(r);
                 }
-            }
             None
         },
         5000,

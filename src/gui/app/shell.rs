@@ -344,8 +344,8 @@ impl Shell {
         self.max_func_size_kb = settings.max_func_size_kb.clamp(1, 65536);
         self.allow_changes = settings.allow_changes;
         self.allow_execution = settings.allow_execution;
-        if self.restore_last && !self.show_startup {
-            if let Some(path) = self
+        if self.restore_last && !self.show_startup
+            && let Some(path) = self
                 .app
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -355,7 +355,6 @@ impl Shell {
             {
                 self.with(|s| actions::spawn_async_load(s, None, None, path));
             }
-        }
         sync_window(self, self.win_size);
     }
 

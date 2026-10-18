@@ -14,7 +14,7 @@ cargo test             # ~500 unit/integration tests
 cargo check --all-targets
 ```
 
-- Rust stable toolchain (edition 2024, rustc ≥ 1.85). Windows 10+ or Linux.
+- Rust stable toolchain (edition 2024, rustc ≥ 1.88). Windows 10+ or Linux.
 - The GUI needs a GPU (Vulkan/DX12/Metal); headless modes (`--serve`,
   `--analyze`) do not.
 - GUI regression tests create a real wgpu device. On headless machines install

@@ -17,11 +17,10 @@ pub fn disassemble_range(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<V
     let s = state.lock().map_err(|_| "lock poisoned".to_string())?;
     let d = s.disasm.as_ref().ok_or("No disassembly loaded")?;
 
-    if let Some(bin) = s.binary.as_ref() {
-        if !is_mapped(bin, start) {
+    if let Some(bin) = s.binary.as_ref()
+        && !is_mapped(bin, start) {
             return Err(format!("Address {:#x} not in any section", start));
         }
-    }
 
     let begin = d.instructions.partition_point(|i| i.address < start);
     if begin >= d.instructions.len() {
@@ -31,11 +30,10 @@ pub fn disassemble_range(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<V
 
     let mut lines: Vec<Value> = Vec::new();
     for insn in d.instructions.iter().skip(begin) {
-        if let Some(e) = end_addr {
-            if insn.address >= e {
+        if let Some(e) = end_addr
+            && insn.address >= e {
                 break;
             }
-        }
         if lines.len() >= count {
             break;
         }

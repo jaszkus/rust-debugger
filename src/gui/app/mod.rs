@@ -318,11 +318,10 @@ fn update_inner(shell: &mut Shell, message: Message) -> Task<Message> {
         | Message::HexBprEdited(..)
         | Message::SplitDrag(..)) => panels::update(shell, msg),
     };
-    if settings_changed {
-        if let Err(e) = shell.save_settings() {
+    if settings_changed
+        && let Err(e) = shell.save_settings() {
             shell.with(|s| s.status_msg = format!("Settings save failed: {e}"));
         }
-    }
     shell.refresh_view_state();
     Task::batch([task, refresh_decompile_lines(shell)])
 }
