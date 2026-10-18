@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a new capability, analysis pass, or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The use case or pain point. "It would be nice if…" is fine too.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you imagine it working (CLI flag, MCP tool, GUI panel, …). Optional but helpful.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: How do you do this today (other tools, workarounds)?
+    validations:
+      required: false

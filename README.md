@@ -160,6 +160,9 @@ great moment to get involved, whatever your experience level:
 
 Not sure where to start? Open an issue and I'll help you get oriented.
 
+Details (dev setup, code layout, PR process): [CONTRIBUTING.md](CONTRIBUTING.md).
+Security reports: [SECURITY.md](SECURITY.md).
+
 ## License
 
 Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
