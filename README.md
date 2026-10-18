@@ -18,10 +18,14 @@ and a **Ghidra-compatible MCP server** for AI agents.
 [![MCP](https://img.shields.io/badge/MCP-200%2B%20tools-8A2BE2?style=for-the-badge)](#mcp-server-for-ai-agents)
 [![Status](https://img.shields.io/badge/status-0.1.0%20·%20active%20development-yellow?style=for-the-badge)](#)
 
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](#contributing)
+
+<!-- Dynamic GitHub badges (shields.io) fetch private repos anonymously → they break.
+     Re-enable when the repository goes public:
 [![Stars](https://img.shields.io/github/stars/jaszkus/rust-debugger?style=flat-square&logo=github)](https://github.com/jaszkus/rust-debugger/stargazers)
 [![Issues](https://img.shields.io/github/issues/jaszkus/rust-debugger?style=flat-square)](https://github.com/jaszkus/rust-debugger/issues)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](#contributing)
 [![Last commit](https://img.shields.io/github/last-commit/jaszkus/rust-debugger?style=flat-square)](https://github.com/jaszkus/rust-debugger/commits)
+-->
 
 <br/>
 
@@ -37,7 +41,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 <br/>
 
 > [!WARNING]
-> ** Under active development (`0.1.0`).** Features, APIs and project-file formats may change.
+> **Under active development (`0.1.0`).** Features, APIs and project-file formats may change.
 > **I'm actively looking for contributors** — see [Contributing](#contributing).
 
 <!--
@@ -326,9 +330,11 @@ involved, whatever your experience level.
 Details on dev setup, code layout and the PR process: [**CONTRIBUTING.md**](CONTRIBUTING.md) ·
 Security reports: [**SECURITY.md**](SECURITY.md)
 
+<!-- contrib.rocks cannot read a private repository — re-enable when public:
 <a href="https://github.com/jaszkus/rust-debugger/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=jaszkus/rust-debugger" alt="Contributors" />
 </a>
+-->
 
 ---
 
@@ -361,6 +367,8 @@ Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
 
 **If you find rust-debugger useful, consider giving it a star — it really helps the project grow!**
 
+<!-- star-history.com fetches the repository anonymously — re-enable when public:
 [![Star History Chart](https://api.star-history.com/svg?repos=jaszkus/rust-debugger&type=Date)](https://star-history.com/#jaszkus/rust-debugger&Date)
+-->
 
 </div>
