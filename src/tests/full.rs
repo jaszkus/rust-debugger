@@ -1231,8 +1231,8 @@ fn write_only_arg_slot_is_named_spill_not_param() {
         out
     );
     assert!(
-        out.contains("stk_28"),
-        "spill slot should be named stk_28:\n{}",
+        out.contains("stk_p28"),
+        "spill slot should be named stk_p28:\n{}",
         out
     );
 }

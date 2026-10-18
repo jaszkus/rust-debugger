@@ -745,6 +745,10 @@ mod render_tests {
         shell.show_startup = false;
         shell.now += std::time::Duration::from_secs(1);
         shell.anims.gc(shell.now);
+        
+        
+        shell.with(|s| s.recent_projects.clear());
+        shell.refresh_view_state();
         let bounds = iced::Size::new(1100.0, 680.0);
         let limits = layout::Limits::new(iced::Size::ZERO, bounds);
         let viewport = iced::Rectangle::with_size(bounds);
