@@ -109,13 +109,15 @@ Example MCP client configuration (opencode.json / any MCP client):
 }
 ```
 
-### Library & examples
+### Library
 
 The crate is also a library (`rust_debugger::…`):
 
-```sh
-cargo run --example dump   -- <file> [function]
-cargo run --example decomp -- <file> <function>
+```rust
+use rust_debugger::{disasm, parser};
+
+let bin = parser::parse_file(std::path::Path::new("sample.exe"))?;
+let listing = disasm::disassemble_binary(&bin)?;
 ```
 
 ## Project layout
@@ -135,7 +137,6 @@ src/
   tests/       unit / full / parity / fuzz / mcp suites
   util/        shared helpers
 data/          string classification model (see data/README.md)
-examples/      library usage examples
 assets/        GUI fonts and icon
 ```
 
@@ -144,7 +145,6 @@ assets/        GUI fonts and icon
 ```sh
 cargo test                     # unit + integration suites
 cargo check --all-targets      # quick compile check
-cargo run --example dump -- <file> <function>
 ```
 
 ## License
