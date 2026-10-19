@@ -316,6 +316,31 @@ pub(crate) fn fmt_load(
     match addr {
         PVar::StackSlot { base, off } => {
             let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
+            if let Some(h) = hints
+                && let Some(st) = h.stack_structs.iter().find(|s| {
+                    s.base_reg == b
+                        && *off >= s.base
+                        && *off < s.base.saturating_add(s.size as i64)
+                })
+            {
+                let base_name = h
+                    .var_names
+                    .as_ref()
+                    .and_then(|vn| vn.stack_by_raw.get(&(b, st.base)))
+                    .cloned()
+                    .unwrap_or_else(|| fallback_slot_name(st.base, h));
+                if *off == st.base && size as usize >= st.size {
+                    return base_name;
+                }
+                let rel = *off - st.base;
+                if let Some((_, _fsize, fname)) = st
+                    .fields
+                    .iter()
+                    .find(|(o, fs, _)| *o == rel && *fs == size as usize)
+                {
+                    return format!("{}.{}", base_name, fname);
+                }
+            }
             let name = if let Some(h) = hints {
                 if let Some(vn) = &h.var_names {
                     let pc = h.cur_pc.get();

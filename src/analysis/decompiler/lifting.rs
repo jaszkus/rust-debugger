@@ -184,6 +184,13 @@ struct TypeScan {
     written_pos_slots: HashSet<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct ByValueParam {
+    type_name: String,
+    size: usize,
+    fields: Vec<(i64, usize, String)>,
+}
+
 fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeScan {
     let mut floats: HashSet<String> = HashSet::default();
     let mut float_slots: HashSet<i64> = HashSet::default();
@@ -352,6 +359,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut preferred_structs: HashMap<String, String> = HashMap::default();
     let mut value_structs: HashMap<String, StructHint> = HashMap::default();
     let mut owner_by_reg: HashMap<String, String> = HashMap::default();
+    let mut param_types_by_reg: HashMap<String, String> = HashMap::default();
+    let mut by_value_by_reg: HashMap<String, ByValueParam> = HashMap::default();
+    let mut direct_stack_params: Vec<(u8, i64, ByValueParam)> = Vec::new();
     if let (Some(sig), Some(rv)) = (debug_sig, recovery.as_mut()) {
         let mut used: HashSet<String> = rv.vars.iter().map(|v| v.name.clone()).collect();
         for (i, &id) in rv.params.iter().enumerate() {
@@ -375,25 +385,51 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     v.name = new_name;
                 }
             }
-            if let (variables::Loc::Reg(reg), Some(sname)) = (v.storage, dp.struct_name.as_deref())
-            {
-                preferred_structs.insert(reg.to_string(), sname.to_string());
-                owner_by_reg.insert(reg.to_string(), old_name.clone());
-                if let Some(dbg) = debug
-                    && let Some(ds) = dbg.struct_named(sname)
-                {
-                    value_structs.insert(
-                        old_name.clone(),
-                        StructHint {
-                            fields: ds
-                                .fields
-                                .iter()
-                                .map(|f| (f.offset as i64, f.name.clone()))
-                                .collect(),
-                            owner: Some(old_name),
-                        },
-                    );
+            let is_pointer = dp.type_name.trim_end().ends_with('*');
+            let shape = dp.struct_name.as_deref().and_then(|sname| {
+                debug.and_then(|dbg| {
+                    dbg.struct_named(sname).map(|ds| ByValueParam {
+                        type_name: dp.type_name.clone(),
+                        size: ds.size,
+                        fields: ds
+                            .fields
+                            .iter()
+                            .map(|f| (f.offset as i64, f.size, f.name.clone()))
+                            .collect(),
+                    })
+                })
+            });
+            match v.storage {
+                variables::Loc::Reg(reg) => {
+                    param_types_by_reg.insert(reg.to_string(), dp.type_name.clone());
+                    if let Some(shape) = shape {
+                        if is_pointer {
+                            preferred_structs.insert(reg.to_string(), dp.struct_name.clone().unwrap_or_default());
+                            owner_by_reg.insert(reg.to_string(), old_name.clone());
+                            value_structs.insert(
+                                old_name.clone(),
+                                StructHint {
+                                    fields: shape
+                                        .fields
+                                        .iter()
+                                        .map(|(o, _, n)| (*o, n.clone()))
+                                        .collect(),
+                                    owner: Some(old_name),
+                                },
+                            );
+                        } else {
+                            by_value_by_reg.insert(reg.to_string(), shape);
+                        }
+                    }
                 }
+                variables::Loc::Stack { base, off } => {
+                    if let Some(shape) = shape
+                        && !is_pointer
+                    {
+                        direct_stack_params.push((base, off, shape));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -491,6 +527,59 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
+    
+    
+    
+    
+    let mut stack_structs: Vec<StackStructHint> = Vec::new();
+    let mut local_types: HashMap<String, String> = HashMap::default();
+    if let Some(rv) = recovery.as_ref() {
+        let mut seen: HashSet<(u8, i64)> = HashSet::default();
+        for (base, off, shape) in &direct_stack_params {
+            if seen.insert((*base, *off)) {
+                stack_structs.push(StackStructHint {
+                    base_reg: *base,
+                    base: *off,
+                    size: shape.size,
+                    fields: shape.fields.clone(),
+                });
+                if let Some(name) = rv.names.stack_by_raw.get(&(*base, *off)) {
+                    local_types.insert(name.clone(), shape.type_name.clone());
+                }
+            }
+        }
+        for pi in pinstrs_in_func {
+            for op in &pi.ops {
+                if let POp::Store {
+                    addr: PVar::StackSlot { base, off },
+                    src: PVar::Reg(reg),
+                    ..
+                } = op
+                {
+                    let b = match base {
+                        StackBase::Rbp => 0u8,
+                        StackBase::Rsp => 1u8,
+                    };
+                    if let Some(shape) = by_value_by_reg.get(*reg)
+                        && seen.insert((b, *off))
+                    {
+                        stack_structs.push(StackStructHint {
+                            base_reg: b,
+                            base: *off,
+                            size: shape.size,
+                            fields: shape.fields.clone(),
+                        });
+                    }
+                    if let Some(ty) = param_types_by_reg.get(*reg)
+                        && let Some(name) = rv.names.stack_by_raw.get(&(b, *off))
+                    {
+                        local_types.insert(name.clone(), ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
     let hints = TypeHints {
         floats,
         float_slots,
@@ -509,6 +598,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         imports: imports.clone(),
         structs,
         value_structs,
+        stack_structs,
+        local_types,
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
@@ -594,7 +685,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             };
             lines.push(PseudoLine {
                 indent: 1,
-                text: format!("{} {};  // {}", v.ty.c_str(), v.name, off),
+                text: format!(
+                    "{} {};  // {}",
+                    hints
+                        .local_types
+                        .get(&v.name)
+                        .map(String::as_str)
+                        .unwrap_or_else(|| v.ty.c_str()),
+                    v.name,
+                    off
+                ),
                 kind: LineKind::Declaration,
                 source_addr: None,
             });
@@ -607,7 +707,15 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             {
                 lines.push(PseudoLine {
                     indent: 1,
-                    text: format!("{} {};", v.ty.c_str(), v.name),
+                    text: format!(
+                        "{} {};",
+                        hints
+                            .local_types
+                            .get(&v.name)
+                            .map(String::as_str)
+                            .unwrap_or_else(|| v.ty.c_str()),
+                        v.name
+                    ),
                     kind: LineKind::Declaration,
                     source_addr: None,
                 });
@@ -621,15 +729,17 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .collect();
         locals.sort_by_key(|v| v.offset);
         for v in &locals {
-            let ty = if hints.float_slots.contains(&v.offset) {
-                if v.size == 8 {
-                    "double"
+            let ty = hints.local_types.get(&v.name).cloned().unwrap_or_else(|| {
+                if hints.float_slots.contains(&v.offset) {
+                    if v.size == 8 {
+                        "double".to_string()
+                    } else {
+                        "float".to_string()
+                    }
                 } else {
-                    "float"
+                    c_type_for_size(v.size).to_string()
                 }
-            } else {
-                c_type_for_size(v.size)
-            };
+            });
             let base = if stack.frame_size > 0 && v.offset >= 0 {
                 sp
             } else {

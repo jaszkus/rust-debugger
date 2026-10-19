@@ -1511,6 +1511,7 @@ fn pdb_debug_types_extract_signatures_and_fields() {
     assert!(compute.params[0].type_name.contains("Node"));
     assert_eq!(compute.params[0].struct_name.as_deref(), Some("Node"));
     assert!(compute.params[1].type_name.contains("Point"));
+    assert_eq!(compute.params[1].struct_name.as_deref(), Some("Point"));
     assert!(compute.params[2].type_name.contains("Color"));
 }
 
@@ -1545,6 +1546,11 @@ fn dwarf_debug_types_extract_names_and_fields() {
     assert_eq!(add.params[0].name, "a");
     assert_eq!(add.params[1].name, "b");
     assert!(add.params.iter().all(|p| p.type_name.contains("Point")));
+    assert!(
+        add.params
+            .iter()
+            .all(|p| p.struct_name.as_deref() == Some("Point"))
+    );
 }
 
 #[test]
@@ -1584,6 +1590,7 @@ fn debug_types_reach_eager_decompilation() {
         .join("\n");
     assert!(text.contains("Node * n"), "signature:\n{}", text);
     assert!(text.contains("n->id"), "member access:\n{}", text);
+    assert!(text.contains("p.x"), "struct-by-value field:\n{}", text);
 }
 
 #[test]
@@ -1620,6 +1627,23 @@ fn dwarf_debug_types_reach_eager_decompilation() {
         .join("\n");
     assert!(text.contains("Node * n"), "signature:\n{}", text);
     assert!(text.contains("n->id"), "member access:\n{}", text);
+
+    let add = result
+        .functions
+        .iter()
+        .find(|f| f.name == "add_points")
+        .expect("add_points function");
+    let add_text = result
+        .pseudocode
+        .get(&add.entry)
+        .expect("add_points was eagerly decompiled")
+        .lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(add_text.contains("a.x"), "Point a field:\n{}", add_text);
+    assert!(add_text.contains("b.y"), "Point b field:\n{}", add_text);
 }
 
 #[test]

@@ -100,6 +100,15 @@ impl StructHint {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StackStructHint {
+    pub(crate) base_reg: u8,
+    pub(crate) base: i64,
+    pub(crate) size: usize,
+    
+    pub(crate) fields: Vec<(i64, usize, String)>,
+}
+
 #[derive(Default)]
 pub(crate) struct TypeHints {
     pub(crate) floats: HashSet<String>,
@@ -110,6 +119,8 @@ pub(crate) struct TypeHints {
     pub(crate) imports: HashMap<u64, String>,
     pub(crate) structs: HashMap<String, StructHint>,
     pub(crate) value_structs: HashMap<String, StructHint>,
+    pub(crate) stack_structs: Vec<StackStructHint>,
+    pub(crate) local_types: HashMap<String, String>,
     pub(crate) last_cmp: std::cell::RefCell<Option<(String, String, bool)>>,
     pub(crate) out_bytes: std::cell::Cell<usize>,
     pub(crate) out_truncated: std::cell::Cell<bool>,

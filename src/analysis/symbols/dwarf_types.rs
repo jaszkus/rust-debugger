@@ -653,7 +653,7 @@ pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
                     let type_name = key
                         .and_then(|k| type_name(&types, k, 0))
                         .unwrap_or_else(|| "void *".into());
-                    let struct_name = key.and_then(|k| pointer_struct_name(&types, k, 0));
+                    let struct_name = key.and_then(|k| struct_name_of(&types, k, 0));
                     func.params.push(DebugParam {
                         name: pname,
                         type_name,
@@ -725,7 +725,21 @@ fn type_size(types: &FxHashMap<Key, DieType>, key: Key, ptr_size: usize, depth: 
     }
 }
 
-fn pointer_struct_name(
+fn struct_name_of(types: &FxHashMap<Key, DieType>, key: Key, depth: usize) -> Option<String> {
+    if depth > 16 {
+        return None;
+    }
+    match &types.get(&key)?.kind {
+        DieKind::Pointer { target } => struct_target_name(types, *target, depth + 1),
+        DieKind::Typedef { target, .. } => struct_name_of(types, *target, depth + 1),
+        DieKind::Composite { name, .. } if !name.is_empty() && !name.starts_with("__anon") => {
+            Some(name.clone())
+        }
+        _ => None,
+    }
+}
+
+fn struct_target_name(
     types: &FxHashMap<Key, DieType>,
     key: Key,
     depth: usize,
@@ -734,14 +748,10 @@ fn pointer_struct_name(
         return None;
     }
     match &types.get(&key)?.kind {
-        DieKind::Pointer { target } => match &types.get(target)?.kind {
-            DieKind::Composite { name, .. } if !name.is_empty() && !name.starts_with("__anon") => {
-                Some(name.clone())
-            }
-            DieKind::Typedef { target, .. } => pointer_struct_name(types, *target, depth + 1),
-            _ => None,
-        },
-        DieKind::Typedef { target, .. } => pointer_struct_name(types, *target, depth + 1),
+        DieKind::Composite { name, .. } if !name.is_empty() && !name.starts_with("__anon") => {
+            Some(name.clone())
+        }
+        DieKind::Typedef { target, .. } => struct_target_name(types, *target, depth + 1),
         _ => None,
     }
 }

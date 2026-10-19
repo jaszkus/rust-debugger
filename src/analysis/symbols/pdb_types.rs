@@ -541,14 +541,7 @@ fn load_pdb_debug_types(
             for (i, arg) in args.into_iter().enumerate() {
                 let ct = resolve_c(&finder, &mut memo, arg, ptr_size, 0);
                 let (type_name, struct_name) = match ct {
-                    Some(t) => {
-                        let sn = if t.pointer {
-                            t.struct_name.clone()
-                        } else {
-                            None
-                        };
-                        (t.name, sn)
-                    }
+                    Some(t) => (t.name, t.struct_name),
                     None => ("void *".into(), None),
                 };
                 let pname = param_names
@@ -584,7 +577,6 @@ struct CType {
     name: String,
     size: usize,
     struct_name: Option<String>,
-    pointer: bool,
 }
 
 fn resolve_procedure(
@@ -655,8 +647,7 @@ fn resolve_c(
         TypeData::Primitive(p) => {
             let (name, mut size) = primitive_name_size(p.kind)?;
             let mut name = name.to_string();
-            let pointer = p.indirection.is_some();
-            if pointer {
+            if p.indirection.is_some() {
                 if !name.ends_with('*') {
                     name.push_str(" *");
                 }
@@ -666,7 +657,6 @@ fn resolve_c(
                 name,
                 size,
                 struct_name: None,
-                pointer,
             })
         }
         TypeData::Class(c) => {
@@ -680,7 +670,6 @@ fn resolve_c(
                 name: name.clone(),
                 size: c.size as usize,
                 struct_name: (!name.is_empty() && name != "void").then_some(name),
-                pointer: false,
             })
         }
         TypeData::Union(u) => {
@@ -694,7 +683,6 @@ fn resolve_c(
                 name: name.clone(),
                 size: u.size as usize,
                 struct_name: (!name.is_empty() && name != "void").then_some(name),
-                pointer: false,
             })
         }
         TypeData::Enumeration(e) => {
@@ -710,7 +698,6 @@ fn resolve_c(
                 },
                 size,
                 struct_name: None,
-                pointer: false,
             })
         }
         TypeData::Pointer(p) => {
@@ -719,7 +706,6 @@ fn resolve_c(
                 name: format!("{} *", inner.name),
                 size: ptr_size,
                 struct_name: inner.struct_name,
-                pointer: true,
             })
         }
         TypeData::Modifier(m) => {
@@ -745,7 +731,6 @@ fn resolve_c(
                 name: format!("{}[{}]", elem.name, count),
                 size: elem_size as usize * count,
                 struct_name: None,
-                pointer: false,
             })
         }
         TypeData::Bitfield(b) => resolve_c(finder, memo, b.underlying_type, ptr_size, depth + 1),
@@ -753,7 +738,6 @@ fn resolve_c(
             name: "void *".into(),
             size: ptr_size,
             struct_name: None,
-            pointer: true,
         }),
         _ => None,
     };
