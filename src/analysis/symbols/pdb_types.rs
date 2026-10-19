@@ -1,7 +1,9 @@
 use pdb::{FallibleIterator, TypeData, TypeIndex};
 use rustc_hash::FxHashMap;
 
-use super::debug_types::{DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes};
+use super::debug_types::{
+    DebugBase, DebugField, DebugFunction, DebugLocal, DebugParam, DebugStruct, DebugTypes,
+};
 use crate::type_system::manager::DataTypeManager;
 use crate::type_system::types::TypeId;
 
@@ -395,6 +397,7 @@ fn load_pdb_debug_types(
     
     let sections = crate::analysis::symbols::debug_symbols::pdb_sections(binary);
     let mut symbols: Vec<(u64, String, TypeIndex, Vec<String>)> = Vec::new();
+    let mut local_specs: Vec<(u64, String, TypeIndex, DebugBase, i64)> = Vec::new();
     {
         let dbi = pdb.debug_information().ok()?;
         let mut modules = dbi.modules().ok()?;
@@ -436,6 +439,23 @@ fn load_pdb_debug_types(
                             let name = local.name.to_string().into_owned();
                             if !name.is_empty() {
                                 symbols[i].3.push(name);
+                            }
+                        }
+                    }
+                    pdb::SymbolData::RegisterRelative(reg_rel) => {
+                        if let Some(i) = current
+                            && let Some(base) = pdb_register_base(reg_rel.register.0)
+                        {
+                            let va = symbols[i].0;
+                            let name = reg_rel.name.to_string().into_owned();
+                            if !name.is_empty() {
+                                local_specs.push((
+                                    va,
+                                    name,
+                                    reg_rel.type_index,
+                                    base,
+                                    reg_rel.offset as i64,
+                                ));
                             }
                         }
                     }
@@ -555,10 +575,28 @@ fn load_pdb_debug_types(
                     struct_name,
                 });
             }
+            let mut locals = Vec::new();
+            for (lva, lname, lti, lbase, loff) in &local_specs {
+                if *lva != va {
+                    continue;
+                }
+                let Some(ct) = resolve_c(&finder, &mut memo, *lti, ptr_size, 0) else {
+                    continue;
+                };
+                locals.push(DebugLocal {
+                    name: lname.clone(),
+                    type_name: ct.name,
+                    struct_name: ct.struct_name,
+                    base: *lbase,
+                    offset: *loff,
+                    size: ct.size,
+                });
+            }
             let func = DebugFunction {
                 name,
                 ret,
                 params,
+                locals,
             };
             match out.functions.get(&va) {
                 Some(existing) if existing.params.len() >= func.params.len() => {}
@@ -743,6 +781,14 @@ fn resolve_c(
     };
     memo.insert(index, result.clone());
     result
+}
+
+fn pdb_register_base(register: u16) -> Option<DebugBase> {
+    match register {
+        0x16 | 0x116 => Some(DebugBase::Rbp),
+        0x15 | 0x115 => Some(DebugBase::Rsp),
+        _ => None,
+    }
 }
 
 fn primitive_name_size(kind: pdb::PrimitiveKind) -> Option<(&'static str, usize)> {

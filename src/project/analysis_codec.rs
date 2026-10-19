@@ -336,11 +336,31 @@ fn write_debug_types(w: &mut W, d: &crate::analysis::symbols::debug_types::Debug
                 None => w.u8(0),
             }
         }
+        w.u32(f.locals.len() as u32);
+        for l in &f.locals {
+            w.str(&l.name);
+            w.str(&l.type_name);
+            match &l.struct_name {
+                Some(name) => {
+                    w.u8(1);
+                    w.str(name);
+                }
+                None => w.u8(0),
+            }
+            w.u8(match l.base {
+                crate::analysis::symbols::debug_types::DebugBase::Cfa => 0,
+                crate::analysis::symbols::debug_types::DebugBase::Rbp => 1,
+                crate::analysis::symbols::debug_types::DebugBase::Rsp => 2,
+            });
+            w.i64(l.offset);
+            w.u64(l.size as u64);
+        }
     }
 }
 
 fn read_debug_types(
     r: &mut R,
+    db_ver: u32,
 ) -> Result<crate::analysis::symbols::debug_types::DebugTypes, String> {
     use crate::analysis::symbols::debug_types::{
         DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes,
@@ -387,12 +407,49 @@ fn read_debug_types(
                 struct_name,
             });
         }
+        let locals = if db_ver >= 7 {
+            let ln = r.u32()? as usize;
+            let mut locals = Vec::with_capacity(ln.min(1 << 20));
+            for _ in 0..ln {
+                let name = r.str()?;
+                let type_name = r.str()?;
+                let struct_name = match r.u8()? {
+                    0 => None,
+                    1 => Some(r.str()?),
+                    other => {
+                        return Err(format!("corrupt project DB (local struct tag {other})"))
+                    }
+                };
+                let base = match r.u8()? {
+                    0 => crate::analysis::symbols::debug_types::DebugBase::Cfa,
+                    1 => crate::analysis::symbols::debug_types::DebugBase::Rbp,
+                    2 => crate::analysis::symbols::debug_types::DebugBase::Rsp,
+                    other => {
+                        return Err(format!("corrupt project DB (local base tag {other})"))
+                    }
+                };
+                let offset = r.i64()?;
+                let size = r.u64()? as usize;
+                locals.push(crate::analysis::symbols::debug_types::DebugLocal {
+                    name,
+                    type_name,
+                    struct_name,
+                    base,
+                    offset,
+                    size,
+                });
+            }
+            locals
+        } else {
+            Vec::new()
+        };
         functions.insert(
             addr,
             DebugFunction {
                 name,
                 ret,
                 params,
+                locals,
             },
         );
     }
@@ -824,7 +881,7 @@ pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, St
     a.debug_types = if db_ver >= 6 {
         match r.u8()? {
             0 => None,
-            1 => Some(std::sync::Arc::new(read_debug_types(r)?)),
+            1 => Some(std::sync::Arc::new(read_debug_types(r, db_ver)?)),
             other => return Err(format!("corrupt project DB (debug types tag {other})")),
         }
     } else {

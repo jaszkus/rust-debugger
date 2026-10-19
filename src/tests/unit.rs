@@ -1551,6 +1551,18 @@ fn dwarf_debug_types_extract_names_and_fields() {
             .iter()
             .all(|p| p.struct_name.as_deref() == Some("Point"))
     );
+
+    let main = types
+        .functions
+        .values()
+        .find(|f| f.name == "main")
+        .expect("main signature");
+    let n = main.locals.iter().find(|l| l.name == "n").expect("local n");
+    assert_eq!(n.struct_name.as_deref(), Some("Node"));
+    assert_eq!(n.base, crate::analysis::symbols::debug_types::DebugBase::Cfa);
+    assert_eq!(n.offset, -48);
+    let c = main.locals.iter().find(|l| l.name == "c").expect("local c");
+    assert_eq!(c.offset, -52);
 }
 
 #[test]
@@ -1627,6 +1639,8 @@ fn dwarf_debug_types_reach_eager_decompilation() {
         .join("\n");
     assert!(text.contains("Node * n"), "signature:\n{}", text);
     assert!(text.contains("n->id"), "member access:\n{}", text);
+    assert!(text.contains("Mixed m;"), "union local:\n{}", text);
+    assert!(text.contains("m.i = 7"), "union field:\n{}", text);
 
     let add = result
         .functions
@@ -1644,6 +1658,25 @@ fn dwarf_debug_types_reach_eager_decompilation() {
         .join("\n");
     assert!(add_text.contains("a.x"), "Point a field:\n{}", add_text);
     assert!(add_text.contains("b.y"), "Point b field:\n{}", add_text);
+
+    let main = result
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function");
+    let main_text = result
+        .pseudocode
+        .get(&main.entry)
+        .expect("main was eagerly decompiled")
+        .lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(main_text.contains("Node n;"), "Node local:\n{}", main_text);
+    assert!(main_text.contains("Color c;"), "Color local:\n{}", main_text);
+    assert!(main_text.contains("n.pos.x = 1"), "nested field x:\n{}", main_text);
+    assert!(main_text.contains("n.pos.y = 2"), "nested field y:\n{}", main_text);
 }
 
 #[test]

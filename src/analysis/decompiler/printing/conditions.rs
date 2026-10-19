@@ -329,10 +329,18 @@ pub(crate) fn fmt_load(
                     .and_then(|vn| vn.stack_by_raw.get(&(b, st.base)))
                     .cloned()
                     .unwrap_or_else(|| fallback_slot_name(st.base, h));
+                let rel = *off - st.base;
+                if st.is_union
+                    && let Some((_, _fsize, fname)) = st
+                        .fields
+                        .iter()
+                        .find(|(o, fs, _)| *o == rel && *fs == size as usize)
+                {
+                    return format!("{}.{}", base_name, fname);
+                }
                 if *off == st.base && size as usize >= st.size {
                     return base_name;
                 }
-                let rel = *off - st.base;
                 if let Some((_, _fsize, fname)) = st
                     .fields
                     .iter()

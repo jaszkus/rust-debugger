@@ -6,7 +6,7 @@ use super::structure::{
 use super::*;
 use super::alias;
 use crate::analysis::flow::cfg::CFG;
-use crate::analysis::symbols::debug_types::DebugTypes;
+use crate::analysis::symbols::debug_types::{DebugBase, DebugStruct, DebugTypes};
 use super::pcode::StackBase;
 use crate::analysis::flow::stack::StackFrame;
 use crate::analysis::flow::variables;
@@ -188,7 +188,67 @@ struct TypeScan {
 struct ByValueParam {
     type_name: String,
     size: usize,
+    is_union: bool,
     fields: Vec<(i64, usize, String)>,
+}
+
+fn flattened_struct_fields(
+    dbg: &DebugTypes,
+    ds: &DebugStruct,
+) -> Vec<(i64, usize, String)> {
+    fn walk(
+        dbg: &DebugTypes,
+        ds: &DebugStruct,
+        base: i64,
+        prefix: &str,
+        depth: usize,
+        out: &mut Vec<(i64, usize, String)>,
+    ) {
+        if depth >= 4 {
+            return;
+        }
+        for f in &ds.fields {
+            let ty = f.type_name.trim();
+            if ty.ends_with('*') || ty.contains('[') {
+                continue;
+            }
+            let name = ty
+                .trim_start_matches("struct ")
+                .trim_start_matches("union ")
+                .trim();
+            let Some(sub) = dbg.struct_named(name) else {
+                continue;
+            };
+            let path = if prefix.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{}.{}", prefix, f.name)
+            };
+            for sf in &sub.fields {
+                out.push((
+                    base + f.offset as i64 + sf.offset as i64,
+                    sf.size,
+                    format!("{}.{}", path, sf.name),
+                ));
+            }
+            walk(
+                dbg,
+                sub,
+                base + f.offset as i64,
+                &path,
+                depth + 1,
+                out,
+            );
+        }
+    }
+
+    let mut out: Vec<(i64, usize, String)> = ds
+        .fields
+        .iter()
+        .map(|f| (f.offset as i64, f.size, f.name.clone()))
+        .collect();
+    walk(dbg, ds, 0, "", 0, &mut out);
+    out
 }
 
 fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeScan {
@@ -350,6 +410,18 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut recovery = recovery;
     let debug = debug_types.map(|a| a.as_ref());
     let debug_sig = debug.and_then(|d| d.function(cfg.func_entry));
+    if std::env::var("RD_DEBUG_STACK").is_ok()
+        && let Some(rv) = recovery.as_ref()
+    {
+        for v in &rv.vars {
+            if let variables::Loc::Stack { base, off } = v.storage {
+                eprintln!(
+                    "[stack] {} base={} off={:#x} size={} kind={:?}",
+                    v.name, base, off, v.size, v.kind
+                );
+            }
+        }
+    }
 
     
     
@@ -362,8 +434,11 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut param_types_by_reg: HashMap<String, String> = HashMap::default();
     let mut by_value_by_reg: HashMap<String, ByValueParam> = HashMap::default();
     let mut direct_stack_params: Vec<(u8, i64, ByValueParam)> = Vec::new();
+    let mut used_names: HashSet<String> = recovery
+        .as_ref()
+        .map(|rv| rv.vars.iter().map(|v| v.name.clone()).collect())
+        .unwrap_or_default();
     if let (Some(sig), Some(rv)) = (debug_sig, recovery.as_mut()) {
-        let mut used: HashSet<String> = rv.vars.iter().map(|v| v.name.clone()).collect();
         for (i, &id) in rv.params.iter().enumerate() {
             let Some(dp) = sig.params.get(i) else {
                 break;
@@ -375,12 +450,12 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             if new_name != v.name {
                 let base = new_name.clone();
                 let mut n = 2u32;
-                while used.contains(&new_name) && new_name != v.name {
+                while used_names.contains(&new_name) && new_name != v.name {
                     new_name = format!("{}_{}", base, n);
                     n += 1;
                 }
                 if new_name != v.name {
-                    used.insert(new_name.clone());
+                    used_names.insert(new_name.clone());
                     param_renames.insert(v.name.clone(), new_name.clone());
                     v.name = new_name;
                 }
@@ -391,11 +466,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     dbg.struct_named(sname).map(|ds| ByValueParam {
                         type_name: dp.type_name.clone(),
                         size: ds.size,
-                        fields: ds
-                            .fields
-                            .iter()
-                            .map(|f| (f.offset as i64, f.size, f.name.clone()))
-                            .collect(),
+                        is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
+                        fields: flattened_struct_fields(dbg, ds),
                     })
                 })
             });
@@ -443,9 +515,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         for (reg, sname) in &preferred_structs {
             if let Some(ds) = dbg.struct_named(sname) {
                 let hint = structs.entry(reg.clone()).or_default();
-                for f in &ds.fields {
-                    if hint.field(f.offset as i64).is_none() {
-                        hint.fields.push((f.offset as i64, f.name.clone()));
+                for (off, _, name) in flattened_struct_fields(dbg, ds) {
+                    if hint.field(off).is_none() {
+                        hint.fields.push((off, name));
                     }
                 }
                 hint.fields.sort_by_key(|(o, _)| *o);
@@ -472,10 +544,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         for (reg, sname) in &preferred_structs {
             if let Some(ds) = dbg.struct_named(sname) {
                 hint_by_reg.insert(reg.as_str(), StructHint {
-                    fields: ds
-                        .fields
-                        .iter()
-                        .map(|f| (f.offset as i64, f.name.clone()))
+                    fields: flattened_struct_fields(dbg, ds)
+                        .into_iter()
+                        .map(|(off, _, name)| (off, name))
                         .collect(),
                     owner: None,
                 });
@@ -533,6 +604,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     
     let mut stack_structs: Vec<StackStructHint> = Vec::new();
     let mut local_types: HashMap<String, String> = HashMap::default();
+    let mut hidden_locals: HashSet<String> = HashSet::default();
     if let Some(rv) = recovery.as_ref() {
         let mut seen: HashSet<(u8, i64)> = HashSet::default();
         for (base, off, shape) in &direct_stack_params {
@@ -541,6 +613,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     base_reg: *base,
                     base: *off,
                     size: shape.size,
+                    is_union: shape.is_union,
                     fields: shape.fields.clone(),
                 });
                 if let Some(name) = rv.names.stack_by_raw.get(&(*base, *off)) {
@@ -567,6 +640,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             base_reg: b,
                             base: *off,
                             size: shape.size,
+                            is_union: shape.is_union,
                             fields: shape.fields.clone(),
                         });
                     }
@@ -574,6 +648,84 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         && let Some(name) = rv.names.stack_by_raw.get(&(b, *off))
                     {
                         local_types.insert(name.clone(), ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    
+    
+    
+    if let (Some(dbg), Some(sig), Some(rv)) = (debug, debug_sig, recovery.as_ref()) {
+        let uses_rbp = rv
+            .vars
+            .iter()
+            .any(|v| matches!(v.storage, variables::Loc::Stack { base: 0, .. }));
+        let cfa_to_rbp = if is64 { 16 } else { 8 };
+        let cfa_to_rsp = stack.frame_size.max(0) + if is64 { 8 } else { 4 };
+        for local in &sig.locals {
+            let (b, raw_off) = match local.base {
+                DebugBase::Cfa => {
+                    if uses_rbp {
+                        (0u8, local.offset + cfa_to_rbp)
+                    } else {
+                        (1u8, local.offset + cfa_to_rsp)
+                    }
+                }
+                DebugBase::Rbp => (0u8, local.offset),
+                DebugBase::Rsp => (1u8, local.offset),
+            };
+            let Some(v) = rv.vars.iter().find(|v| {
+                matches!(
+                    v.storage,
+                    variables::Loc::Stack { base, off } if base == b && off == raw_off
+                )
+            }) else {
+                continue;
+            };
+            let old_name = v.name.clone();
+            let mut new_name = sanitize_param_name(&local.name, &old_name);
+            if new_name != old_name {
+                let base = new_name.clone();
+                let mut n = 2u32;
+                while used_names.contains(&new_name) {
+                    new_name = format!("{}_{}", base, n);
+                    n += 1;
+                }
+                used_names.insert(new_name.clone());
+                param_renames.insert(old_name.clone(), new_name.clone());
+            }
+            local_types.insert(old_name.clone(), local.type_name.clone());
+            if let Some(sname) = local.struct_name.as_deref()
+                && let Some(ds) = dbg.struct_named(sname)
+            {
+                let flat = flattened_struct_fields(dbg, ds);
+                if local.type_name.trim_end().ends_with('*') {
+                    value_structs.insert(
+                        old_name.clone(),
+                        StructHint {
+                            fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
+                            owner: Some(new_name.clone()),
+                        },
+                    );
+                } else {
+                    stack_structs.push(StackStructHint {
+                        base_reg: b,
+                        base: raw_off,
+                        size: local.size,
+                        is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
+                        fields: flat,
+                    });
+                    for other in &rv.vars {
+                        if other.name != old_name
+                            && let variables::Loc::Stack { base: ob, off: oo } = other.storage
+                            && ob == b
+                            && oo >= raw_off
+                            && oo < raw_off.saturating_add(local.size as i64)
+                        {
+                            hidden_locals.insert(other.name.clone());
+                        }
                     }
                 }
             }
@@ -600,6 +752,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         value_structs,
         stack_structs,
         local_types,
+        hidden_locals,
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
@@ -676,6 +829,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     if let Some(rv) = &recovery {
         for &id in &rv.locals {
             let v = &rv.vars[id as usize];
+            if hints.hidden_locals.contains(&v.name) {
+                continue;
+            }
             let off = match v.storage {
                 variables::Loc::Stack { base, off } => {
                     let reg = if base == 0 { bp } else { sp };
@@ -700,6 +856,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             });
         }
         for v in &rv.vars {
+            if hints.hidden_locals.contains(&v.name) {
+                continue;
+            }
             if matches!(v.storage, variables::Loc::Reg(_))
                 && v.kind == variables::VarKind::Register
                 && v.keep
@@ -729,6 +888,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .collect();
         locals.sort_by_key(|v| v.offset);
         for v in &locals {
+            if hints.hidden_locals.contains(&v.name) {
+                continue;
+            }
             let ty = hints.local_types.get(&v.name).cloned().unwrap_or_else(|| {
                 if hints.float_slots.contains(&v.offset) {
                     if v.size == 8 {

@@ -1,7 +1,9 @@
 use gimli::{AttributeValue, Dwarf, EndianSlice, RunTimeEndian, Unit};
 use rustc_hash::FxHashMap;
 
-use super::debug_types::{DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes};
+use super::debug_types::{
+    DebugBase, DebugField, DebugFunction, DebugLocal, DebugParam, DebugStruct, DebugTypes,
+};
 use crate::parser::ParsedBinary;
 use crate::type_system::manager::DataTypeManager;
 use crate::type_system::types::TypeId;
@@ -603,21 +605,22 @@ pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
     
     let mut units = dwarf.units();
     let mut unit_idx = 0usize;
+    let is64 = bin.arch.contains("64");
     while let Some(header) = units.next().ok().and_then(|h| h) {
         let Ok(unit) = dwarf.unit(header) else {
             unit_idx += 1;
             continue;
         };
-        let mut funcs: Vec<(isize, u64, DebugFunction)> = Vec::new();
+        let mut funcs: Vec<FuncScope> = Vec::new();
         let mut entries = unit.entries();
         while let Some(entry) = entries.next_dfs().ok().and_then(|x| x) {
             let depth = entry.depth();
-            while let Some((d, addr, func)) = funcs.last().cloned() {
-                if d < depth {
+            while let Some(scope) = funcs.last().cloned() {
+                if scope.depth < depth {
                     break;
                 }
                 funcs.pop();
-                insert_function(&mut out.functions, addr, func);
+                insert_function(&mut out.functions, scope.addr, scope.func);
             }
             match entry.tag() {
                 gimli::DW_TAG_subprogram => {
@@ -633,20 +636,23 @@ pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
                     let ret = type_ref(entry, unit_idx)
                         .and_then(|k| type_name(&types, k, 0))
                         .unwrap_or_else(|| "void".into());
-                    funcs.push((
+                    funcs.push(FuncScope {
                         depth,
                         addr,
-                        DebugFunction {
+                        func: DebugFunction {
                             name,
                             ret,
                             params: Vec::new(),
+                            locals: Vec::new(),
                         },
-                    ));
+                        frame_base: frame_base_of(&unit, entry, is64),
+                    });
                 }
                 gimli::DW_TAG_formal_parameter => {
-                    let Some((_, _, func)) = funcs.last_mut() else {
+                    let Some(scope) = funcs.last_mut() else {
                         continue;
                     };
+                    let func = &mut scope.func;
                     let pname = attr_str(&dwarf, &unit, entry, gimli::DW_AT_name)
                         .unwrap_or_else(|| format!("param_{}", func.params.len() + 1));
                     let key = type_ref(entry, unit_idx);
@@ -660,16 +666,138 @@ pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
                         struct_name,
                     });
                 }
+                gimli::DW_TAG_variable => {
+                    let Some(scope) = funcs.last_mut() else {
+                        continue;
+                    };
+                    let Some(name) = attr_str(&dwarf, &unit, entry, gimli::DW_AT_name) else {
+                        continue;
+                    };
+                    let Some(key) = type_ref(entry, unit_idx) else {
+                        continue;
+                    };
+                    let Some((base, offset)) =
+                        local_location(&dwarf, &unit, entry, scope.frame_base, is64)
+                    else {
+                        continue;
+                    };
+                    let Some(type_name) = type_name(&types, key, 0) else {
+                        continue;
+                    };
+                    let struct_name = struct_name_of(&types, key, 0);
+                    let size = type_size(&types, key, ptr_size, 0);
+                    scope.func.locals.push(DebugLocal {
+                        name,
+                        type_name,
+                        struct_name,
+                        base,
+                        offset,
+                        size,
+                    });
+                }
                 _ => {}
             }
         }
-        for (_, addr, func) in funcs.drain(..) {
-            insert_function(&mut out.functions, addr, func);
+        for scope in funcs.drain(..) {
+            insert_function(&mut out.functions, scope.addr, scope.func);
         }
         unit_idx += 1;
     }
 
     (!out.is_empty()).then_some(out)
+}
+
+#[derive(Clone)]
+struct FuncScope {
+    depth: isize,
+    addr: u64,
+    func: DebugFunction,
+    frame_base: FrameBase,
+}
+
+#[derive(Clone, Copy)]
+struct FrameBase {
+    base: DebugBase,
+    bias: i64,
+}
+
+fn frame_base_of(
+    unit: &Unit<R<'_>>,
+    entry: &gimli::DebuggingInformationEntry<R>,
+    is64: bool,
+) -> FrameBase {
+    let default = FrameBase {
+        base: DebugBase::Cfa,
+        bias: 0,
+    };
+    let Some(AttributeValue::Exprloc(expr)) = entry.attr_value(gimli::DW_AT_frame_base) else {
+        return default;
+    };
+    let mut ops = expr.operations(unit.encoding());
+    while let Ok(Some(op)) = ops.next() {
+        if let Some(base) = operation_base(op, is64) {
+            return base;
+        }
+    }
+    default
+}
+
+fn local_location(
+    dwarf: &Dwarf<R<'_>>,
+    unit: &Unit<R<'_>>,
+    entry: &gimli::DebuggingInformationEntry<R>,
+    frame: FrameBase,
+    is64: bool,
+) -> Option<(DebugBase, i64)> {
+    let _ = dwarf;
+    let AttributeValue::Exprloc(expr) = entry.attr_value(gimli::DW_AT_location)? else {
+        return None;
+    };
+    let mut ops = expr.operations(unit.encoding());
+    while let Some(op) = ops.next().ok().flatten() {
+        match op {
+            gimli::Operation::FrameOffset { offset } => {
+                return Some((frame.base, frame.bias + offset));
+            }
+            other => {
+                if let Some(FrameBase { base, bias }) = operation_base(other, is64) {
+                    return Some((base, bias));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn operation_base(op: gimli::Operation<R>, is64: bool) -> Option<FrameBase> {
+    match op {
+        gimli::Operation::CallFrameCFA => Some(FrameBase {
+            base: DebugBase::Cfa,
+            bias: 0,
+        }),
+        gimli::Operation::Register { register } => register_base(register, is64).map(|base| {
+            FrameBase { base, bias: 0 }
+        }),
+        gimli::Operation::RegisterOffset { register, offset, .. } => register_base(register, is64)
+            .map(|base| FrameBase { base, bias: offset }),
+        _ => None,
+    }
+}
+
+fn register_base(register: gimli::Register, is64: bool) -> Option<DebugBase> {
+    if is64 {
+        match register.0 {
+            6 => Some(DebugBase::Rbp),
+            7 => Some(DebugBase::Rsp),
+            _ => None,
+        }
+    } else {
+        match register.0 {
+            4 => Some(DebugBase::Rsp),
+            5 => Some(DebugBase::Rbp),
+            _ => None,
+        }
+    }
 }
 
 fn insert_function(

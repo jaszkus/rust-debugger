@@ -36,6 +36,27 @@ pub struct DebugFunction {
     pub name: String,
     pub ret: String,
     pub params: Vec<DebugParam>,
+    pub locals: Vec<DebugLocal>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugBase {
+    
+    Cfa,
+    
+    Rbp,
+    
+    Rsp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugLocal {
+    pub name: String,
+    pub type_name: String,
+    pub struct_name: Option<String>,
+    pub base: DebugBase,
+    pub offset: i64,
+    pub size: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
