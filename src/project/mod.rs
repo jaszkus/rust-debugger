@@ -12,7 +12,7 @@ pub use snapshot::{resolve_db_path, Annotations};
 
 const MAGIC: &[u8; 4] = b"RDDB";
 pub(crate) const MAGIC_ZSTD: &[u8; 4] = b"RZ\x01\xa7";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 
 pub(crate) fn fnv1a64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;

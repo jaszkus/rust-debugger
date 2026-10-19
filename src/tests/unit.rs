@@ -374,6 +374,7 @@ fn decompiler_folds_constants_and_dce() {
         is64: true,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc
         .lines
@@ -693,6 +694,7 @@ fn decompiler_x86_renders_32bit_names_and_absolute_mem() {
         is64: false,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc
         .lines
@@ -751,6 +753,7 @@ fn sse_instructions_lift_without_unimplemented() {
         is64: false,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc
         .lines
@@ -995,6 +998,7 @@ fn decompiler_renders_iat_calls_with_import_names() {
         is64: true,
         imports: &imports,
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc.lines.iter().map(|l| format!("{}\n", l.text)).collect();
     eprintln!("pseudocode:\n{}", text);
@@ -1471,6 +1475,148 @@ fn pe_pdb_function_names_are_applied() {
         "PDB names missing, got: {:?}",
         names
     );
+}
+
+#[test]
+fn pdb_debug_types_extract_signatures_and_fields() {
+    if !fixture("pdb_sample.exe").exists() || !fixture("pdb_sample.pdb").exists() {
+        eprintln!("skipped: pdb_sample fixtures not present");
+        return;
+    }
+    let bin = crate::parser::parse_file(&fixture("pdb_sample.exe")).expect("parse exe");
+    let path = fixture("pdb_sample.exe");
+    let types = crate::analysis::symbols::debug_types::DebugTypes::load(&bin, path.to_str())
+        .expect("PDB debug types");
+
+    let node = types.struct_named("Node").expect("Node struct");
+    assert_eq!(node.size, 16);
+    assert_eq!(node.fields.iter().find(|f| f.name == "id").map(|f| f.offset), Some(0));
+    let next = node.fields.iter().find(|f| f.name == "next").expect("Node.next");
+    assert_eq!(next.offset, 8);
+    assert!(next.type_name.contains("Node"), "next type: {}", next.type_name);
+
+    let point = types.struct_named("Point").expect("Point struct");
+    assert!(point.fields.iter().any(|f| f.name == "x" && f.offset == 0));
+    assert!(point.fields.iter().any(|f| f.name == "y" && f.offset == 4));
+
+    let compute = types
+        .functions
+        .values()
+        .find(|f| f.name == "compute")
+        .expect("compute signature");
+    assert_eq!(compute.params.len(), 3);
+    assert!(compute.params[0].type_name.contains("Node"));
+    assert_eq!(compute.params[0].struct_name.as_deref(), Some("Node"));
+    assert!(compute.params[1].type_name.contains("Point"));
+    assert!(compute.params[2].type_name.contains("Color"));
+}
+
+#[test]
+fn dwarf_debug_types_extract_names_and_fields() {
+    require_fixture!("dwarf_sample.elf");
+    let bin = crate::parser::parse_file(&fixture("dwarf_sample.elf")).expect("parse elf");
+    let types = crate::analysis::symbols::debug_types::DebugTypes::load(&bin, None)
+        .expect("DWARF debug types");
+
+    let node = types.struct_named("Node").expect("Node struct");
+    assert!(node.fields.iter().any(|f| f.name == "id" && f.offset == 0));
+    assert!(node.fields.iter().any(|f| f.name == "next" && f.offset == 8));
+    assert!(node.fields.iter().any(|f| f.name == "pos" && f.offset == 16));
+
+    let compute = types
+        .functions
+        .values()
+        .find(|f| f.name == "compute")
+        .expect("compute signature");
+    assert_eq!(compute.params.len(), 1);
+    assert_eq!(compute.params[0].name, "n");
+    assert!(compute.params[0].type_name.contains("Node"));
+    assert_eq!(compute.params[0].struct_name.as_deref(), Some("Node"));
+
+    let add = types
+        .functions
+        .values()
+        .find(|f| f.name == "add_points")
+        .expect("add_points signature");
+    assert_eq!(add.params.len(), 2);
+    assert_eq!(add.params[0].name, "a");
+    assert_eq!(add.params[1].name, "b");
+    assert!(add.params.iter().all(|p| p.type_name.contains("Point")));
+}
+
+#[test]
+fn debug_types_reach_eager_decompilation() {
+    if !fixture("pdb_sample.exe").exists() || !fixture("pdb_sample.pdb").exists() {
+        eprintln!("skipped: pdb_sample fixtures not present");
+        return;
+    }
+    let path = fixture("pdb_sample.exe");
+    let bin = crate::parser::parse_file(&path).expect("parse exe");
+    let disasm = crate::disasm::disassemble_binary(&bin).expect("disasm");
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let fid = crate::analysis::function_id::FunctionIDMatcher::new();
+    let result = crate::analysis::auto_analyze_with_source(
+        &disasm,
+        &bin,
+        path.to_str(),
+        &rustc_hash::FxHashMap::default(),
+        &fid,
+        &never,
+        &|_, _, _, _| {},
+    );
+    assert!(result.debug_types.is_some(), "PDB types must be in AnalysisResult");
+    let compute = result
+        .functions
+        .iter()
+        .find(|f| f.name == "compute")
+        .expect("compute function");
+    let text = result
+        .pseudocode
+        .get(&compute.entry)
+        .expect("compute was eagerly decompiled")
+        .lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Node * param_1"), "signature:\n{}", text);
+    assert!(text.contains("param_1->id"), "member access:\n{}", text);
+}
+
+#[test]
+fn dwarf_debug_types_reach_eager_decompilation() {
+    require_fixture!("dwarf_sample.elf");
+    let path = fixture("dwarf_sample.elf");
+    let bin = crate::parser::parse_file(&path).expect("parse elf");
+    let disasm = crate::disasm::disassemble_binary(&bin).expect("disasm");
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let fid = crate::analysis::function_id::FunctionIDMatcher::new();
+    let result = crate::analysis::auto_analyze_with_source(
+        &disasm,
+        &bin,
+        path.to_str(),
+        &rustc_hash::FxHashMap::default(),
+        &fid,
+        &never,
+        &|_, _, _, _| {},
+    );
+    assert!(result.debug_types.is_some(), "DWARF types must be in AnalysisResult");
+    let compute = result
+        .functions
+        .iter()
+        .find(|f| f.name == "compute")
+        .expect("compute function");
+    let text = result
+        .pseudocode
+        .get(&compute.entry)
+        .expect("compute was eagerly decompiled")
+        .lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Node * n"), "signature:\n{}", text);
+    assert!(text.contains("n->id"), "member access:\n{}", text);
 }
 
 #[test]

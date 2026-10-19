@@ -1,6 +1,7 @@
 use gimli::{AttributeValue, Dwarf, EndianSlice, RunTimeEndian, Unit};
 use rustc_hash::FxHashMap;
 
+use super::debug_types::{DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes};
 use crate::parser::ParsedBinary;
 use crate::type_system::manager::DataTypeManager;
 use crate::type_system::types::TypeId;
@@ -49,6 +50,7 @@ enum DieKind {
         name: String,
         is_struct: bool,
         members: Vec<Member>,
+        size: u64,
     },
     Enum {
         name: String,
@@ -234,7 +236,7 @@ pub fn dwarf_function_names(bin: &ParsedBinary) -> Vec<(u64, String)> {
                 attr_str(&dwarf, &unit, entry, gimli::DW_AT_name),
             )
                 && addr != 0 && !out.iter().any(|(a, _)| *a == addr) {
-                    out.push((addr, name));
+                    out.push((addr.saturating_add(bin.image_base), name));
                 }
         }
     }
@@ -331,6 +333,7 @@ fn collect_unit(
                             name,
                             is_struct: entry.tag() == gimli::DW_TAG_structure_type,
                             members: Vec::new(),
+                            size: attr_u64(entry, gimli::DW_AT_byte_size).unwrap_or(0),
                         },
                         shell: None,
                     },
@@ -517,6 +520,228 @@ fn attr_i64(
         AttributeValue::Data4(v) => Some(v as i64),
         AttributeValue::Data2(v) => Some(v as i64),
         AttributeValue::Data1(v) => Some(v as i64),
+        _ => None,
+    }
+}
+
+
+
+
+
+
+pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
+    let dwarf = load_dwarf(bin)?;
+    let ptr_size = if bin.arch.contains("64") { 8 } else { 4 };
+    let mut types: FxHashMap<Key, DieType> = FxHashMap::default();
+    let mut named_funcs: Vec<(u64, String)> = Vec::new();
+    let mut skipped = 0usize;
+    let mut units = dwarf.units();
+    let mut unit_idx = 0usize;
+    while let Some(header) = units.next().ok().and_then(|h| h) {
+        if let Ok(unit) = dwarf.unit(header) {
+            collect_unit(
+                &dwarf,
+                &unit,
+                unit_idx,
+                &mut types,
+                &mut named_funcs,
+                &mut skipped,
+            );
+        }
+        unit_idx += 1;
+    }
+    if types.is_empty() && named_funcs.is_empty() {
+        return None;
+    }
+
+    let mut out = DebugTypes::default();
+    for info in types.values() {
+        let DieKind::Composite {
+            name,
+            is_struct: _,
+            members,
+            size,
+        } = &info.kind
+        else {
+            continue;
+        };
+        if name.is_empty() || name.starts_with("__anon") {
+            continue;
+        }
+        let mut fields = Vec::new();
+        for m in members {
+            let Some(type_name) = type_name(&types, m.ty, 0) else {
+                continue;
+            };
+            let field_size = type_size(&types, m.ty, ptr_size, 0);
+            fields.push(DebugField {
+                name: m.name.clone(),
+                offset: m.offset as usize,
+                type_name,
+                size: field_size,
+            });
+        }
+        if fields.is_empty() {
+            continue;
+        }
+        fields.sort_by_key(|f| f.offset);
+        let real_size = if *size == 0 {
+            fields.iter().map(|f| f.offset + f.size).max().unwrap_or(0)
+        } else {
+            *size as usize
+        };
+        out.structs.push(DebugStruct {
+            name: name.clone(),
+            size: real_size,
+            fields,
+        });
+    }
+    out.structs.sort_by(|a, b| a.name.cmp(&b.name));
+    out.structs.dedup_by(|a, b| a.name == b.name);
+
+    
+    
+    let mut units = dwarf.units();
+    let mut unit_idx = 0usize;
+    while let Some(header) = units.next().ok().and_then(|h| h) {
+        let Ok(unit) = dwarf.unit(header) else {
+            unit_idx += 1;
+            continue;
+        };
+        let mut funcs: Vec<(isize, u64, DebugFunction)> = Vec::new();
+        let mut entries = unit.entries();
+        while let Some(entry) = entries.next_dfs().ok().and_then(|x| x) {
+            let depth = entry.depth();
+            while let Some((d, addr, func)) = funcs.last().cloned() {
+                if d < depth {
+                    break;
+                }
+                funcs.pop();
+                insert_function(&mut out.functions, addr, func);
+            }
+            match entry.tag() {
+                gimli::DW_TAG_subprogram => {
+                    let Some(addr) = attr_u64(entry, gimli::DW_AT_low_pc) else {
+                        continue;
+                    };
+                    if addr == 0 {
+                        continue;
+                    }
+                    let addr = addr.saturating_add(bin.image_base);
+                    let name = attr_str(&dwarf, &unit, entry, gimli::DW_AT_name)
+                        .unwrap_or_else(|| format!("sub_{:x}", addr));
+                    let ret = type_ref(entry, unit_idx)
+                        .and_then(|k| type_name(&types, k, 0))
+                        .unwrap_or_else(|| "void".into());
+                    funcs.push((
+                        depth,
+                        addr,
+                        DebugFunction {
+                            name,
+                            ret,
+                            params: Vec::new(),
+                        },
+                    ));
+                }
+                gimli::DW_TAG_formal_parameter => {
+                    let Some((_, _, func)) = funcs.last_mut() else {
+                        continue;
+                    };
+                    let pname = attr_str(&dwarf, &unit, entry, gimli::DW_AT_name)
+                        .unwrap_or_else(|| format!("param_{}", func.params.len() + 1));
+                    let key = type_ref(entry, unit_idx);
+                    let type_name = key
+                        .and_then(|k| type_name(&types, k, 0))
+                        .unwrap_or_else(|| "void *".into());
+                    let struct_name = key.and_then(|k| pointer_struct_name(&types, k, 0));
+                    func.params.push(DebugParam {
+                        name: pname,
+                        type_name,
+                        struct_name,
+                    });
+                }
+                _ => {}
+            }
+        }
+        for (_, addr, func) in funcs.drain(..) {
+            insert_function(&mut out.functions, addr, func);
+        }
+        unit_idx += 1;
+    }
+
+    (!out.is_empty()).then_some(out)
+}
+
+fn insert_function(
+    map: &mut rustc_hash::FxHashMap<u64, DebugFunction>,
+    addr: u64,
+    func: DebugFunction,
+) {
+    match map.get(&addr) {
+        Some(existing) if existing.params.len() >= func.params.len() => {}
+        _ => {
+            map.insert(addr, func);
+        }
+    }
+}
+
+fn type_name(types: &FxHashMap<Key, DieType>, key: Key, depth: usize) -> Option<String> {
+    if depth > 16 {
+        return None;
+    }
+    let info = types.get(&key)?;
+    Some(match &info.kind {
+        DieKind::Base { name, .. } => name.clone(),
+        DieKind::Typedef { name, .. } => name.clone(),
+        DieKind::Pointer { target } => {
+            let inner = type_name(types, *target, depth + 1).unwrap_or_else(|| "void".into());
+            format!("{} *", inner)
+        }
+        DieKind::Array { elem, count } => {
+            let inner = type_name(types, *elem, depth + 1).unwrap_or_else(|| "void".into());
+            format!("{}[{}]", inner, count)
+        }
+        DieKind::Composite { name, .. } => name.clone(),
+        DieKind::Enum { name, .. } => name.clone(),
+    })
+}
+
+fn type_size(types: &FxHashMap<Key, DieType>, key: Key, ptr_size: usize, depth: usize) -> usize {
+    if depth > 16 {
+        return 0;
+    }
+    let Some(info) = types.get(&key) else {
+        return 0;
+    };
+    match &info.kind {
+        DieKind::Base { size, .. } => *size as usize,
+        DieKind::Typedef { target, .. } => type_size(types, *target, ptr_size, depth + 1),
+        DieKind::Pointer { .. } => ptr_size,
+        DieKind::Array { elem, count } => {
+            type_size(types, *elem, ptr_size, depth + 1).saturating_mul(*count as usize)
+        }
+        DieKind::Composite { size, .. } => *size as usize,
+        DieKind::Enum { .. } => 4,
+    }
+}
+
+fn pointer_struct_name(
+    types: &FxHashMap<Key, DieType>,
+    key: Key,
+    depth: usize,
+) -> Option<String> {
+    if depth > 16 {
+        return None;
+    }
+    match &types.get(&key)?.kind {
+        DieKind::Pointer { target } => match &types.get(target)?.kind {
+            DieKind::Composite { name, .. } if !name.is_empty() && !name.starts_with("__anon") => {
+                Some(name.clone())
+            }
+            DieKind::Typedef { target, .. } => pointer_struct_name(types, *target, depth + 1),
+            _ => None,
+        },
+        DieKind::Typedef { target, .. } => pointer_struct_name(types, *target, depth + 1),
         _ => None,
     }
 }

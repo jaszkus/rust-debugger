@@ -1190,6 +1190,7 @@ fn decompile_text_imap(cfg: &CFG, pinstrs: &[PInstr], imap: &[DisasmInstruction]
         is64: true,
         imports: &HashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     pc.lines
         .iter()
@@ -1480,6 +1481,7 @@ fn decompiler_bottom_tested_loop_is_dowhile() {
         is64: true,
         imports: &HashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let t = pc
         .lines
@@ -1574,6 +1576,7 @@ fn decompiler_top_tested_loop_stays_while() {
         is64: true,
         imports: &HashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let t = pc
         .lines
@@ -2201,6 +2204,7 @@ fn cancel_decompile_renders_no_assignments() {
         is64: true,
         imports: &HashMap::default(),
         cancel: Some(&c),
+        debug_types: None,
     });
     assert!(
         pc.lines.iter().all(|l| l.kind != LineKind::Assignment),
@@ -2216,6 +2220,7 @@ fn cancel_decompile_renders_no_assignments() {
         is64: true,
         imports: &HashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     assert!(pc2.lines.iter().any(|l| matches!(
         l.kind,

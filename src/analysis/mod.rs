@@ -11,7 +11,7 @@ pub mod xref;
 pub use binary::{detect, golang, pe_resources, rtti};
 pub use decompiler::{expr, pcode};
 pub use flow::{cfg, constprop, function, function_id, noreturn, stack, unwind};
-pub use symbols::{debug_symbols, demangle, dwarf_types, pdb_types};
+pub use symbols::{debug_symbols, debug_types, demangle, dwarf_types, pdb_types};
 pub use xref::import_xref;
 
 pub mod types {

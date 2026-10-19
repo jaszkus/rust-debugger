@@ -29,6 +29,7 @@ fn render(code: &[u8], base: u64, is64: bool) -> String {
         is64,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     pc.lines
         .iter()
@@ -815,6 +816,7 @@ fn decompile_call_renders_known_name_and_args_x64() {
         is64: true,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc
         .lines
@@ -1185,6 +1187,7 @@ fn regression_low_call_args_survive_into_pseudocode() {
         is64: true,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc
         .lines
@@ -1224,6 +1227,7 @@ fn regression_x86_thiscall_arg_probe_renders_args() {
         is64: false,
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
+        debug_types: None,
     });
     let text: String = pc
         .lines

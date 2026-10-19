@@ -1,7 +1,7 @@
 use crate::parser::{ParsedBinary, Symbol};
 use rustc_hash::FxHashSet as HashSet;
 
-fn pdb_sections(binary: &ParsedBinary) -> Vec<(u16, u64, u64)> {
+pub(crate) fn pdb_sections(binary: &ParsedBinary) -> Vec<(u16, u64, u64)> {
     binary
         .sections
         .iter()
@@ -10,7 +10,7 @@ fn pdb_sections(binary: &ParsedBinary) -> Vec<(u16, u64, u64)> {
         .collect()
 }
 
-fn pdb_offset_to_va(
+pub(crate) fn pdb_offset_to_va(
     sections: &[(u16, u64, u64)],
     off: pdb::PdbInternalSectionOffset,
 ) -> Option<u64> {

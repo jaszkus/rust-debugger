@@ -85,6 +85,10 @@ pub(crate) fn resolve_pval(v: &PVar, reg_values: &HashMap<&'static str, PVal>) -
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StructHint {
     pub(crate) fields: Vec<(i64, String)>,
+    
+    
+    
+    pub(crate) owner: Option<String>,
 }
 
 impl StructHint {
@@ -105,6 +109,7 @@ pub(crate) struct TypeHints {
     pub(crate) param_slots: HashSet<i64>,
     pub(crate) imports: HashMap<u64, String>,
     pub(crate) structs: HashMap<String, StructHint>,
+    pub(crate) value_structs: HashMap<String, StructHint>,
     pub(crate) last_cmp: std::cell::RefCell<Option<(String, String, bool)>>,
     pub(crate) out_bytes: std::cell::Cell<usize>,
     pub(crate) out_truncated: std::cell::Cell<bool>,

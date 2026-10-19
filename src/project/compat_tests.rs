@@ -483,14 +483,14 @@ fn rddb_v4_loads_with_ghidra_tags() {
 }
 
 #[test]
-fn rddb_v5_roundtrip_zstd_and_ranges() {
-    let dir = fresh_dir("v5");
-    let src = dir.join("sample_v5.exe");
-    std::fs::write(&src, b"RDBV5ROUNDTRIPDATA").unwrap();
+fn rddb_v6_roundtrip_zstd_and_ranges() {
+    let dir = fresh_dir("v6");
+    let src = dir.join("sample_v6.exe");
+    std::fs::write(&src, b"RDBV6ROUNDTRIPDATA").unwrap();
 
     let mut p = ProgramData {
         file_path: src.to_string_lossy().into_owned(),
-        current_program_name: "v5 proj".into(),
+        current_program_name: "v6 proj".into(),
         disasm: Some(crate::disasm::DisasmResult {
             instructions: std::sync::Arc::new(vec![crate::disasm::DisasmInstruction {
                 address: 0x5000,
@@ -502,7 +502,7 @@ fn rddb_v5_roundtrip_zstd_and_ranges() {
         }),
         ..Default::default()
     };
-    p.comments.insert(0x5000, "hello v5".into());
+    p.comments.insert(0x5000, "hello v6".into());
     p.user_func_names.insert(0x5000, "tiny_fn".into());
 
     let mut a = crate::analysis::AnalysisResult::default();
@@ -530,25 +530,62 @@ fn rddb_v5_roundtrip_zstd_and_ranges() {
         block_at: Default::default(),
     };
     a.cfgs.insert(0x5000, cfg);
+    a.debug_types = Some(std::sync::Arc::new(
+        crate::analysis::symbols::debug_types::DebugTypes {
+            structs: vec![crate::analysis::symbols::debug_types::DebugStruct {
+                name: "Node".into(),
+                size: 16,
+                fields: vec![
+                    crate::analysis::symbols::debug_types::DebugField {
+                        name: "id".into(),
+                        offset: 0,
+                        type_name: "int32_t".into(),
+                        size: 4,
+                    },
+                    crate::analysis::symbols::debug_types::DebugField {
+                        name: "next".into(),
+                        offset: 8,
+                        type_name: "Node *".into(),
+                        size: 8,
+                    },
+                ],
+            }],
+            functions: [(0x5000, crate::analysis::symbols::debug_types::DebugFunction {
+                name: "tiny".into(),
+                ret: "int32_t".into(),
+                params: vec![crate::analysis::symbols::debug_types::DebugParam {
+                    name: "node".into(),
+                    type_name: "Node *".into(),
+                    struct_name: Some("Node".into()),
+                }],
+            })]
+            .into_iter()
+            .collect(),
+        },
+    ));
     p.analysis = Some(std::sync::Arc::new(a));
 
-    let db = dir.join("sample_v5.exe.rdb");
+    let db = dir.join("sample_v6.exe.rdb");
     let db_str = db.to_string_lossy().into_owned();
     save_project_db(&p, &db_str).expect("save");
     let raw = std::fs::read(&db).unwrap();
-    assert_eq!(&raw[8..12], super::MAGIC_ZSTD, "v5 file is zstd framed");
+    assert_eq!(&raw[8..12], super::MAGIC_ZSTD, "v6 file is zstd framed");
 
-    let snap = load_project_db(db.to_str().unwrap()).expect("v5 round trip");
-    assert_eq!(snap.project_name, "v5 proj");
+    let snap = load_project_db(db.to_str().unwrap()).expect("v6 round trip");
+    assert_eq!(snap.project_name, "v6 proj");
     assert_eq!(snap.analysis.functions[0].name, "tiny");
     assert_eq!(
         snap.analysis.cfgs.get(&0x5000).unwrap().blocks[0].instr_indices,
         0..1
     );
     assert_eq!(snap.disasm.instructions[0].mnemonic, "ret");
+    let debug = snap.analysis.debug_types.as_ref().expect("debug types round trip");
+    assert_eq!(debug.structs[0].name, "Node");
+    assert_eq!(debug.structs[0].fields[1].name, "next");
+    assert_eq!(debug.functions[&0x5000].params[0].struct_name.as_deref(), Some("Node"));
     assert_eq!(
         snap.annotations.comments.get(&0x5000).map(String::as_str),
-        Some("hello v5")
+        Some("hello v6")
     );
     assert_eq!(
         snap.annotations

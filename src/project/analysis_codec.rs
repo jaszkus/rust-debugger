@@ -294,6 +294,109 @@ pub(crate) fn write_analysis(w: &mut W, a: &AnalysisResult) {
             w.u64(f.access_count as u64);
         }
     }
+    match &a.debug_types {
+        Some(dt) => {
+            w.u8(1);
+            write_debug_types(w, dt);
+        }
+        None => w.u8(0),
+    }
+}
+
+fn write_debug_types(w: &mut W, d: &crate::analysis::symbols::debug_types::DebugTypes) {
+    w.u32(d.structs.len() as u32);
+    for s in &d.structs {
+        w.str(&s.name);
+        w.u64(s.size as u64);
+        w.u32(s.fields.len() as u32);
+        for f in &s.fields {
+            w.str(&f.name);
+            w.u64(f.offset as u64);
+            w.str(&f.type_name);
+            w.u64(f.size as u64);
+        }
+    }
+    w.u32(d.functions.len() as u32);
+    let mut keys: Vec<u64> = d.functions.keys().copied().collect();
+    keys.sort_unstable();
+    for key in keys {
+        let f = &d.functions[&key];
+        w.u64(key);
+        w.str(&f.name);
+        w.str(&f.ret);
+        w.u32(f.params.len() as u32);
+        for p in &f.params {
+            w.str(&p.name);
+            w.str(&p.type_name);
+            match &p.struct_name {
+                Some(name) => {
+                    w.u8(1);
+                    w.str(name);
+                }
+                None => w.u8(0),
+            }
+        }
+    }
+}
+
+fn read_debug_types(
+    r: &mut R,
+) -> Result<crate::analysis::symbols::debug_types::DebugTypes, String> {
+    use crate::analysis::symbols::debug_types::{
+        DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes,
+    };
+    let n = r.u32()? as usize;
+    let mut structs = Vec::with_capacity(n.min(1 << 20));
+    for _ in 0..n {
+        let name = r.str()?;
+        let size = r.u64()? as usize;
+        let fn_ = r.u32()? as usize;
+        let mut fields = Vec::with_capacity(fn_.min(1 << 20));
+        for _ in 0..fn_ {
+            fields.push(DebugField {
+                name: r.str()?,
+                offset: r.u64()? as usize,
+                type_name: r.str()?,
+                size: r.u64()? as usize,
+            });
+        }
+        structs.push(DebugStruct { name, size, fields });
+    }
+    let n = r.u32()? as usize;
+    let mut functions = rustc_hash::FxHashMap::with_capacity_and_hasher(
+        n.min(1 << 20),
+        rustc_hash::FxBuildHasher,
+    );
+    for _ in 0..n {
+        let addr = r.u64()?;
+        let name = r.str()?;
+        let ret = r.str()?;
+        let pn = r.u32()? as usize;
+        let mut params = Vec::with_capacity(pn.min(1 << 20));
+        for _ in 0..pn {
+            let name = r.str()?;
+            let type_name = r.str()?;
+            let struct_name = match r.u8()? {
+                0 => None,
+                1 => Some(r.str()?),
+                other => return Err(format!("corrupt project DB (param struct tag {other})")),
+            };
+            params.push(DebugParam {
+                name,
+                type_name,
+                struct_name,
+            });
+        }
+        functions.insert(
+            addr,
+            DebugFunction {
+                name,
+                ret,
+                params,
+            },
+        );
+    }
+    Ok(DebugTypes { structs, functions })
 }
 
 pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, String> {
@@ -717,6 +820,16 @@ pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, St
         );
     }
     a.reconstructed_types = reconstructed_types;
+
+    a.debug_types = if db_ver >= 6 {
+        match r.u8()? {
+            0 => None,
+            1 => Some(std::sync::Arc::new(read_debug_types(r)?)),
+            other => return Err(format!("corrupt project DB (debug types tag {other})")),
+        }
+    } else {
+        None
+    };
 
     a.pe_resources = None;
     a.debug_symbols = None;

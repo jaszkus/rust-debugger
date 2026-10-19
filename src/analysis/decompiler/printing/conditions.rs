@@ -281,14 +281,18 @@ pub(crate) fn struct_member_expr(
     let PVar::Reg(r) = base else {
         return None;
     };
-    let st = hints.structs.get(*r)?;
-    let field = st.field(off)?;
     
     
     if base_text.contains('+') || base_text.contains('-') {
         return None;
     }
-    Some(format!("{}->{}", base_text, field))
+    let (st, display) = if let Some(st) = hints.value_structs.get(base_text) {
+        (st, st.owner.as_deref().unwrap_or(base_text))
+    } else {
+        (hints.structs.get(*r)?, base_text)
+    };
+    let field = st.field(off)?;
+    Some(format!("{}->{}", display, field))
 }
 
 pub(crate) fn fmt_load(

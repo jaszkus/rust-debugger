@@ -105,6 +105,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 - x86-64 → **pcode** lifting
 - Mini-**SSA** expression trees
 - **C-like** output with recovered variables
+- Real **PDB / DWARF** parameter types, function signatures and struct member names
 
 </td>
 </tr>
@@ -121,7 +122,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 
 ### Patching & projects
 - Byte and **branch patching** with history and rebuild-after-patch
-- **RDDB v4 / v5** project files — zstd-compressed analysis cache + annotations
+- **RDDB v6** project files — zstd-compressed analysis cache + annotations
 
 </td>
 </tr>

@@ -12,6 +12,7 @@ use super::flow::cfg::CFG;
 use super::flow::function::{DetectedFunction, FuncSource};
 use super::flow::stack::StackFrame;
 use super::flow::{cfg, constprop, function, function_id, noreturn, stack, unwind};
+use super::symbols::debug_types::DebugTypes;
 use super::symbols::{debug_symbols, demangle, dwarf_types};
 use super::type_reconstruction;
 use super::xref::db as xref;
@@ -19,6 +20,7 @@ use super::xref::db::{XRefDB, XRefKind};
 use crate::disasm::DisasmResult;
 use crate::parser::ParsedBinary;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const TOTAL_PHASES: usize = 13;
@@ -42,6 +44,7 @@ pub struct AnalysisResult {
     pub debug_symbols: Option<debug_symbols::DebugSymbolsAnalyzer>,
     pub function_signatures: HashMap<u64, function_id::FunctionSignature>,
     pub reconstructed_types: HashMap<u64, type_reconstruction::ReconstructedType>,
+    pub debug_types: Option<Arc<DebugTypes>>,
 }
 
 pub type ProgressFn<'a> = &'a (dyn Fn(&str, &str, usize, usize) + Send + Sync);
@@ -194,6 +197,7 @@ pub fn auto_analyze_with_progress(
     cancel: &AtomicBool,
     progress: ProgressFn,
 ) -> AnalysisResult {
+    let debug_types = DebugTypes::load(binary, None);
     auto_analyze_inner(
         disasm,
         binary,
@@ -202,6 +206,7 @@ pub fn auto_analyze_with_progress(
         extra_fid,
         cancel,
         progress,
+        debug_types,
     )
 }
 
@@ -217,6 +222,7 @@ pub fn auto_analyze_with_source(
     progress: ProgressFn,
 ) -> AnalysisResult {
     let pdb_names = debug_symbols::load_pdb_function_names(binary, source_path);
+    let debug_types = DebugTypes::load(binary, source_path);
     auto_analyze_inner(
         disasm,
         binary,
@@ -225,6 +231,7 @@ pub fn auto_analyze_with_source(
         extra_fid,
         cancel,
         progress,
+        debug_types,
     )
 }
 
@@ -237,7 +244,9 @@ fn auto_analyze_inner(
     extra_fid: &function_id::FunctionIDMatcher,
     cancel: &AtomicBool,
     progress: ProgressFn,
+    debug_types: Option<DebugTypes>,
 ) -> AnalysisResult {
+    let debug_types = debug_types.map(Arc::new);
     let total_phases = TOTAL_PHASES;
     let stopped = || cancel.load(Ordering::Relaxed);
 
@@ -791,6 +800,7 @@ fn auto_analyze_inner(
         import_lookup: &import_lookup,
         cancel,
         is64: disasm.arch.contains("64"),
+        debug_types: debug_types.as_ref(),
         progress_fn: &|name, i| {
             if i % 8 == 0 {
                 progress(
@@ -1041,6 +1051,7 @@ fn auto_analyze_inner(
         debug_symbols,
         function_signatures,
         reconstructed_types,
+        debug_types,
     }
 }
 

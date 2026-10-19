@@ -3,8 +3,10 @@ use super::super::flow::cfg::{self, CFG};
 use super::super::flow::function::DetectedFunction;
 use super::super::flow::stack::{self, StackFrame};
 use super::AnalysisResult;
+use crate::analysis::symbols::debug_types::DebugTypes;
 use crate::disasm::DisasmResult;
 use rustc_hash::FxHashMap as HashMap;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 pub(crate) struct DecompileJob<'a> {
@@ -14,6 +16,7 @@ pub(crate) struct DecompileJob<'a> {
     pub all_insns: &'a [crate::disasm::DisasmInstruction],
     pub func_lookup: &'a HashMap<u64, String>,
     pub import_lookup: &'a HashMap<u64, String>,
+    pub debug_types: Option<&'a Arc<DebugTypes>>,
     pub cancel: &'a AtomicBool,
     pub is64: bool,
     pub progress_fn: &'a (dyn Fn(&str, usize) + Send + Sync),
@@ -27,6 +30,7 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
         all_insns,
         func_lookup,
         import_lookup,
+        debug_types,
         cancel,
         is64,
         progress_fn,
@@ -64,6 +68,7 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
                         func_lookup,
                         is64,
                         imports: import_lookup,
+                        debug_types,
                         cancel: Some(cancel),
                     })
                 }))
@@ -164,6 +169,7 @@ pub fn decompile_snapshot(
     let is64 = disasm.arch.contains("64");
     let pc = if c.blocks.len() > decompiler::BIG_STACK_BLOCKS {
         let imap_arc = disasm.instructions.clone();
+        let debug_types = analysis.debug_types.clone();
         std::thread::Builder::new()
             .name("decompile-big".into())
             .stack_size(decompiler::BIG_STACK_SIZE)
@@ -177,6 +183,7 @@ pub fn decompile_snapshot(
                     func_lookup: &func_lookup,
                     is64,
                     imports: &import_lookup,
+                    debug_types: debug_types.as_ref(),
                     cancel: None,
                 });
                 (c, sf, pc)
@@ -199,6 +206,7 @@ pub fn decompile_snapshot(
             func_lookup: &func_lookup,
             is64,
             imports: &import_lookup,
+            debug_types: analysis.debug_types.as_ref(),
             cancel: None,
         });
         (c, sf, pc)

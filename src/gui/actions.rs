@@ -111,19 +111,31 @@ pub(crate) fn auto_import_debug_types(state: &mut AppState) {
     let Some(bin) = state.program.binary.as_ref() else {
         return;
     };
-    let Some(stats) = crate::analysis::symbols::pdb_types::import_pdb_types_from_binary(
-        bin,
-        source_path,
-        &mut state.program.types,
-    ) else {
-        return;
-    };
-    let total = stats.structs + stats.unions + stats.enums + stats.typedefs;
-    if total > 0 {
-        state.status_msg = format!(
-            "Imported PDB types: {} structs, {} unions, {} enums, {} typedefs",
-            stats.structs, stats.unions, stats.enums, stats.typedefs
-        );
+    if bin.format.starts_with("PE") || bin.format == "COFF" {
+        let Some(stats) = crate::analysis::symbols::pdb_types::import_pdb_types_from_binary(
+            bin,
+            source_path,
+            &mut state.program.types,
+        ) else {
+            return;
+        };
+        let total = stats.structs + stats.unions + stats.enums + stats.typedefs;
+        if total > 0 {
+            state.status_msg = format!(
+                "Imported PDB types: {} structs, {} unions, {} enums, {} typedefs",
+                stats.structs, stats.unions, stats.enums, stats.typedefs
+            );
+        }
+    } else if bin.format == "ELF" {
+        let stats =
+            crate::analysis::symbols::dwarf_types::import_dwarf_types(bin, &mut state.program.types);
+        let total = stats.structs + stats.unions + stats.enums + stats.typedefs;
+        if total > 0 {
+            state.status_msg = format!(
+                "Imported DWARF types: {} structs, {} unions, {} enums, {} typedefs",
+                stats.structs, stats.unions, stats.enums, stats.typedefs
+            );
+        }
     }
 }
 

@@ -6,6 +6,8 @@ use super::structure::{
 use super::*;
 use super::alias;
 use crate::analysis::flow::cfg::CFG;
+use crate::analysis::symbols::debug_types::DebugTypes;
+use super::pcode::StackBase;
 use crate::analysis::flow::stack::StackFrame;
 use crate::analysis::flow::variables;
 use crate::disasm::DisasmInstruction;
@@ -29,6 +31,7 @@ pub struct LiftInput<'a> {
     pub func_lookup: &'a HashMap<u64, String>,
     pub is64: bool,
     pub imports: &'a HashMap<u64, String>,
+    pub debug_types: Option<&'a std::sync::Arc<DebugTypes>>,
     pub cancel: Option<&'a AtomicBool>,
 }
 
@@ -119,7 +122,7 @@ fn function_struct_hints(cfg: &CFG, pinstrs: &[PInstr]) -> HashMap<String, Struc
     tr.analyze_function(pinstrs, entry, end);
     tr.function_fields(entry)
         .into_iter()
-        .map(|(reg, fields)| (reg, StructHint { fields }))
+        .map(|(reg, fields)| (reg, StructHint { fields, owner: None }))
         .collect()
 }
 
@@ -300,6 +303,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         func_lookup,
         is64,
         imports,
+        debug_types,
         cancel,
     } = input;
     let mut stats = DecompStats {
@@ -336,6 +340,157 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     } else {
         Some(variables::recover(cfg, pinstrs_in_func, imap, is64))
     };
+    let mut recovery = recovery;
+    let debug = debug_types.map(|a| a.as_ref());
+    let debug_sig = debug.and_then(|d| d.function(cfg.func_entry));
+
+    
+    
+    
+    
+    let mut param_renames: HashMap<String, String> = HashMap::default();
+    let mut preferred_structs: HashMap<String, String> = HashMap::default();
+    let mut value_structs: HashMap<String, StructHint> = HashMap::default();
+    let mut owner_by_reg: HashMap<String, String> = HashMap::default();
+    if let (Some(sig), Some(rv)) = (debug_sig, recovery.as_mut()) {
+        let mut used: HashSet<String> = rv.vars.iter().map(|v| v.name.clone()).collect();
+        for (i, &id) in rv.params.iter().enumerate() {
+            let Some(dp) = sig.params.get(i) else {
+                break;
+            };
+            let v = &mut rv.vars[id as usize];
+            let old_name = v.name.clone();
+            let fallback = v.name.clone();
+            let mut new_name = sanitize_param_name(&dp.name, &fallback);
+            if new_name != v.name {
+                let base = new_name.clone();
+                let mut n = 2u32;
+                while used.contains(&new_name) && new_name != v.name {
+                    new_name = format!("{}_{}", base, n);
+                    n += 1;
+                }
+                if new_name != v.name {
+                    used.insert(new_name.clone());
+                    param_renames.insert(v.name.clone(), new_name.clone());
+                    v.name = new_name;
+                }
+            }
+            if let (variables::Loc::Reg(reg), Some(sname)) = (v.storage, dp.struct_name.as_deref())
+            {
+                preferred_structs.insert(reg.to_string(), sname.to_string());
+                owner_by_reg.insert(reg.to_string(), old_name.clone());
+                if let Some(dbg) = debug
+                    && let Some(ds) = dbg.struct_named(sname)
+                {
+                    value_structs.insert(
+                        old_name.clone(),
+                        StructHint {
+                            fields: ds
+                                .fields
+                                .iter()
+                                .map(|f| (f.offset as i64, f.name.clone()))
+                                .collect(),
+                            owner: Some(old_name),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    let mut structs = function_struct_hints(cfg, pinstrs_in_func);
+    if let Some(dbg) = debug {
+        
+        
+        
+        
+        for (reg, sname) in &preferred_structs {
+            if let Some(ds) = dbg.struct_named(sname) {
+                let hint = structs.entry(reg.clone()).or_default();
+                for f in &ds.fields {
+                    if hint.field(f.offset as i64).is_none() {
+                        hint.fields.push((f.offset as i64, f.name.clone()));
+                    }
+                }
+                hint.fields.sort_by_key(|(o, _)| *o);
+            }
+        }
+        for (reg, hint) in structs.iter_mut() {
+            let offsets: Vec<i64> = hint.fields.iter().map(|(o, _)| *o).collect();
+            let preferred = preferred_structs.get(reg).map(String::as_str);
+            if let Some(ds) = dbg.struct_for_offsets(&offsets, preferred) {
+                for (off, name) in hint.fields.iter_mut() {
+                    if let Some(f) = ds.field_at(*off) {
+                        *name = f.name.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    
+    
+    
+    if let (Some(dbg), Some(rv)) = (debug, recovery.as_ref()) {
+        let mut hint_by_reg: HashMap<&str, StructHint> = HashMap::default();
+        for (reg, sname) in &preferred_structs {
+            if let Some(ds) = dbg.struct_named(sname) {
+                hint_by_reg.insert(reg.as_str(), StructHint {
+                    fields: ds
+                        .fields
+                        .iter()
+                        .map(|f| (f.offset as i64, f.name.clone()))
+                        .collect(),
+                    owner: None,
+                });
+            }
+        }
+        if !hint_by_reg.is_empty() {
+            let mut writes: HashMap<(u8, i64), usize> = HashMap::default();
+            for pi in pinstrs_in_func {
+                for op in &pi.ops {
+                    if let POp::Store {
+                        addr: PVar::StackSlot { base, off },
+                        ..
+                    } = op
+                    {
+                        let b = match base {
+                            StackBase::Rbp => 0u8,
+                            StackBase::Rsp => 1u8,
+                        };
+                        *writes.entry((b, *off)).or_default() += 1;
+                    }
+                }
+            }
+            for pi in pinstrs_in_func {
+                for op in &pi.ops {
+                    if let POp::Store {
+                        addr: PVar::StackSlot { base, off },
+                        src: PVar::Reg(reg),
+                        ..
+                    } = op
+                        && let Some(hint) = hint_by_reg.get(reg)
+                    {
+                        let b = match base {
+                            StackBase::Rbp => 0u8,
+                            StackBase::Rsp => 1u8,
+                        };
+                        if let Some(name) = rv.names.stack_by_raw.get(&(b, *off)) {
+                            let mut h = hint.clone();
+                            
+                            
+                            
+                            if writes.get(&(b, *off)).copied() == Some(1) {
+                                h.owner = owner_by_reg.get(*reg).cloned();
+                            }
+                            value_structs.insert(name.clone(), h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let hints = TypeHints {
         floats,
         float_slots,
@@ -352,32 +507,62 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .map(|r| r.param_slots.iter().map(|(_, off)| *off).collect())
             .unwrap_or_default(),
         imports: imports.clone(),
-        structs: function_struct_hints(cfg, pinstrs_in_func),
+        structs,
+        value_structs,
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
     stats.t_hints = t_phase.elapsed();
 
     let ptr_ty = if is64 { "int64_t" } else { "int32_t" };
-    let ret_ty_str = recovery
-        .as_ref()
-        .map(|r| r.ret_type.c_str())
-        .unwrap_or(ptr_ty);
-    let params: Vec<String> = if let Some(rv) = &recovery {
-        rv.params
+    let (ret_ty_str, params): (String, Vec<String>) = if let Some(sig) = debug_sig {
+        let ret = if sig.ret.trim().is_empty() {
+            "void".to_string()
+        } else {
+            normalize_type(&sig.ret)
+        };
+        let params = sig
+            .params
             .iter()
-            .map(|&id| {
-                let v = &rv.vars[id as usize];
-                format!("{} {}", v.ty.c_str(), v.name)
+            .enumerate()
+            .map(|(i, dp)| {
+                let name = recovery
+                    .as_ref()
+                    .and_then(|rv| {
+                        rv.params
+                            .get(i)
+                            .and_then(|id| rv.vars.get(*id as usize))
+                    })
+                    .map(|v| v.name.clone())
+                    .unwrap_or_else(|| {
+                        sanitize_param_name(&dp.name, &format!("param_{}", i + 1))
+                    });
+                format!("{} {}", normalize_type(&dp.type_name), name)
             })
-            .collect()
+            .collect();
+        (ret, params)
     } else {
-        stack
-            .variables
-            .iter()
-            .filter(|v| matches!(v.kind, crate::analysis::stack::VarKind::Parameter))
-            .map(|v| format!("{} {}", ptr_ty, v.name))
-            .collect()
+        let ret = recovery
+            .as_ref()
+            .map(|r| r.ret_type.c_str().to_string())
+            .unwrap_or_else(|| ptr_ty.to_string());
+        let params: Vec<String> = if let Some(rv) = &recovery {
+            rv.params
+                .iter()
+                .map(|&id| {
+                    let v = &rv.vars[id as usize];
+                    format!("{} {}", v.ty.c_str(), v.name)
+                })
+                .collect()
+        } else {
+            stack
+                .variables
+                .iter()
+                .filter(|v| matches!(v.kind, crate::analysis::stack::VarKind::Parameter))
+                .map(|v| format!("{} {}", ptr_ty, v.name))
+                .collect()
+        };
+        (ret, params)
     };
     let sig = if params.is_empty() {
         format!("{} {}(void)", ret_ty_str, func_name)
@@ -579,6 +764,11 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     if let Some(rv) = &recovery {
         variables::apply_names(&mut lines, rv);
     }
+    if !param_renames.is_empty() {
+        for line in lines.iter_mut() {
+            line.text = rename_identifiers(&line.text, &param_renames);
+        }
+    }
 
     
     
@@ -649,6 +839,115 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     (make_pseudocode(cfg, func_name, lines), stats)
 }
 
+
+fn normalize_type(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_space = false;
+    for ch in text.trim().chars() {
+        if ch == ' ' {
+            if !last_space {
+                out.push(ch);
+            }
+            last_space = true;
+        } else {
+            out.push(ch);
+            last_space = false;
+        }
+    }
+    out
+}
+
+fn sanitize_param_name(name: &str, fallback: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            if i == 0 && ch.is_ascii_digit() {
+                out.push('_');
+            }
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_').to_string();
+    if out.is_empty() {
+        return fallback.to_string();
+    }
+    if is_c_keyword(&out) {
+        format!("p_{}", out)
+    } else {
+        out
+    }
+}
+
+fn is_c_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "auto"
+            | "break"
+            | "case"
+            | "char"
+            | "const"
+            | "continue"
+            | "default"
+            | "do"
+            | "double"
+            | "else"
+            | "enum"
+            | "extern"
+            | "float"
+            | "for"
+            | "goto"
+            | "if"
+            | "inline"
+            | "int"
+            | "long"
+            | "register"
+            | "restrict"
+            | "return"
+            | "short"
+            | "signed"
+            | "sizeof"
+            | "static"
+            | "struct"
+            | "switch"
+            | "typedef"
+            | "union"
+            | "unsigned"
+            | "void"
+            | "volatile"
+            | "while"
+    )
+}
+
+fn rename_identifiers(text: &str, map: &HashMap<String, String>) -> String {
+    if map.is_empty() {
+        return text.to_string();
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let token = &text[start..i];
+            if let Some(replacement) = map.get(token) {
+                out.push_str(replacement);
+            } else {
+                out.push_str(token);
+            }
+        } else {
+            out.push(c as char);
+            i += 1;
+        }
+    }
+    out
+}
 
 fn entry_block(cfg: &CFG) -> usize {
     cfg.block_at.get(&cfg.func_entry).copied().unwrap_or(0)

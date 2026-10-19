@@ -189,7 +189,7 @@ pub fn save_project_db(program: &ProgramData, path: &str) -> Result<(), String> 
 
 
 
-pub const ANALYSIS_STAMP: &str = concat!(env!("CARGO_PKG_VERSION"), "/analysis-2026-10");
+pub const ANALYSIS_STAMP: &str = concat!(env!("CARGO_PKG_VERSION"), "/analysis-2026-10-types");
 
 fn stamp_path(db: &str) -> String {
     format!("{db}.stamp")
@@ -327,7 +327,7 @@ pub fn load_project_db(path: &str) -> Option<ProjectSnapshot> {
         return rd_fail("bad magic".into());
     }
     let db_ver = r.u32().ok()?;
-    if db_ver != 1 && db_ver != 2 && db_ver != 3 && db_ver != 4 && db_ver != VERSION {
+    if !(1..=VERSION).contains(&db_ver) {
         return rd_fail("bad version".into());
     }
     let saved_at = r.u64().ok()?;
