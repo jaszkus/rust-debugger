@@ -1,5 +1,7 @@
 use super::printing::*;
-use super::structure::{compute_dowhile, walk_block, WalkCtx};
+use super::structure::{
+    Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, walk_block,
+};
 use super::*;
 use crate::analysis::flow::cfg::CFG;
 use crate::analysis::flow::stack::StackFrame;
@@ -455,7 +457,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let bops = build_block_ops_from_slice(cfg, pinstrs_in_func);
 
     let entry_id = entry_block(cfg);
-    let back_edges = graph.back_edges(entry_id);
+    let back_edge_list = graph.back_edge_list(entry_id);
+    let back_edges: HashMap<usize, usize> = back_edge_list.iter().copied().collect();
     stats.back_edges = back_edges.len();
 
     let param_seed: HashMap<&'static str, String> = recovery
@@ -480,6 +483,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     }
 
     let dowhile = compute_dowhile(cfg, &bops, imap, &back_edges, &block_consts, &hints);
+    let postdom = Postdom::compute(cfg);
+    let loops = Loops::compute(cfg, entry_id, &back_edge_list);
     let dead = compute_dead_ops_g(&graph, &bops, cancel);
     stats.dead_ops = dead.len();
     stats.t_dataflow = t_phase.elapsed();
@@ -501,10 +506,13 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         dowhile: &dowhile,
         dead: &dead,
         cancel,
+        postdom: &postdom,
+        loops: &loops,
         is64,
         hints: &hints,
     };
     walk_block(&ctx, entry_id, &mut visited, &mut lines, 1, 0);
+    cleanup_labels(&mut lines);
     stats.t_structure = t_phase.elapsed();
 
     let mut unmodeled = 0usize;
@@ -696,6 +704,10 @@ impl GraphView {
 
     fn back_edges(&self, entry: usize) -> HashMap<usize, usize> {
         self.dfs(entry).1.into_iter().collect()
+    }
+
+    fn back_edge_list(&self, entry: usize) -> Vec<(usize, usize)> {
+        self.dfs(entry).1
     }
 
     fn reverse_post_order(&self, entry: usize) -> Vec<usize> {

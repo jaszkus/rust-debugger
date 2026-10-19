@@ -1171,6 +1171,10 @@ fn single_block_cfg() -> CFG {
 }
 
 fn decompile_text(cfg: &CFG, pinstrs: &[PInstr]) -> String {
+    decompile_text_imap(cfg, pinstrs, &[])
+}
+
+fn decompile_text_imap(cfg: &CFG, pinstrs: &[PInstr], imap: &[DisasmInstruction]) -> String {
     let stack = StackFrame {
         func_entry: 0x1000,
         variables: Vec::new(),
@@ -1179,7 +1183,7 @@ fn decompile_text(cfg: &CFG, pinstrs: &[PInstr]) -> String {
     let pc = decompile(LiftInput {
         cfg,
         pinstrs_in_func: pinstrs,
-        imap: &[],
+        imap,
         stack: &stack,
         func_name: "f",
         func_lookup: &HashMap::default(),
@@ -2507,5 +2511,239 @@ fn arm64_unsupported_arch_still_rejected() {
     assert!(
         crate::disasm::disassemble_binary(&bin).is_err(),
         "mips must stay rejected"
+    );
+}
+
+fn test_block(id: usize, start: u64, succs: &[(usize, EdgeKind)], preds: &[usize]) -> BasicBlock {
+    BasicBlock {
+        id,
+        start,
+        end: start + 0x10,
+        instr_indices: 0..0,
+        successors: succs
+            .iter()
+            .map(|&(target, kind)| Edge { target, kind })
+            .collect(),
+        predecessors: preds.to_vec(),
+    }
+}
+
+#[test]
+fn decompiler_if_else_join_has_no_gotos() {
+    let cfg = CFG {
+        func_entry: 0x1000,
+        blocks: vec![
+            test_block(
+                0,
+                0x1000,
+                &[(1, EdgeKind::BranchTrue), (2, EdgeKind::BranchFalse)],
+                &[],
+            ),
+            test_block(1, 0x1010, &[(3, EdgeKind::Jump)], &[0]),
+            test_block(2, 0x1020, &[(3, EdgeKind::Jump)], &[0]),
+            test_block(3, 0x1030, &[], &[1, 2]),
+        ],
+        block_at: [(0x1000u64, 0usize), (0x1010, 1), (0x1020, 2), (0x1030, 3)]
+            .into_iter()
+            .collect(),
+    };
+    let pi = vec![
+        pinstr(
+            0x1000,
+            vec![
+                POp::Cmp {
+                    a: PVar::Reg("rax"),
+                    b: PVar::Const(0),
+                    size: 8,
+                },
+                POp::CBranch {
+                    target: 0x1010,
+                    cond: "je".into(),
+                },
+            ],
+        ),
+        pinstr(
+            0x1010,
+            vec![POp::Copy {
+                dst: PVar::Reg("rax"),
+                src: PVar::Const(1),
+                size: 8,
+            }],
+        ),
+        pinstr(
+            0x1020,
+            vec![POp::Copy {
+                dst: PVar::Reg("rax"),
+                src: PVar::Const(2),
+                size: 8,
+            }],
+        ),
+        pinstr(0x1030, vec![POp::Return]),
+    ];
+    let t = decompile_text(&cfg, &pi);
+    assert!(t.contains("} else {"), "if/else rendered:\n{}", t);
+    assert!(!t.contains("goto LAB_"), "join must not use gotos:\n{}", t);
+    assert!(!t.contains("LAB_"), "join label must be dropped:\n{}", t);
+    assert_eq!(
+        t.matches("return").count(),
+        1,
+        "shared epilogue must render once:\n{}",
+        t
+    );
+    assert_eq!(
+        t.matches('{').count(),
+        t.matches('}').count(),
+        "balanced braces:\n{}",
+        t
+    );
+}
+
+#[test]
+fn decompiler_loop_entered_from_outside_is_rendered() {
+    
+    
+    let cfg = CFG {
+        func_entry: 0x1000,
+        blocks: vec![
+            test_block(0, 0x1000, &[(1, EdgeKind::Jump)], &[]),
+            test_block(
+                1,
+                0x1010,
+                &[(2, EdgeKind::BranchTrue), (3, EdgeKind::BranchFalse)],
+                &[0, 2],
+            ),
+            test_block(2, 0x1020, &[(1, EdgeKind::Jump)], &[1]),
+            test_block(3, 0x1030, &[], &[1]),
+        ],
+        block_at: [(0x1000u64, 0usize), (0x1010, 1), (0x1020, 2), (0x1030, 3)]
+            .into_iter()
+            .collect(),
+    };
+    let imap = vec![
+        insn(0x1010, &[0x48, 0x83, 0xF8, 0x05], "cmp", "rax, 0x5"),
+        insn(0x1014, &[0x75, 0x0A], "jne", "0x1020"),
+    ];
+    let pi = vec![
+        pinstr(
+            0x1010,
+            vec![
+                POp::Cmp {
+                    a: PVar::Reg("rax"),
+                    b: PVar::Const(5),
+                    size: 8,
+                },
+                POp::CBranch {
+                    target: 0x1020,
+                    cond: "jne".into(),
+                },
+            ],
+        ),
+        pinstr(
+            0x1020,
+            vec![POp::IntAdd {
+                dst: PVar::Reg("rax"),
+                a: PVar::Reg("rax"),
+                b: PVar::Const(1),
+                size: 8,
+            }],
+        ),
+        pinstr(0x1030, vec![POp::Return]),
+    ];
+    let t = decompile_text_imap(&cfg, &pi, &imap);
+    assert!(t.contains("while ("), "loop header rendered:\n{}", t);
+    assert!(t.contains("return"), "exit block rendered:\n{}", t);
+    assert!(!t.contains("goto LAB_"), "no goto needed:\n{}", t);
+    assert_eq!(
+        t.matches('{').count(),
+        t.matches('}').count(),
+        "balanced braces:\n{}",
+        t
+    );
+}
+
+#[test]
+fn decompiler_loop_break_and_back_edge_render_structured() {
+    let cfg = CFG {
+        func_entry: 0x1000,
+        blocks: vec![
+            test_block(
+                0,
+                0x1000,
+                &[(3, EdgeKind::BranchTrue), (1, EdgeKind::BranchFalse)],
+                &[2],
+            ),
+            test_block(
+                1,
+                0x1010,
+                &[(3, EdgeKind::BranchTrue), (2, EdgeKind::BranchFalse)],
+                &[0],
+            ),
+            test_block(2, 0x1020, &[(0, EdgeKind::Jump)], &[1]),
+            test_block(3, 0x1030, &[], &[0, 1]),
+        ],
+        block_at: [(0x1000u64, 0usize), (0x1010, 1), (0x1020, 2), (0x1030, 3)]
+            .into_iter()
+            .collect(),
+    };
+    let imap = vec![
+        insn(0x1000, &[0x48, 0x83, 0xF8, 0x05], "cmp", "rax, 0x5"),
+        insn(0x1004, &[0x74, 0x2A], "je", "0x1030"),
+        insn(0x1010, &[0x48, 0x83, 0xFB, 0x00], "cmp", "rbx, 0x0"),
+        insn(0x1014, &[0x74, 0x1A], "je", "0x1030"),
+    ];
+    let pi = vec![
+        pinstr(
+            0x1000,
+            vec![
+                POp::Cmp {
+                    a: PVar::Reg("rax"),
+                    b: PVar::Const(5),
+                    size: 8,
+                },
+                POp::CBranch {
+                    target: 0x1030,
+                    cond: "je".into(),
+                },
+            ],
+        ),
+        pinstr(
+            0x1010,
+            vec![
+                POp::Cmp {
+                    a: PVar::Reg("rbx"),
+                    b: PVar::Const(0),
+                    size: 8,
+                },
+                POp::CBranch {
+                    target: 0x1030,
+                    cond: "je".into(),
+                },
+            ],
+        ),
+        pinstr(
+            0x1020,
+            vec![POp::IntAdd {
+                dst: PVar::Reg("rax"),
+                a: PVar::Reg("rax"),
+                b: PVar::Const(1),
+                size: 8,
+            }],
+        ),
+        pinstr(0x1030, vec![POp::Return]),
+    ];
+    let t = decompile_text_imap(&cfg, &pi, &imap);
+    assert!(t.contains("while ("), "loop rendered:\n{}", t);
+    assert!(t.contains("break;"), "exit edge becomes break:\n{}", t);
+    assert!(!t.contains("goto LAB_"), "back edge is not a goto:\n{}", t);
+    assert!(
+        !t.contains("continue;"),
+        "redundant continue is dropped:\n{}",
+        t
+    );
+    assert_eq!(
+        t.matches('{').count(),
+        t.matches('}').count(),
+        "balanced braces:\n{}",
+        t
     );
 }

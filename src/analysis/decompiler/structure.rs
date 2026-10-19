@@ -1,6 +1,6 @@
 use super::printing::*;
 use super::*;
-use crate::analysis::flow::cfg::{EdgeKind, CFG};
+use crate::analysis::flow::cfg::{CFG, EdgeKind};
 use crate::analysis::operands::canonical_reg;
 use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -27,6 +27,317 @@ pub(crate) fn compute_dowhile(
     out
 }
 
+
+
+
+
+
+
+pub(crate) struct Postdom {
+    ipdom: Vec<usize>,
+    exit: usize,
+}
+
+impl Postdom {
+    pub(crate) fn compute(cfg: &CFG) -> Self {
+        let n = cfg.blocks.len();
+        let exit = n;
+        let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
+        for (b, blk) in cfg.blocks.iter().enumerate() {
+            for e in &blk.successors {
+                if e.target < n {
+                    rev[e.target].push(b);
+                }
+            }
+            if blk.successors.is_empty() {
+                rev[exit].push(b);
+            }
+        }
+        let idom = compute_idoms(&rev, exit);
+        Self {
+            ipdom: idom.into_iter().take(n).collect(),
+            exit,
+        }
+    }
+
+    
+    
+    pub(crate) fn join_of(&self, block: usize) -> Option<usize> {
+        let j = *self.ipdom.get(block)?;
+        (j < self.exit).then_some(j)
+    }
+}
+
+
+fn compute_idoms(succs: &[Vec<usize>], entry: usize) -> Vec<usize> {
+    let n = succs.len();
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (b, ss) in succs.iter().enumerate() {
+        for &s in ss {
+            if s < n {
+                preds[s].push(b);
+            }
+        }
+    }
+
+    
+    let mut state = vec![0u8; n];
+    let mut post = Vec::with_capacity(n);
+    if entry < n {
+        state[entry] = 1;
+        let mut stack: Vec<(usize, usize)> = vec![(entry, 0)];
+        while let Some(top) = stack.last_mut() {
+            let (b, i) = *top;
+            match succs[b].get(i) {
+                Some(&t) if t < n => {
+                    top.1 += 1;
+                    if state[t] == 0 {
+                        state[t] = 1;
+                        stack.push((t, 0));
+                    }
+                }
+                Some(_) => top.1 += 1,
+                None => {
+                    state[b] = 2;
+                    post.push(b);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    let rpo: Vec<usize> = post.into_iter().rev().collect();
+    let mut rpo_index = vec![usize::MAX; n];
+    for (i, &b) in rpo.iter().enumerate() {
+        rpo_index[b] = i;
+    }
+
+    let mut idom = vec![usize::MAX; n];
+    if entry < n {
+        idom[entry] = entry;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &b in &rpo {
+            if b == entry {
+                continue;
+            }
+            let mut new_idom = usize::MAX;
+            for &p in &preds[b] {
+                if idom[p] == usize::MAX {
+                    continue;
+                }
+                new_idom = if new_idom == usize::MAX {
+                    p
+                } else {
+                    intersect(p, new_idom, &idom, &rpo_index)
+                };
+            }
+            if new_idom != usize::MAX && idom[b] != new_idom {
+                idom[b] = new_idom;
+                changed = true;
+            }
+        }
+    }
+    idom
+}
+
+fn intersect(mut a: usize, mut b: usize, idom: &[usize], rpo_index: &[usize]) -> usize {
+    while a != b {
+        while rpo_index[a] > rpo_index[b] {
+            a = idom[a];
+        }
+        while rpo_index[b] > rpo_index[a] {
+            b = idom[b];
+        }
+    }
+    a
+}
+
+pub(crate) struct LoopInfo {
+    pub(crate) header: usize,
+    pub(crate) body: HashSet<usize>,
+    pub(crate) exits: HashSet<usize>,
+}
+
+
+
+pub(crate) struct Loops {
+    infos: HashMap<usize, LoopInfo>,
+}
+
+impl Loops {
+    pub(crate) fn compute(cfg: &CFG, entry: usize, back: &[(usize, usize)]) -> Self {
+        let n = cfg.blocks.len();
+        let succs: Vec<Vec<usize>> = cfg
+            .blocks
+            .iter()
+            .map(|b| {
+                b.successors
+                    .iter()
+                    .map(|e| e.target)
+                    .filter(|&t| t < n)
+                    .collect()
+            })
+            .collect();
+        let idom = compute_idoms(&succs, entry);
+        let mut infos: HashMap<usize, LoopInfo> = HashMap::default();
+
+        for &(header, latch) in back {
+            if header >= n || latch >= n || !dominates(&idom, header, latch) {
+                continue;
+            }
+            let mut body: HashSet<usize> = HashSet::default();
+            body.insert(header);
+            let mut stack = vec![latch];
+            while let Some(b) = stack.pop() {
+                if b >= n || !body.insert(b) {
+                    continue;
+                }
+                for &p in &cfg.blocks[b].predecessors {
+                    stack.push(p);
+                }
+            }
+            let info = infos.entry(header).or_insert_with(|| LoopInfo {
+                header,
+                body: HashSet::default(),
+                exits: HashSet::default(),
+            });
+            info.body.extend(body);
+        }
+
+        for info in infos.values_mut() {
+            let mut exits: HashSet<usize> = HashSet::default();
+            for &b in &info.body {
+                for e in &cfg.blocks[b].successors {
+                    if e.target < n && !info.body.contains(&e.target) {
+                        exits.insert(e.target);
+                    }
+                }
+            }
+            info.exits = exits;
+        }
+
+        Self { infos }
+    }
+
+    pub(crate) fn get(&self, header: usize) -> Option<&LoopInfo> {
+        self.infos.get(&header)
+    }
+
+    
+    pub(crate) fn enclosing(&self, block: usize) -> Vec<usize> {
+        let mut out: Vec<usize> = self
+            .infos
+            .values()
+            .filter(|info| info.body.contains(&block))
+            .map(|info| info.header)
+            .collect();
+        out.sort_by_key(|h| self.infos[h].body.len());
+        out
+    }
+
+    pub(crate) fn edge_action(&self, from: usize, target: usize) -> Option<EdgeAction> {
+        for h in self.enclosing(from) {
+            let Some(info) = self.infos.get(&h) else {
+                continue;
+            };
+            if target == h {
+                return Some(EdgeAction::Continue);
+            }
+            if info.exits.contains(&target) {
+                return Some(EdgeAction::Break);
+            }
+        }
+        None
+    }
+}
+
+impl LoopInfo {
+    pub(crate) fn body_entry(&self, cfg: &CFG) -> Option<usize> {
+        let header = cfg.blocks.get(self.header)?;
+        header
+            .successors
+            .iter()
+            .map(|e| e.target)
+            .find(|t| self.body.contains(t))
+    }
+
+    pub(crate) fn exit_edge(&self, cfg: &CFG) -> Option<(usize, EdgeKind)> {
+        let header = cfg.blocks.get(self.header)?;
+        header
+            .successors
+            .iter()
+            .find(|e| !self.body.contains(&e.target) && self.exits.contains(&e.target))
+            .map(|e| (e.target, e.kind))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum EdgeAction {
+    Break,
+    Continue,
+}
+
+fn dominates(idom: &[usize], a: usize, mut b: usize) -> bool {
+    loop {
+        if b == a {
+            return true;
+        }
+        let d = idom.get(b).copied().unwrap_or(usize::MAX);
+        if d == b || d == usize::MAX {
+            return false;
+        }
+        b = d;
+    }
+}
+
+fn negate_cond(cond: &str) -> String {
+    if cond == "cond" {
+        return "cond".into();
+    }
+    if let Some(inner) = cond.strip_prefix("!(").and_then(|s| s.strip_suffix(')')) {
+        return inner.to_string();
+    }
+    for (op, inv) in [
+        (" == ", " != "),
+        (" != ", " == "),
+        (" <= ", " > "),
+        (" >= ", " < "),
+        (" < ", " >= "),
+        (" > ", " <= "),
+    ] {
+        if let Some((a, b)) = cond.split_once(op) {
+            return format!("{}{}{}", a, inv, b);
+        }
+    }
+    format!("!({})", cond)
+}
+
+fn sets_flags(op: &POp) -> bool {
+    matches!(
+        op,
+        POp::Cmp { .. }
+            | POp::Test { .. }
+            | POp::FloatCmp { .. }
+            | POp::IntAdd { .. }
+            | POp::IntSub { .. }
+            | POp::IntMul { .. }
+            | POp::IntDiv { .. }
+            | POp::IntSDiv { .. }
+            | POp::IntAnd { .. }
+            | POp::IntOr { .. }
+            | POp::IntXor { .. }
+            | POp::IntLeft { .. }
+            | POp::IntShr { .. }
+            | POp::IntSar { .. }
+    )
+}
+
+fn dead_safe(op: &POp) -> bool {
+    is_pure(op) || matches!(op, POp::Cvt { .. })
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct WalkCtx<'a> {
     pub(crate) cfg: &'a CFG,
@@ -38,6 +349,8 @@ pub(crate) struct WalkCtx<'a> {
     pub(crate) dowhile: &'a HashSet<usize>,
     pub(crate) dead: &'a HashSet<(usize, usize)>,
     pub(crate) cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    pub(crate) postdom: &'a Postdom,
+    pub(crate) loops: &'a Loops,
     pub(crate) is64: bool,
     pub(crate) hints: &'a TypeHints,
 }
@@ -50,6 +363,21 @@ pub(crate) fn walk_block(
     indent: u32,
     depth: usize,
 ) {
+    walk_region(ctx, block_id, visited, lines, indent, depth, &[]);
+}
+
+fn walk_region(
+    ctx: &WalkCtx<'_>,
+    block_id: usize,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) {
+    if stops.contains(&block_id) {
+        return;
+    }
     let WalkCtx {
         cfg,
         bops,
@@ -60,6 +388,8 @@ pub(crate) fn walk_block(
         dowhile,
         dead,
         cancel,
+        postdom,
+        loops,
         is64,
         hints,
     } = *ctx;
@@ -83,8 +413,16 @@ pub(crate) fn walk_block(
     }
     let block = &cfg.blocks[block_id];
 
-    let is_loop_header = back_edges.contains_key(&block_id);
+    let loop_info = loops.get(block_id);
+    let is_loop_header = loop_info.is_some();
     let is_dowhile = dowhile.contains(&block_id);
+    let body_indent = if is_loop_header || is_dowhile {
+        indent + 1
+    } else {
+        indent
+    };
+    let mut loop_exit: Option<usize> = None;
+    let mut loop_body_entry: Option<usize> = None;
 
     if is_dowhile {
         lines.push(PseudoLine {
@@ -93,23 +431,31 @@ pub(crate) fn walk_block(
             kind: LineKind::Branch,
             source_addr: Some(block.start),
         });
-    } else if is_loop_header {
-        let back_src = back_edges[&block_id];
-        let consts = block_consts.get(back_src).cloned().unwrap_or_default();
-        let mut cond = recover_condition(cfg, bops, imap, back_src, &consts, Some(hints));
-        if cond == "cond" {
-            let hconsts = block_consts.get(block_id).cloned().unwrap_or_default();
-            let hcond = recover_condition(cfg, bops, imap, block_id, &hconsts, Some(hints));
-            if hcond != "cond" {
-                cond = format!("!({})", hcond);
-            }
+    } else if let Some(info) = loop_info {
+        if let Some((exit, kind)) = info.exit_edge(cfg) {
+            let consts = block_consts.get(block_id).cloned().unwrap_or_default();
+            let base = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
+            let cond = match kind {
+                EdgeKind::BranchTrue => negate_cond(&base),
+                _ => base,
+            };
+            lines.push(PseudoLine {
+                indent,
+                text: format!("while ({}) {{", cond),
+                kind: LineKind::Branch,
+                source_addr: Some(block.start),
+            });
+            loop_exit = Some(exit);
+            loop_body_entry = info.body_entry(cfg);
+        } else {
+            lines.push(PseudoLine {
+                indent,
+                text: "while (1) {".into(),
+                kind: LineKind::Branch,
+                source_addr: Some(block.start),
+            });
+            loop_body_entry = info.body_entry(cfg);
         }
-        lines.push(PseudoLine {
-            indent,
-            text: format!("while ({}) {{", cond),
-            kind: LineKind::Branch,
-            source_addr: Some(cfg.blocks[back_src].start),
-        });
     } else if block.predecessors.len() > 1 || (block_id != 0 && block.predecessors.is_empty()) {
         lines.push(PseudoLine {
             indent: 0,
@@ -117,6 +463,18 @@ pub(crate) fn walk_block(
             kind: LineKind::Label,
             source_addr: Some(block.start),
         });
+    }
+
+    
+    
+    let loop_indent = indent;
+    macro_rules! finish {
+        () => {{
+            if is_dowhile {
+                close_dowhile(ctx, block_id, visited, lines, loop_indent, depth, stops);
+            }
+            return;
+        }};
     }
 
     let seed: HashMap<&'static str, Lattice> =
@@ -150,11 +508,9 @@ pub(crate) fn walk_block(
             }
         }
     }
-    if !block_has_jcc {
-        for (i, (_, op)) in ops.iter().enumerate() {
-            for r in reads_regs(op) {
-                last_use.insert(r, i);
-            }
+    for (i, (_, op)) in ops.iter().enumerate() {
+        for r in reads_regs(op) {
+            last_use.insert(r, i);
         }
     }
 
@@ -164,13 +520,15 @@ pub(crate) fn walk_block(
     let mut push_args: Vec<PVal> = Vec::new();
 
     for (i, (addr, op)) in ops.iter().enumerate() {
-        if !block_has_jcc && is_pure(op)
-            && let Some(dst_reg) = written_reg(op) {
-                let dead_local = last_use.get(dst_reg).map(|&u| u <= i).unwrap_or(true);
-                if dead_local && !live_out.contains(dst_reg) {
-                    continue;
-                }
+        if dead_safe(op)
+            && let Some(dst_reg) = written_reg(op)
+        {
+            let dead_local = last_use.get(dst_reg).map(|&u| u <= i).unwrap_or(true);
+            let removable = !block_has_jcc || !sets_flags(op);
+            if removable && dead_local && !live_out.contains(dst_reg) {
+                continue;
             }
+        }
         if dead.contains(&(block_id, i)) {
             continue;
         }
@@ -181,20 +539,21 @@ pub(crate) fn walk_block(
         };
         if let Some((ref key, _)) = ck
             && let Some(holder) = cse_map.get(key).map(|(h, _)| *h)
-                && let Some(dst) = written_reg(op) {
-                    if holder != dst {
-                        let dstv = PVar::Reg(canonical_reg(dst));
-                        track(&mut reg_values, &dstv, PVal::E(holder.to_string()));
-                        lines.push(PseudoLine {
-                            indent,
-                            text: format!("{} = {};", fmt_var(&dstv), holder),
-                            kind: LineKind::Assignment,
-                            source_addr: Some(*addr),
-                        });
-                    }
-                    cse_invalidate(&mut cse_map, dst);
-                    continue;
-                }
+            && let Some(dst) = written_reg(op)
+        {
+            if holder != dst {
+                let dstv = PVar::Reg(canonical_reg(dst));
+                track(&mut reg_values, &dstv, PVal::E(holder.to_string()));
+                lines.push(PseudoLine {
+                    indent: body_indent,
+                    text: format!("{} = {};", fmt_var(&dstv), holder),
+                    kind: LineKind::Assignment,
+                    source_addr: Some(*addr),
+                });
+            }
+            cse_invalidate(&mut cse_map, dst);
+            continue;
+        }
         let rendered = render_op(
             op,
             *addr,
@@ -204,21 +563,21 @@ pub(crate) fn walk_block(
             hints,
             &mut push_args,
         );
-        if !block_has_jcc
-            && let Some(w) = written_reg(op) {
-                cse_invalidate(&mut cse_map, w);
-            }
+        if !block_has_jcc && let Some(w) = written_reg(op) {
+            cse_invalidate(&mut cse_map, w);
+        }
         if let Some((text, kind)) = rendered {
             lines.push(PseudoLine {
-                indent,
+                indent: body_indent,
                 text,
                 kind,
                 source_addr: Some(*addr),
             });
             if let Some((key, oregs)) = ck
-                && let Some(dst) = written_reg(op) {
-                    cse_map.insert(key, (dst, oregs));
-                }
+                && let Some(dst) = written_reg(op)
+            {
+                cse_map.insert(key, (dst, oregs));
+            }
         }
     }
 
@@ -234,12 +593,33 @@ pub(crate) fn walk_block(
     let emitted: usize = lines[lines_before..].iter().map(|l| l.text.len() + 8).sum();
     hints.out_bytes.set(hints.out_bytes.get() + emitted);
     let succs = &block.successors;
+    if is_loop_header && !is_dowhile {
+        if let Some(entry) = loop_body_entry
+            && !visited.contains(&entry)
+        {
+            walk_region(ctx, entry, visited, lines, body_indent, depth + 1, stops);
+        }
+        lines.push(PseudoLine {
+            indent,
+            text: "}".into(),
+            kind: LineKind::Branch,
+            source_addr: None,
+        });
+        if let Some(exit) = loop_exit
+            && !visited.contains(&exit)
+            && !stops.contains(&exit)
+        {
+            walk_region(ctx, exit, visited, lines, indent, depth + 1, stops);
+        }
+        return;
+    }
     if let Some(&last_addr) = addrs.last()
-        && let Some(di) = imap_get(imap, last_addr) {
-            let m = di.mnemonic;
-            let has_true = succs.iter().any(|e| e.kind == EdgeKind::BranchTrue);
-            if m.starts_with('j') && m != "jmp" && m != "jecxz" && !has_true {
-                lines.push(PseudoLine {
+        && let Some(di) = imap_get(imap, last_addr)
+    {
+        let m = di.mnemonic;
+        let has_true = succs.iter().any(|e| e.kind == EdgeKind::BranchTrue);
+        if m.starts_with('j') && m != "jmp" && m != "jecxz" && !has_true {
+            lines.push(PseudoLine {
                     indent,
                     text: format!(
                         "// WARNING: branch '{} {}' target not decoded here - guard/branch is MISSING from this render; check disasm",
@@ -248,8 +628,8 @@ pub(crate) fn walk_block(
                     kind: LineKind::Comment,
                     source_addr: Some(last_addr),
                 });
-            }
         }
+    }
     if succs.is_empty() {
         if let Some((last_addr, last_op)) = ops.last()
             && let POp::Branch { target } = &**last_op
@@ -257,9 +637,10 @@ pub(crate) fn walk_block(
             let target = *target;
             let args = take_call_args(&reg_values, is64, &mut push_args);
             let (text, kind) = match func_lookup.get(&target) {
-                Some(name) if args.is_empty() => {
-                    (format!("return {}();  // tail call", name), LineKind::Return)
-                }
+                Some(name) if args.is_empty() => (
+                    format!("return {}();  // tail call", name),
+                    LineKind::Return,
+                ),
                 Some(name) => (
                     format!("return {}({});  // tail call", name, args.join(", ")),
                     LineKind::Return,
@@ -281,61 +662,140 @@ pub(crate) fn walk_block(
         }
     } else if succs.len() == 1 {
         let edge = &succs[0];
-        match edge.kind {
-            EdgeKind::Jump => {
-                if back_edges.contains_key(&edge.target) {
-                } else if !visited.contains(&edge.target)
-                    && cfg.blocks[edge.target].predecessors.len() == 1
-                {
-                    walk_block(ctx, edge.target, visited, lines, indent, depth + 1);
-                } else {
-                    lines.push(PseudoLine {
-                        indent,
-                        text: format!("goto LAB_{:X};", cfg.blocks[edge.target].start),
-                        kind: LineKind::Branch,
-                        source_addr: None,
-                    });
+        if let Some(action) = loop_action(loops, visited, block_id, edge.target) {
+            push_edge_action(lines, indent, action);
+        } else {
+            match edge.kind {
+                EdgeKind::Jump => {
+                    if stops.contains(&edge.target) {
+                        
+                    } else if !visited.contains(&edge.target)
+                        && (cfg.blocks[edge.target].predecessors.len() == 1
+                            || loops.get(edge.target).is_some())
+                    {
+                        walk_region(
+                            ctx,
+                            edge.target,
+                            visited,
+                            lines,
+                            body_indent,
+                            depth + 1,
+                            stops,
+                        );
+                    } else {
+                        lines.push(PseudoLine {
+                            indent,
+                            text: format!("goto LAB_{:X};", cfg.blocks[edge.target].start),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                    }
                 }
-            }
-            _ => {
-                if !visited.contains(&edge.target) {
-                    walk_block(ctx, edge.target, visited, lines, indent, depth + 1);
+                _ => {
+                    if !visited.contains(&edge.target) {
+                        walk_region(
+                            ctx,
+                            edge.target,
+                            visited,
+                            lines,
+                            body_indent,
+                            depth + 1,
+                            stops,
+                        );
+                    }
                 }
             }
         }
     } else {
+        
+        
+        let indent = body_indent;
         let true_edge = succs.iter().find(|e| e.kind == EdgeKind::BranchTrue);
         let false_edge = succs.iter().find(|e| e.kind == EdgeKind::BranchFalse);
 
         if let (Some(t), Some(f)) = (true_edge, false_edge) {
-            let t_loops_back = back_edges.contains_key(&t.target);
-            let f_loops_back = back_edges.contains_key(&f.target);
+            let enclosing = loops.enclosing(block_id);
+            let t_loops_back = enclosing.contains(&t.target);
+            let f_loops_back = enclosing.contains(&f.target);
 
-            let dw_close = if t_loops_back && dowhile.contains(&t.target) {
-                Some((f.target, true))
-            } else if f_loops_back && dowhile.contains(&f.target) {
-                Some((t.target, false))
-            } else {
-                None
-            };
-            if let Some((exit, cond_repeats)) = dw_close {
+            
+            
+            let is_dowhile_latch = dowhile
+                .iter()
+                .any(|h| back_edges.get(h) == Some(&block_id) && visited.contains(h));
+            if is_dowhile_latch {
+                finish!();
+            }
+
+            
+            let t_action = loop_action(loops, visited, block_id, t.target);
+            let f_action = loop_action(loops, visited, block_id, f.target);
+            if t_action.is_some() || f_action.is_some() {
                 let consts = block_consts.get(block_id).cloned().unwrap_or_default();
-                let cond = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
-                let text = if cond_repeats {
-                    format!("}} while ({});", cond)
-                } else {
-                    format!("}} while (!({}));", cond)
-                };
-                lines.push(PseudoLine {
-                    indent: indent.saturating_sub(1),
-                    text,
-                    kind: LineKind::Branch,
-                    source_addr: None,
-                });
-                if !visited.contains(&exit) {
-                    walk_block(ctx, exit, visited, lines, indent, depth + 1);
+                let mut cond = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
+                match (t_action, f_action) {
+                    (Some(ta), Some(fa)) => {
+                        lines.push(PseudoLine {
+                            indent,
+                            text: format!("if ({}) {{", cond),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                        push_edge_action(lines, indent + 1, ta);
+                        lines.push(PseudoLine {
+                            indent,
+                            text: "} else {".into(),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                        push_edge_action(lines, indent + 1, fa);
+                        lines.push(PseudoLine {
+                            indent,
+                            text: "}".into(),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                    }
+                    (Some(ta), None) => {
+                        lines.push(PseudoLine {
+                            indent,
+                            text: format!("if ({}) {{", cond),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                        push_edge_action(lines, indent + 1, ta);
+                        lines.push(PseudoLine {
+                            indent,
+                            text: "}".into(),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                        if !visited.contains(&f.target) {
+                            walk_region(ctx, f.target, visited, lines, indent, depth + 1, stops);
+                        }
+                    }
+                    (None, Some(fa)) => {
+                        cond = negate_cond(&cond);
+                        lines.push(PseudoLine {
+                            indent,
+                            text: format!("if ({}) {{", cond),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                        push_edge_action(lines, indent + 1, fa);
+                        lines.push(PseudoLine {
+                            indent,
+                            text: "}".into(),
+                            kind: LineKind::Branch,
+                            source_addr: None,
+                        });
+                        if !visited.contains(&t.target) {
+                            walk_region(ctx, t.target, visited, lines, indent, depth + 1, stops);
+                        }
+                    }
+                    (None, None) => {}
                 }
-                return;
+                finish!();
             }
 
             if t_loops_back || f_loops_back {
@@ -349,7 +809,7 @@ pub(crate) fn walk_block(
                         source_addr: None,
                     });
                     if !visited.contains(&t.target) {
-                        walk_block(ctx, t.target, visited, lines, indent + 1, depth + 1);
+                        walk_region(ctx, t.target, visited, lines, indent + 1, depth + 1, stops);
                     } else {
                         lines.push(PseudoLine {
                             indent: indent + 1,
@@ -365,7 +825,7 @@ pub(crate) fn walk_block(
                         source_addr: None,
                     });
                     if !visited.contains(&f.target) {
-                        walk_block(ctx, f.target, visited, lines, indent, depth + 1);
+                        walk_region(ctx, f.target, visited, lines, indent, depth + 1, stops);
                     }
                 } else if t_loops_back {
                     lines.push(PseudoLine {
@@ -375,7 +835,7 @@ pub(crate) fn walk_block(
                         source_addr: None,
                     });
                     if !visited.contains(&f.target) {
-                        walk_block(ctx, f.target, visited, lines, indent + 1, depth + 1);
+                        walk_region(ctx, f.target, visited, lines, indent + 1, depth + 1, stops);
                     } else {
                         lines.push(PseudoLine {
                             indent: indent + 1,
@@ -391,10 +851,104 @@ pub(crate) fn walk_block(
                         source_addr: None,
                     });
                     if !visited.contains(&t.target) {
-                        walk_block(ctx, t.target, visited, lines, indent, depth + 1);
+                        walk_region(ctx, t.target, visited, lines, indent, depth + 1, stops);
                     }
                 }
-                return;
+                finish!();
+            }
+
+            
+            
+            
+            
+            
+            
+            
+            let join = if is_dowhile {
+                back_edges.get(&block_id).copied()
+            } else {
+                postdom.join_of(block_id)
+            };
+            if let Some(join) = join
+                && join != block_id
+                && !visited.contains(&join)
+            {
+                let consts = block_consts.get(block_id).cloned().unwrap_or_default();
+                let mut cond = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
+                let mut arm_stops = stops.to_vec();
+                if !arm_stops.contains(&join) {
+                    arm_stops.push(join);
+                }
+                let single_arm = if t.target == join {
+                    cond = negate_cond(&cond);
+                    Some(f.target)
+                } else if f.target == join {
+                    Some(t.target)
+                } else {
+                    None
+                };
+                lines.push(PseudoLine {
+                    indent,
+                    text: format!("if ({}) {{", cond),
+                    kind: LineKind::Branch,
+                    source_addr: None,
+                });
+                if let Some(arm) = single_arm {
+                    walk_arm(ctx, arm, visited, lines, indent + 1, depth, &arm_stops);
+                } else {
+                    walk_arm(ctx, t.target, visited, lines, indent + 1, depth, &arm_stops);
+                    lines.push(PseudoLine {
+                        indent,
+                        text: "} else {".into(),
+                        kind: LineKind::Branch,
+                        source_addr: None,
+                    });
+                    walk_arm(ctx, f.target, visited, lines, indent + 1, depth, &arm_stops);
+                }
+                lines.push(PseudoLine {
+                    indent,
+                    text: "}".into(),
+                    kind: LineKind::Branch,
+                    source_addr: None,
+                });
+                if !stops.contains(&join) && !visited.contains(&join) {
+                    walk_region(ctx, join, visited, lines, indent, depth + 1, stops);
+                }
+                finish!();
+            }
+
+            
+            
+            
+            
+            let t_exit = reaches_only_exit(cfg, t.target, &[f.target]);
+            let f_exit = reaches_only_exit(cfg, f.target, &[t.target]);
+            if t_exit != f_exit {
+                let consts = block_consts.get(block_id).cloned().unwrap_or_default();
+                let mut cond = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
+                let (arm, cont) = if t_exit {
+                    (t.target, f.target)
+                } else {
+                    cond = negate_cond(&cond);
+                    (f.target, t.target)
+                };
+                lines.push(PseudoLine {
+                    indent,
+                    text: format!("if ({}) {{", cond),
+                    kind: LineKind::Branch,
+                    source_addr: None,
+                });
+                walk_arm(ctx, arm, visited, lines, indent + 1, depth, stops);
+                lines.push(PseudoLine {
+                    indent,
+                    text: "}".into(),
+                    kind: LineKind::Branch,
+                    source_addr: None,
+                });
+                if !visited.contains(&cont) {
+                    walk_region(ctx, cont, visited, lines, indent, depth + 1, stops);
+                }
+                finish!();
             }
 
             let consts = block_consts.get(block_id).cloned().unwrap_or_default();
@@ -406,7 +960,7 @@ pub(crate) fn walk_block(
                 source_addr: None,
             });
             if !visited.contains(&t.target) {
-                walk_block(ctx, t.target, visited, lines, indent + 1, depth + 1);
+                walk_region(ctx, t.target, visited, lines, indent + 1, depth + 1, stops);
             } else {
                 lines.push(PseudoLine {
                     indent: indent + 1,
@@ -422,7 +976,7 @@ pub(crate) fn walk_block(
                 source_addr: None,
             });
             if !visited.contains(&f.target) {
-                walk_block(ctx, f.target, visited, lines, indent + 1, depth + 1);
+                walk_region(ctx, f.target, visited, lines, indent + 1, depth + 1, stops);
             } else {
                 lines.push(PseudoLine {
                     indent: indent + 1,
@@ -440,12 +994,275 @@ pub(crate) fn walk_block(
         }
     }
 
-    if is_loop_header && !dowhile.contains(&block_id) {
+    if is_dowhile {
+        close_dowhile(ctx, block_id, visited, lines, indent, depth, stops);
+    } else if is_loop_header {
         lines.push(PseudoLine {
-            indent: indent.saturating_sub(1),
+            indent,
             text: "}".into(),
             kind: LineKind::Branch,
             source_addr: None,
         });
+    }
+}
+
+fn close_dowhile(
+    ctx: &WalkCtx<'_>,
+    block_id: usize,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) {
+    let WalkCtx {
+        cfg,
+        bops,
+        imap,
+        back_edges,
+        block_consts,
+        hints,
+        ..
+    } = *ctx;
+    let Some(latch) = back_edges.get(&block_id).copied() else {
+        
+        lines.push(PseudoLine {
+            indent,
+            text: "} while (1);".into(),
+            kind: LineKind::Branch,
+            source_addr: None,
+        });
+        return;
+    };
+    let consts = block_consts.get(latch).cloned().unwrap_or_default();
+    let cond = recover_condition(cfg, bops, imap, latch, &consts, Some(hints));
+    let repeats = cfg.blocks[latch]
+        .successors
+        .iter()
+        .any(|e| e.target == block_id && e.kind == EdgeKind::BranchTrue);
+    lines.push(PseudoLine {
+        indent,
+        text: if repeats {
+            format!("}} while ({});", cond)
+        } else {
+            format!("}} while (!({}));", cond)
+        },
+        kind: LineKind::Branch,
+        source_addr: None,
+    });
+    for e in &cfg.blocks[latch].successors {
+        if e.target != block_id
+            && !visited.contains(&e.target)
+            && !stops.contains(&e.target)
+        {
+            walk_region(ctx, e.target, visited, lines, indent, depth + 1, stops);
+        }
+    }
+}
+
+fn walk_arm(
+    ctx: &WalkCtx<'_>,
+    block: usize,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) {
+    if block >= ctx.cfg.blocks.len() {
+        return;
+    }
+    if visited.contains(&block) {
+        lines.push(PseudoLine {
+            indent,
+            text: format!("goto LAB_{:X};", ctx.cfg.blocks[block].start),
+            kind: LineKind::Branch,
+            source_addr: None,
+        });
+    } else {
+        walk_region(ctx, block, visited, lines, indent, depth + 1, stops);
+    }
+}
+
+
+
+fn reaches_only_exit(cfg: &CFG, start: usize, avoid: &[usize]) -> bool {
+    let mut seen: HashSet<usize> = HashSet::default();
+    let mut stack = vec![start];
+    let mut terminal = false;
+    while let Some(b) = stack.pop() {
+        if avoid.contains(&b) {
+            return false;
+        }
+        if !seen.insert(b) {
+            continue;
+        }
+        let Some(block) = cfg.blocks.get(b) else {
+            continue;
+        };
+        if block.successors.is_empty() {
+            terminal = true;
+            continue;
+        }
+        for e in &block.successors {
+            stack.push(e.target);
+        }
+    }
+    terminal
+}
+
+
+
+
+fn loop_action(
+    loops: &Loops,
+    visited: &HashSet<usize>,
+    from: usize,
+    target: usize,
+) -> Option<EdgeAction> {
+    let header = loops.enclosing(from).into_iter().next()?;
+    if !visited.contains(&header) {
+        return None;
+    }
+    loops.edge_action(from, target)
+}
+
+fn push_edge_action(lines: &mut Vec<PseudoLine>, indent: u32, action: EdgeAction) {
+    lines.push(PseudoLine {
+        indent,
+        text: match action {
+            EdgeAction::Break => "break;".into(),
+            EdgeAction::Continue => "continue;".into(),
+        },
+        kind: LineKind::Branch,
+        source_addr: None,
+    });
+}
+
+fn label_of(text: &str) -> Option<&str> {
+    let t = text.trim();
+    let name = t.strip_suffix(':')?;
+    name.starts_with("LAB_").then_some(name)
+}
+
+fn goto_target(text: &str) -> Option<&str> {
+    let t = text.trim();
+    let rest = t.strip_prefix("goto ")?;
+    let name = rest.strip_suffix(';')?;
+    name.starts_with("LAB_").then_some(name)
+}
+
+
+
+pub(crate) fn cleanup_labels(lines: &mut Vec<PseudoLine>) {
+    loop {
+        let mut refs: HashSet<String> = HashSet::default();
+        for l in lines.iter() {
+            if let Some(t) = goto_target(&l.text) {
+                refs.insert(t.to_string());
+            }
+        }
+        let before = lines.len();
+        lines.retain(|l| {
+            l.kind != LineKind::Label || label_of(&l.text).is_some_and(|name| refs.contains(name))
+        });
+        let mut i = 0;
+        while i < lines.len() {
+            let target = goto_target(&lines[i].text).map(str::to_string);
+            if let Some(target) = target {
+                let next = lines[i + 1..].iter().find(|l| !l.text.trim().is_empty());
+                if next.is_some_and(|l| {
+                    l.kind == LineKind::Label && label_of(&l.text) == Some(target.as_str())
+                }) {
+                    lines.remove(i);
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        if lines.len() == before {
+            break;
+        }
+    }
+    drop_redundant_continues(lines);
+}
+
+
+
+
+fn drop_redundant_continues(lines: &mut Vec<PseudoLine>) {
+    let mut loop_close: HashSet<usize> = HashSet::default();
+    let mut stack: Vec<bool> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let code = l.text.split("//").next().unwrap_or("");
+        let t = l.text.trim_start();
+        let mut open_is_loop = t.starts_with("while")
+            || t.starts_with("do")
+            || t.starts_with("for")
+            || t.starts_with("loop");
+        if t.starts_with("} else") {
+            open_is_loop = false;
+        }
+        for ch in code.chars() {
+            match ch {
+                '{' => stack.push(open_is_loop),
+                '}' if stack.pop().unwrap_or(false) => {
+                    loop_close.insert(i);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].text.trim() == "continue;" {
+            let next = (i + 1..lines.len()).find(|&j| !lines[j].text.trim().is_empty());
+            if next.is_some_and(|j| loop_close.contains(&j)) {
+                lines.remove(i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    fn line(text: &str, kind: LineKind) -> PseudoLine {
+        PseudoLine {
+            indent: 0,
+            text: text.into(),
+            kind,
+            source_addr: None,
+        }
+    }
+
+    #[test]
+    fn keeps_continue_inside_nested_if() {
+        let mut lines = vec![
+            line("while (x) {", LineKind::Branch),
+            line("if (y) {", LineKind::Branch),
+            line("continue;", LineKind::Branch),
+            line("}", LineKind::Branch),
+            line("rax = 1;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+        ];
+        drop_redundant_continues(&mut lines);
+        assert!(lines.iter().any(|l| l.text == "continue;"), "continue in if kept");
+    }
+
+    #[test]
+    fn drops_continue_at_loop_end() {
+        let mut lines = vec![
+            line("while (x) {", LineKind::Branch),
+            line("rax = 1;", LineKind::Assignment),
+            line("continue;", LineKind::Branch),
+            line("}", LineKind::Branch),
+        ];
+        drop_redundant_continues(&mut lines);
+        assert!(!lines.iter().any(|l| l.text == "continue;"), "redundant continue dropped");
     }
 }
