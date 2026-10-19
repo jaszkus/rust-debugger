@@ -24,7 +24,12 @@ pub(crate) fn parse_elf(
             let name = name.to_string();
             Some(Section {
                 name,
-                vaddr: s.sh_addr + pie_base,
+                
+                
+                
+                
+                
+                vaddr: if alloc { s.sh_addr + pie_base } else { 0 },
                 size: s.sh_size,
                 offset: s.sh_offset,
                 is_executable: s.sh_flags & 0x4 != 0,
@@ -110,6 +115,36 @@ pub(crate) fn parse_elf(
         }
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    let sym_name_of = |idx: usize| -> Option<String> {
+        let name = elf.dynstrtab.get_at(elf.dynsyms.get(idx)?.st_name)?;
+        (!name.is_empty()).then(|| name.to_string())
+    };
+    let mut got_addrs: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
+    for rel in elf.dynrelas.iter().chain(elf.pltrelocs.iter()) {
+        if let Some(name) = sym_name_of(rel.r_sym) {
+            got_addrs
+                .entry(name)
+                .or_insert(rel.r_offset + pie_base);
+        }
+    }
+    for (_, sec) in elf.shdr_relocs.iter() {
+        for rel in sec.iter() {
+            if let Some(name) = sym_name_of(rel.r_sym) {
+                got_addrs.entry(name).or_insert(rel.r_offset + pie_base);
+            }
+        }
+    }
     let plt_sec = sections
         .iter()
         .find(|s| s.name == ".plt.sec")
@@ -121,7 +156,7 @@ pub(crate) fn parse_elf(
         "arm" => 22,
         _ => u32::MAX,
     };
-    let mut import_addrs: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut plt_addrs: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     if let (Some(plt), Some(ps)) = (plt_va, plt_sec) {
         let header: u64 = if ps.name == ".plt.sec" {
             0
@@ -138,17 +173,27 @@ pub(crate) fn parse_elf(
             .filter(|r| r.r_type == jump_slot_type)
             .count()
             .max(1) as u64;
-        let entry_size = (ps.size.saturating_sub(header) / n).max(1);
+        let computed = ps.size.saturating_sub(header) / n;
+        
+        
+        let abi_entry: u64 = match arch {
+            "x86_64" | "x86" | "aarch64" => 16,
+            "arm" => 8,
+            _ => 16,
+        };
+        let entry_size = if computed == 0 || computed > 64 {
+            abi_entry
+        } else {
+            computed
+        };
         let mut i: u64 = 0;
         for rel in elf.pltrelocs.iter() {
             if rel.r_type != jump_slot_type {
                 continue;
             }
-            if let Some(sym) = elf.dynsyms.get(rel.r_sym)
-                && let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
-                    import_addrs
-                        .insert(name.to_string(), plt.wrapping_add(header + i * entry_size));
-                }
+            if let Some(name) = sym_name_of(rel.r_sym) {
+                plt_addrs.insert(name, plt.wrapping_add(header + i * entry_size));
+            }
             i += 1;
         }
     }
@@ -167,7 +212,17 @@ pub(crate) fn parse_elf(
             } else {
                 String::new()
             };
-            let addr = import_addrs.get(&name).copied().unwrap_or(s.st_value + pie_base);
+            let addr = plt_addrs
+                .get(&name)
+                .or_else(|| got_addrs.get(&name))
+                .copied()
+                .unwrap_or_else(|| {
+                    if s.st_value != 0 {
+                        s.st_value + pie_base
+                    } else {
+                        0
+                    }
+                });
             Some(Import {
                 name,
                 library: lib,
