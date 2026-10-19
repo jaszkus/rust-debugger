@@ -270,11 +270,215 @@ pub(crate) fn cse_repeated_expressions(lines: &mut [PseudoLine]) {
 }
 
 fn is_cse_expr(rhs: &str) -> bool {
-    rhs.starts_with("&") || rhs.starts_with("*(")
+    !rhs.is_empty()
+        && !is_identifier(rhs)
+        && !is_number(rhs)
+        && !rhs.contains(" = ")
+}
+
+
+
+
+
+
+
+
+
+
+
+pub(crate) fn inline_single_use_temps(lines: &mut Vec<PseudoLine>) {
+    for _ in 0..8 {
+        if !inline_temps_pass(lines) {
+            break;
+        }
+    }
+}
+
+fn inline_temps_pass(lines: &mut Vec<PseudoLine>) -> bool {
+    let mut assign: HashMap<String, (usize, String)> = HashMap::default();
+    let mut dup: HashSet<String> = HashSet::default();
+    let mut reads: HashMap<String, usize> = HashMap::default();
+
+    for (i, line) in lines.iter().enumerate() {
+        let code = line.text.split("//").next().unwrap_or("");
+        if let Some((lhs, rhs)) = assignment_parts(&line.text) {
+            if is_inlinable(lhs)
+                && assign
+                    .insert(lhs.to_string(), (i, rhs.to_string()))
+                    .is_some()
+            {
+                dup.insert(lhs.to_string());
+            }
+            for_each_ident(rhs, |w| {
+                if is_inlinable(w) {
+                    *reads.entry(w.to_string()).or_insert(0) += 1;
+                }
+            });
+        } else {
+            for_each_ident(code, |w| {
+                if is_inlinable(w) {
+                    *reads.entry(w.to_string()).or_insert(0) += 1;
+                }
+            });
+        }
+    }
+
+    let mut remove: HashSet<usize> = HashSet::default();
+    let mut replace: Vec<(usize, String, String)> = Vec::new();
+    let mut removed: HashSet<usize> = HashSet::default();
+
+    
+    
+    let mut order: Vec<(&String, &(usize, String))> = assign.iter().collect();
+    order.sort_by_key(|(_, (idx, _))| std::cmp::Reverse(*idx));
+
+    for (tmp, (idx, rhs)) in order {
+        if dup.contains(tmp) || rhs.contains(" = ") {
+            continue;
+        }
+        match reads.get(tmp).copied().unwrap_or(0) {
+            0 => {
+                if tmp.starts_with("tmp_") {
+                    remove.insert(*idx);
+                    removed.insert(*idx);
+                }
+            }
+            1 => {
+                let Some(j) = (*idx + 1..lines.len()).find(|&j| !lines[j].text.trim().is_empty()) else {
+                    continue;
+                };
+                if j != idx + 1 || removed.contains(&j) {
+                    continue;
+                }
+                let next = &lines[j];
+                let t = next.text.trim_start();
+                
+                
+                if t.starts_with('{')
+                    || t.starts_with('}')
+                    || t.starts_with("else")
+                    || t.starts_with("while (")
+                    || t.starts_with("for (")
+                    || t.starts_with("do {")
+                    || t.starts_with("switch (")
+                    || t.starts_with("break;")
+                    || t.starts_with("continue;")
+                    || t.starts_with("goto ")
+                {
+                    continue;
+                }
+                if line_writes(&next.text, tmp) || ident_count(&next.text, tmp) != 1 {
+                    continue;
+                }
+                if ident_preceded_by_amp(&next.text, tmp) {
+                    continue;
+                }
+                let replacement = if rhs_needs_parens(rhs) {
+                    format!("({})", rhs)
+                } else {
+                    rhs.clone()
+                };
+                replace.push((j, tmp.clone(), replacement));
+                removed.insert(*idx);
+            }
+            _ => {}
+        }
+    }
+
+    for (j, tmp, replacement) in &replace {
+        if let Some(line) = lines.get_mut(*j) {
+            line.text = replace_ident_once(&line.text, tmp, replacement);
+        }
+    }
+    if remove.is_empty() && replace.is_empty() {
+        return false;
+    }
+    if !remove.is_empty() {
+        let mut idx = 0;
+        lines.retain(|_| {
+            let keep = !remove.contains(&idx);
+            idx += 1;
+            keep
+        });
+    }
+    true
+}
+
+fn line_writes(text: &str, name: &str) -> bool {
+    assignment_parts(text).is_some_and(|(lhs, _)| lhs == name)
+}
+
+fn is_inlinable(name: &str) -> bool {
+    
+    
+    name.starts_with("tmp_")
+}
+
+fn ident_count(text: &str, name: &str) -> usize {
+    let mut count = 0;
+    for_each_ident(text.split("//").next().unwrap_or(text), |w| {
+        if w == name {
+            count += 1;
+        }
+    });
+    count
+}
+
+fn ident_preceded_by_amp(text: &str, name: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_alphabetic() || chars[i] == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            if word == name {
+                let prev = chars[..start].iter().rev().find(|c| !c.is_whitespace());
+                return prev == Some(&'&');
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn replace_ident_once(text: &str, name: &str, replacement: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_alphabetic() || chars[i] == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            if word == name {
+                out.push_str(replacement);
+                out.extend(chars[i..].iter());
+                return out;
+            }
+            out.push_str(&word);
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn rhs_needs_parens(rhs: &str) -> bool {
+    rhs.starts_with('*') || rhs.chars().any(|c| c.is_whitespace())
 }
 
 fn assignment_parts(text: &str) -> Option<(&str, &str)> {
-    let t = text.trim().strip_suffix(';')?;
+    let code = text.split("//").next().unwrap_or(text).trim();
+    let t = code.strip_suffix(';')?;
     let (lhs, rhs) = t.split_once(" = ")?;
     Some((lhs.trim(), rhs.trim()))
 }
@@ -464,7 +668,8 @@ fn substitute_tokens(text: &str, aliases: &HashMap<String, String>) -> String {
 }
 
 fn simple_assignment(text: &str) -> Option<(String, String)> {
-    let t = text.trim().strip_suffix(';')?;
+    let code = text.split("//").next().unwrap_or(text).trim();
+    let t = code.strip_suffix(';')?;
     let (lhs, rhs) = t.split_once(" = ")?;
     let lhs = lhs.trim();
     let rhs = rhs.trim();
@@ -479,7 +684,8 @@ fn simple_assignment(text: &str) -> Option<(String, String)> {
 }
 
 fn assignment_lhs(text: &str) -> Option<String> {
-    let t = text.trim().strip_suffix(';')?;
+    let code = text.split("//").next().unwrap_or(text).trim();
+    let t = code.strip_suffix(';')?;
     let (lhs, _) = t.split_once(" = ")?;
     let lhs = lhs.trim();
     is_identifier(lhs).then(|| lhs.to_string())
@@ -598,6 +804,12 @@ mod tests {
     fn run_cse(lines: Vec<PseudoLine>) -> Vec<String> {
         let mut lines = lines;
         cse_repeated_expressions(&mut lines);
+        lines.into_iter().map(|l| l.text).collect()
+    }
+
+    fn run_inline(lines: Vec<PseudoLine>) -> Vec<String> {
+        let mut lines = lines;
+        inline_single_use_temps(&mut lines);
         lines.into_iter().map(|l| l.text).collect()
     }
 
@@ -796,6 +1008,101 @@ mod tests {
             line("r11 = &DAT_140001000;", LineKind::Assignment),
         ]);
         assert_eq!(out, vec!["r10 = &DAT_140001000;", "r11 = r10;"]);
+    }
+
+    #[test]
+    fn repeated_arithmetic_is_reused() {
+        let out = run_cse(vec![
+            line("tmp_2 = rax & 0xff;", LineKind::Assignment),
+            line("tmp_3 = rax & 0xff;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["tmp_2 = rax & 0xff;", "tmp_3 = tmp_2;"]);
+    }
+
+    #[test]
+    fn commented_assignment_is_parsed() {
+        let out = run(vec![
+            line("local_8 = param_1;  // zero-extend", LineKind::Assignment),
+            line("if (local_8 != 0) {", LineKind::Branch),
+            line("}", LineKind::Branch),
+        ]);
+        assert_eq!(out[0], "if (param_1 != 0) {");
+        assert!(!out.iter().any(|l| l.contains("local_8")), "{:?}", out);
+    }
+
+    #[test]
+    fn dead_commented_register_is_dropped() {
+        let out = run_dead(vec![
+            line("rax = tmp_0;  // zero-extend", LineKind::Assignment),
+            line("rax = 1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["rax = 1;"]);
+    }
+
+    #[test]
+    fn one_use_temp_is_inlined() {
+        let out = run_inline(vec![
+            line("tmp_0 = param_1->field_0x8;", LineKind::Assignment),
+            line("local_4 = tmp_0;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["local_4 = param_1->field_0x8;"]);
+    }
+
+    #[test]
+    fn arithmetic_temp_is_parenthesized() {
+        let out = run_inline(vec![
+            line("tmp_0 = rax & 0xff;", LineKind::Assignment),
+            line("rdx = tmp_0 | 1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["rdx = (rax & 0xff) | 1;"]);
+    }
+
+    #[test]
+    fn unused_temp_is_dropped() {
+        let out = run_inline(vec![
+            line("tmp_0 = param_1->field_0x8;", LineKind::Assignment),
+            line("local_4 = 1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["local_4 = 1;"]);
+    }
+
+    #[test]
+    fn temp_used_twice_is_kept() {
+        let out = run_inline(vec![
+            line("tmp_0 = param_1->field_0x8;", LineKind::Assignment),
+            line("x = tmp_0;", LineKind::Assignment),
+            line("y = tmp_0;", LineKind::Assignment),
+        ]);
+        assert_eq!(out.len(), 3, "{:?}", out);
+    }
+
+    #[test]
+    fn temp_chain_is_folded() {
+        let out = run_inline(vec![
+            line("tmp_0 = param_1->field_0x8;", LineKind::Assignment),
+            line("tmp_1 = tmp_0;", LineKind::Assignment),
+            line("y = tmp_1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["y = param_1->field_0x8;"]);
+    }
+
+    #[test]
+    fn address_of_temp_is_not_inlined() {
+        let out = run_inline(vec![
+            line("tmp_0 = param_1->field_0x8;", LineKind::Assignment),
+            line("x = &tmp_0;", LineKind::Assignment),
+        ]);
+        assert_eq!(out.len(), 2, "{:?}", out);
+    }
+
+    #[test]
+    fn loop_condition_temp_is_not_inlined() {
+        let out = run_inline(vec![
+            line("tmp_0 = param_1->field_0x8;", LineKind::Assignment),
+            line("while (tmp_0) {", LineKind::Branch),
+            line("}", LineKind::Branch),
+        ]);
+        assert_eq!(out.len(), 3, "{:?}", out);
     }
 
     #[test]

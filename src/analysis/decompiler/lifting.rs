@@ -608,7 +608,10 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     lines.retain(|l| !is_stack_bookkeeping(&l.text));
     alias::propagate_aliases(&mut lines);
     alias::cse_repeated_expressions(&mut lines);
+    alias::propagate_aliases(&mut lines);
     alias::drop_dead_register_assignments(&mut lines);
+    alias::inline_single_use_temps(&mut lines);
+    alias::propagate_aliases(&mut lines);
     squash_empty_branches(&mut lines);
 
     if hints.out_truncated.get() {
