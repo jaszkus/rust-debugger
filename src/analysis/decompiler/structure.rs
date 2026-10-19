@@ -1,6 +1,6 @@
 use super::printing::*;
 use super::*;
-use crate::analysis::flow::cfg::{CFG, EdgeKind};
+use crate::analysis::flow::cfg::{CFG, EdgeKind, parse_addr};
 use crate::analysis::operands::canonical_reg;
 use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -620,15 +620,31 @@ fn walk_region(
         let m = di.mnemonic;
         let has_true = succs.iter().any(|e| e.kind == EdgeKind::BranchTrue);
         if m.starts_with('j') && m != "jmp" && m != "jecxz" && !has_true {
-            lines.push(PseudoLine {
-                    indent,
-                    text: format!(
-                        "// WARNING: branch '{} {}' target not decoded here - guard/branch is MISSING from this render; check disasm",
-                        m, di.operands
+            let target = parse_addr(&di.ops());
+            let consts = block_consts.get(block_id).cloned().unwrap_or_default();
+            let cond = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
+            let text = match target {
+                Some(target) => match func_lookup.get(&target) {
+                    Some(name) => format!(
+                        "if ({}) {{ return {}(); }}  // conditional tail call",
+                        cond, name
                     ),
-                    kind: LineKind::Comment,
-                    source_addr: Some(last_addr),
-                });
+                    None => format!(
+                        "if ({}) {{ goto 0x{:x}; }}  // target outside decoded function range",
+                        cond, target
+                    ),
+                },
+                None => format!(
+                    "// WARNING: branch '{} {}' target not decoded here; check disasm",
+                    m, di.operands
+                ),
+            };
+            lines.push(PseudoLine {
+                indent,
+                text,
+                kind: LineKind::Branch,
+                source_addr: Some(last_addr),
+            });
         }
     }
     if succs.is_empty() {

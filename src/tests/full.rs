@@ -749,6 +749,18 @@ fn lift_lock_cmpxchg_is_visible() {
 }
 
 #[test]
+fn conditional_branch_outside_function_is_rendered() {
+    
+    let text = render(&[0x83, 0xF8, 0x00, 0x74, 0x10, 0xC3], 0x1000, false);
+    assert!(
+        text.contains("0x1015") && text.contains("if ("),
+        "external branch must stay visible:\n{}",
+        text
+    );
+    assert!(!text.contains("MISSING"), "no missing-branch warning:\n{}", text);
+}
+
+#[test]
 fn analyze_stack_finds_rbp_slots() {
     let code = [0x55, 0x89, 0xE5, 0x8B, 0x45, 0xF8, 0xC9, 0xC3];
     let base = 0x1000u64;
@@ -1404,19 +1416,19 @@ fn drop_guard_branch_stays_visible_in_render() {
 }
 
 #[test]
-fn undecoded_branch_target_emits_warning_not_silence() {
+fn undecoded_branch_target_stays_visible() {
     let code = &[
         0x8B, 0x41, 0x1C, 0x3B, 0x41, 0x20, 0x7E, 0x08, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3,
     ];
     let out = render(code, 0x1000, true);
     assert!(
-        out.contains("WARNING"),
-        "silent loss of guard branch:\n{}",
+        out.contains("if (") && out.contains("0x1010"),
+        "guard branch must stay visible:\n{}",
         out
     );
     assert!(
-        out.contains("jle"),
-        "warning lost the branch mnemonic:\n{}",
+        !out.contains("WARNING"),
+        "branch should render as goto/return, not a warning:\n{}",
         out
     );
 }

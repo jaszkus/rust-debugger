@@ -264,7 +264,7 @@ fn is_cond_jump(m: &str) -> bool {
     m.starts_with('j') || m.starts_with("loop")
 }
 
-fn parse_addr(s: &str) -> Option<u64> {
+pub(crate) fn parse_addr(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
