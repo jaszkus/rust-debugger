@@ -108,6 +108,21 @@ fn finish_cancelled(cfg: &CFG, func_name: &str, mut lines: Vec<PseudoLine>) -> P
     make_pseudocode(cfg, func_name, lines)
 }
 
+fn function_struct_hints(cfg: &CFG, pinstrs: &[PInstr]) -> HashMap<String, StructHint> {
+    use crate::analysis::type_reconstruction::TypeReconstructor;
+    let entry = cfg.func_entry;
+    let end = cfg.blocks.last().map(|b| b.end).unwrap_or(entry);
+    if end <= entry {
+        return HashMap::default();
+    }
+    let mut tr = TypeReconstructor::new();
+    tr.analyze_function(pinstrs, entry, end);
+    tr.function_fields(entry)
+        .into_iter()
+        .map(|(reg, fields)| (reg, StructHint { fields }))
+        .collect()
+}
+
 fn fmt_frame_slot(base_reg: &str, off: i64) -> String {
     if off < 0 {
         format!("[{}-{:#x}]", base_reg, off.unsigned_abs())
@@ -337,6 +352,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .map(|r| r.param_slots.iter().map(|(_, off)| *off).collect())
             .unwrap_or_default(),
         imports: imports.clone(),
+        structs: function_struct_hints(cfg, pinstrs_in_func),
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
@@ -515,7 +531,6 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     };
     walk_block(&ctx, entry_id, &mut visited, &mut lines, 1, 0);
     cleanup_labels(&mut lines);
-    squash_empty_branches(&mut lines);
     stats.t_structure = t_phase.elapsed();
 
     let mut unmodeled = 0usize;
@@ -592,7 +607,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     }
     lines.retain(|l| !is_stack_bookkeeping(&l.text));
     alias::propagate_aliases(&mut lines);
+    alias::cse_repeated_expressions(&mut lines);
     alias::drop_dead_register_assignments(&mut lines);
+    squash_empty_branches(&mut lines);
 
     if hints.out_truncated.get() {
         stats.truncated = true;

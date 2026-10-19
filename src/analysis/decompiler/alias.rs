@@ -162,7 +162,19 @@ pub(crate) fn drop_dead_register_assignments(lines: &mut Vec<PseudoLine>) {
             if next.kind == LineKind::Return {
                 
                 
-                
+                let val = t
+                    .strip_prefix("return")
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim();
+                if val.is_empty() {
+                    
+                    
+                    break 'scan;
+                } else {
+                    dead = !tokens_contain_reg(val, reg);
+                }
                 break 'scan;
             }
             if line_reads_register(code, reg) {
@@ -188,6 +200,77 @@ pub(crate) fn drop_dead_register_assignments(lines: &mut Vec<PseudoLine>) {
             keep
         });
     }
+}
+
+
+
+
+
+
+
+
+
+
+pub(crate) fn cse_repeated_expressions(lines: &mut [PseudoLine]) {
+    let mut exprs: HashMap<String, String> = HashMap::default();
+    for line in lines.iter_mut() {
+        let text = line.text.clone();
+        let t = text.trim_start();
+        if line.kind == LineKind::Comment || t.is_empty() {
+            continue;
+        }
+        if line.kind == LineKind::Label
+            || line.kind == LineKind::Call
+            || line.kind == LineKind::Return
+            || t.starts_with('{')
+            || t.starts_with('}')
+            || t.starts_with("else")
+            || t.starts_with("if (")
+            || t.starts_with("while (")
+            || t.starts_with("for (")
+            || t.starts_with("do {")
+            || t.starts_with("switch (")
+            || t.starts_with("break;")
+            || t.starts_with("continue;")
+            || t.starts_with("goto ")
+        {
+            exprs.clear();
+            continue;
+        }
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        let Some((lhs, rhs)) = assignment_parts(&text) else {
+            continue;
+        };
+        if lhs.starts_with("*(") {
+            
+            
+            if let Some(holder) = exprs.get(rhs) {
+                line.text = format!("{} = {};", lhs, holder);
+            }
+            exprs.clear();
+            continue;
+        }
+        if !is_identifier(lhs) {
+            continue;
+        }
+        let mut new_rhs = rhs.to_string();
+        if let Some(holder) = exprs.get(rhs)
+            && holder != lhs
+        {
+            new_rhs = holder.clone();
+            line.text = format!("{} = {};", lhs, new_rhs);
+        }
+        exprs.retain(|expr, holder| holder != lhs && !tokens_contain(expr, lhs));
+        if is_cse_expr(&new_rhs) {
+            exprs.insert(new_rhs, lhs.to_string());
+        }
+    }
+}
+
+fn is_cse_expr(rhs: &str) -> bool {
+    rhs.starts_with("&") || rhs.starts_with("*(")
 }
 
 fn assignment_parts(text: &str) -> Option<(&str, &str)> {
@@ -512,6 +595,12 @@ mod tests {
         lines.into_iter().map(|l| l.text).collect()
     }
 
+    fn run_cse(lines: Vec<PseudoLine>) -> Vec<String> {
+        let mut lines = lines;
+        cse_repeated_expressions(&mut lines);
+        lines.into_iter().map(|l| l.text).collect()
+    }
+
     #[test]
     fn alias_reaches_condition_and_is_dropped() {
         let out = run(vec![
@@ -611,6 +700,15 @@ mod tests {
     }
 
     #[test]
+    fn dead_register_before_explicit_return_is_dropped() {
+        let out = run_dead(vec![
+            line("rax = 1;", LineKind::Assignment),
+            line("return 2;", LineKind::Return),
+        ]);
+        assert_eq!(out, vec!["return 2;"]);
+    }
+
+    #[test]
     fn rax_before_bare_return_is_kept() {
         let out = run_dead(vec![
             line("rax = 1;", LineKind::Assignment),
@@ -647,6 +745,57 @@ mod tests {
             line("xmm0 = 2;", LineKind::Assignment),
         ]);
         assert_eq!(out, vec!["xmm0 = 2;"]);
+    }
+
+    #[test]
+    fn repeated_load_is_reused() {
+        let out = run_cse(vec![
+            line("r10 = *(int32_t *)param_1;", LineKind::Assignment),
+            line("r11 = *(int32_t *)param_1;", LineKind::Assignment),
+        ]);
+        assert_eq!(
+            out,
+            vec!["r10 = *(int32_t *)param_1;", "r11 = r10;"]
+        );
+    }
+
+    #[test]
+    fn cse_stops_at_call() {
+        let out = run_cse(vec![
+            line("r10 = *(int32_t *)param_1;", LineKind::Assignment),
+            line("f();", LineKind::Call),
+            line("r11 = *(int32_t *)param_1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out[2], "r11 = *(int32_t *)param_1;");
+    }
+
+    #[test]
+    fn cse_stops_at_memory_store() {
+        let out = run_cse(vec![
+            line("r10 = *(int32_t *)param_1;", LineKind::Assignment),
+            line("*(int32_t *)param_2 = 1;", LineKind::Assignment),
+            line("r11 = *(int32_t *)param_1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out[2], "r11 = *(int32_t *)param_1;");
+    }
+
+    #[test]
+    fn cse_invalidated_by_base_write() {
+        let out = run_cse(vec![
+            line("r10 = *(int32_t *)param_1;", LineKind::Assignment),
+            line("param_1 = 0;", LineKind::Assignment),
+            line("r11 = *(int32_t *)param_1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out[2], "r11 = *(int32_t *)param_1;");
+    }
+
+    #[test]
+    fn repeated_address_is_reused() {
+        let out = run_cse(vec![
+            line("r10 = &DAT_140001000;", LineKind::Assignment),
+            line("r11 = &DAT_140001000;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["r10 = &DAT_140001000;", "r11 = r10;"]);
     }
 
     #[test]

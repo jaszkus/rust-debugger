@@ -249,6 +249,28 @@ pub(crate) fn take_call_args(
     collect_call_args(reg_values, is64)
 }
 
+
+
+pub(crate) fn struct_member_expr(
+    base: &PVar,
+    off: i64,
+    base_text: &str,
+    hints: Option<&TypeHints>,
+) -> Option<String> {
+    let hints = hints?;
+    let PVar::Reg(r) = base else {
+        return None;
+    };
+    let st = hints.structs.get(*r)?;
+    let field = st.field(off)?;
+    
+    
+    if base_text.contains('+') || base_text.contains('-') {
+        return None;
+    }
+    Some(format!("{}->{}", base_text, field))
+}
+
 pub(crate) fn fmt_load(
     addr: &PVar,
     size: u32,
@@ -299,11 +321,17 @@ pub(crate) fn fmt_load(
                 .get(r)
                 .map(pval_str)
                 .unwrap_or_else(|| r.to_string());
+            if let Some(m) = struct_member_expr(addr, 0, &base, hints) {
+                return m;
+            }
             format!("*({} *){}", ty, base)
         }
         PVar::Mem(base, disp) => {
             let b = fmt_var(base);
             let b = reg_values.get(b.as_str()).map(pval_str).unwrap_or(b);
+            if let Some(m) = struct_member_expr(base, *disp, &b, hints) {
+                return m;
+            }
             if *disp == 0 {
                 format!("*({} *){}", ty, b)
             } else if *disp > 0 {
@@ -412,6 +440,15 @@ pub(crate) fn fmt_var_with_hints(v: &PVar, hints: &TypeHints) -> String {
                 }
             }
             fallback_slot_name(*off, hints)
+        }
+        PVar::Mem(base, off) => {
+            if let PVar::Reg(r) = &**base
+                && let Some(st) = hints.structs.get(*r)
+                && let Some(field) = st.field(*off)
+            {
+                return format!("{}->{}", fmt_var(base), field);
+            }
+            fmt_var(v)
         }
         _ => fmt_var(v),
     }

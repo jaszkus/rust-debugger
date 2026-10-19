@@ -1246,8 +1246,11 @@ pub(crate) fn squash_empty_branches(lines: &mut Vec<PseudoLine>) {
             };
             let else_open = lines[then_close].text.trim_start().starts_with("} else");
             if !else_open {
-                if then_close == i + 1 {
-                    lines.drain(i..=then_close);
+                if only_comments(lines, i + 1, then_close) {
+                    
+                    
+                    lines.remove(then_close);
+                    lines.remove(i);
                     changed = true;
                     continue;
                 }
@@ -1283,6 +1286,13 @@ pub(crate) fn squash_empty_branches(lines: &mut Vec<PseudoLine>) {
 fn is_if_open(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("if (") && t.ends_with('{')
+}
+
+fn only_comments(lines: &[PseudoLine], from: usize, to: usize) -> bool {
+    lines.get(from..to).is_some_and(|body| {
+        body.iter()
+            .all(|l| l.text.trim().is_empty() || l.kind == LineKind::Comment)
+    })
 }
 
 fn negate_if_line(text: &str) -> String {
@@ -1439,6 +1449,21 @@ mod cleanup_tests {
         assert_eq!(
             lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
             vec!["y = 2;"]
+        );
+    }
+
+    #[test]
+    fn comment_only_branch_keeps_the_comment() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("// WARNING: missing branch", LineKind::Comment),
+            line("}", LineKind::Branch),
+            line("y = 2;", LineKind::Assignment),
+        ];
+        squash_empty_branches(&mut lines);
+        assert_eq!(
+            lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["// WARNING: missing branch", "y = 2;"]
         );
     }
 }

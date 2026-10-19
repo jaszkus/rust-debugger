@@ -382,7 +382,7 @@ fn decompiler_folds_constants_and_dce() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("= 0x3") || text.contains("= 3"),
+        text.contains("return 3") || text.contains("= 3"),
         "expected folded 1+2, got:\n{}",
         text
     );

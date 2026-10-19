@@ -7,6 +7,9 @@ pub struct TypeReconstructor {
     next_id: u64,
     struct_index: HashMap<u64, u64>,
     base_to_struct: HashMap<u64, u64>,
+    
+    
+    function_bases: HashMap<u64, HashMap<String, u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +64,7 @@ impl TypeReconstructor {
             next_id: 100,
             struct_index: HashMap::default(),
             base_to_struct: HashMap::default(),
+            function_bases: HashMap::default(),
         };
         reconstructor.init_primitive_types();
         reconstructor
@@ -138,7 +142,12 @@ impl TypeReconstructor {
                     .get(&base_key)
                     .cloned()
                     .unwrap_or_else(|| format!("base_{:x}", base_key));
-                self.reconstruct_struct(&base_key, &name, &accesses);
+                if let Some(id) = self.reconstruct_struct(&base_key, &name, &accesses) {
+                    self.function_bases
+                        .entry(entry)
+                        .or_default()
+                        .insert(name, id);
+                }
             }
         }
 
@@ -221,7 +230,7 @@ impl TypeReconstructor {
         }
     }
 
-    fn reconstruct_struct(&mut self, base_key: &u64, base_name: &str, accesses: &[StructAccess]) {
+    fn reconstruct_struct(&mut self, base_key: &u64, base_name: &str, accesses: &[StructAccess]) -> Option<u64> {
         let mut field_map: HashMap<i64, (usize, usize, bool)> = HashMap::default();
         for access in accesses {
             let e = field_map
@@ -235,7 +244,7 @@ impl TypeReconstructor {
         let mut fields: Vec<TypeField> = field_map
             .iter()
             .map(|(&offset, &(size, count, _))| TypeField {
-                name: format!("field_{:x}", offset),
+                name: format!("field_0x{:x}", offset),
                 offset,
                 size,
                 type_id: self.guess_type_from_size(size),
@@ -302,6 +311,7 @@ impl TypeReconstructor {
             );
             self.pointer_types.insert(struct_id, ptr_id);
         }
+        Some(struct_id)
     }
 
     fn guess_type_from_size(&self, size: usize) -> u64 {
@@ -321,6 +331,26 @@ impl TypeReconstructor {
 
     pub fn get_all_types(&self) -> &HashMap<u64, ReconstructedType> {
         &self.types
+    }
+
+    
+    
+    pub fn function_fields(&self, entry: u64) -> HashMap<String, Vec<(i64, String)>> {
+        let Some(bases) = self.function_bases.get(&entry) else {
+            return HashMap::default();
+        };
+        bases
+            .iter()
+            .filter_map(|(reg, id)| {
+                let ty = self.types.get(id)?;
+                let fields = ty
+                    .fields
+                    .iter()
+                    .map(|f| (f.offset, f.name.clone()))
+                    .collect();
+                Some((reg.clone(), fields))
+            })
+            .collect()
     }
 
     pub fn create_pointer_type(&mut self, target_type: u64) -> u64 {
