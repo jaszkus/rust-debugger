@@ -1227,6 +1227,137 @@ fn drop_redundant_continues(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+
+
+
+
+pub(crate) fn squash_empty_branches(lines: &mut Vec<PseudoLine>) {
+    loop {
+        let mut changed = false;
+        let mut i = 0;
+        while i < lines.len() {
+            if !is_if_open(&lines[i].text) {
+                i += 1;
+                continue;
+            }
+            let Some(then_close) = find_block_close(lines, i, false) else {
+                i += 1;
+                continue;
+            };
+            let else_open = lines[then_close].text.trim_start().starts_with("} else");
+            if !else_open {
+                if then_close == i + 1 {
+                    lines.drain(i..=then_close);
+                    changed = true;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            let Some(else_close) = find_block_close(lines, then_close, true) else {
+                i += 1;
+                continue;
+            };
+            let then_empty = then_close == i + 1;
+            let else_empty = else_close == then_close + 1;
+            if then_empty && else_empty {
+                lines.drain(i..=else_close);
+            } else if then_empty {
+                lines[i].text = negate_if_line(&lines[i].text);
+                lines.drain(i + 1..=then_close);
+            } else if else_empty {
+                lines[then_close].text = "}".into();
+                lines.remove(else_close);
+            } else {
+                i += 1;
+                continue;
+            }
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn is_if_open(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("if (") && t.ends_with('{')
+}
+
+fn negate_if_line(text: &str) -> String {
+    let indent_len = text.len() - text.trim_start().len();
+    let indent = &text[..indent_len];
+    let t = text.trim_start();
+    if let Some(rest) = t.strip_prefix("if (")
+        && let Some(cond) = rest.strip_suffix(") {")
+    {
+        return format!("{indent}if ({}) {{", negate_cond(cond));
+    }
+    text.to_string()
+}
+
+
+
+
+fn find_block_close(lines: &[PseudoLine], start: usize, after_else: bool) -> Option<usize> {
+    let mut depth = if after_else { 1 } else { 0 };
+    let mut opened = after_else;
+    for (j, line) in lines.iter().enumerate().skip(start) {
+        let code = code_part(&line.text);
+        let mut skipped_open = j > start || !after_else;
+        for c in code.chars() {
+            if !skipped_open {
+                if c == '{' {
+                    skipped_open = true;
+                }
+                continue;
+            }
+            match c {
+                '{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if opened && depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if after_else && j == start && !skipped_open {
+            return None;
+        }
+    }
+    None
+}
+
+
+fn code_part(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
@@ -1264,5 +1395,50 @@ mod cleanup_tests {
         ];
         drop_redundant_continues(&mut lines);
         assert!(!lines.iter().any(|l| l.text == "continue;"), "redundant continue dropped");
+    }
+
+    #[test]
+    fn empty_then_branch_is_inverted() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("} else {", LineKind::Branch),
+            line("x = 1;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+        ];
+        squash_empty_branches(&mut lines);
+        assert_eq!(
+            lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["if (!(a)) {", "x = 1;", "}"]
+        );
+    }
+
+    #[test]
+    fn empty_else_branch_is_removed() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("x = 1;", LineKind::Assignment),
+            line("} else {", LineKind::Branch),
+            line("}", LineKind::Branch),
+        ];
+        squash_empty_branches(&mut lines);
+        assert_eq!(
+            lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["if (a) {", "x = 1;", "}"]
+        );
+    }
+
+    #[test]
+    fn both_empty_branches_are_removed() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("} else {", LineKind::Branch),
+            line("}", LineKind::Branch),
+            line("y = 2;", LineKind::Assignment),
+        ];
+        squash_empty_branches(&mut lines);
+        assert_eq!(
+            lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["y = 2;"]
+        );
     }
 }

@@ -23,6 +23,7 @@
 
 
 use super::{LineKind, PseudoLine};
+use crate::analysis::operands::canonical_reg;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
@@ -112,6 +113,133 @@ pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
         });
     }
     drop_unused_declarations(lines);
+}
+
+
+
+
+
+
+
+
+pub(crate) fn drop_dead_register_assignments(lines: &mut Vec<PseudoLine>) {
+    let mut remove: HashSet<usize> = HashSet::default();
+    for (i, line) in lines.iter().enumerate() {
+        let Some((lhs, _)) = assignment_parts(&line.text) else {
+            continue;
+        };
+        if !is_register(lhs) {
+            continue;
+        }
+        let reg = canonical_reg(lhs);
+        let mut dead = false;
+        'scan: for next in &lines[i + 1..] {
+            let code = next.text.split("//").next().unwrap_or("");
+            let t = code.trim_start();
+            if next.kind == LineKind::Call || next.kind == LineKind::Label {
+                break 'scan;
+            }
+            if code.trim().is_empty() || next.kind == LineKind::Comment {
+                continue;
+            }
+            if next.kind == LineKind::Declaration {
+                continue;
+            }
+            if t.starts_with('{')
+                || t.starts_with('}')
+                || t.starts_with("else")
+                || t.starts_with("do {")
+                || t.starts_with("while (")
+                || t.starts_with("for (")
+                || t.starts_with("if (")
+                || t.starts_with("switch (")
+                || t.starts_with("break;")
+                || t.starts_with("continue;")
+                || t.starts_with("goto ")
+            {
+                break 'scan;
+            }
+            if next.kind == LineKind::Return {
+                
+                
+                
+                break 'scan;
+            }
+            if line_reads_register(code, reg) {
+                break 'scan;
+            }
+            if let Some((w, _)) = assignment_parts(code)
+                && is_register(w)
+                && canonical_reg(w) == reg
+            {
+                dead = true;
+                break 'scan;
+            }
+        }
+        if dead {
+            remove.insert(i);
+        }
+    }
+    if !remove.is_empty() {
+        let mut idx = 0;
+        lines.retain(|_| {
+            let keep = !remove.contains(&idx);
+            idx += 1;
+            keep
+        });
+    }
+}
+
+fn assignment_parts(text: &str) -> Option<(&str, &str)> {
+    let t = text.trim().strip_suffix(';')?;
+    let (lhs, rhs) = t.split_once(" = ")?;
+    Some((lhs.trim(), rhs.trim()))
+}
+
+fn is_register(name: &str) -> bool {
+    let c = canonical_reg(name);
+    matches!(
+        c,
+        "rax"
+            | "rbx"
+            | "rcx"
+            | "rdx"
+            | "rsi"
+            | "rdi"
+            | "rbp"
+            | "rsp"
+            | "rip"
+            | "r8"
+            | "r9"
+            | "r10"
+            | "r11"
+            | "r12"
+            | "r13"
+            | "r14"
+            | "r15"
+    ) || ["xmm", "ymm", "zmm", "st", "mm"].iter().any(|p| {
+        c.strip_prefix(p)
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit()))
+    })
+}
+
+fn line_reads_register(text: &str, reg: &str) -> bool {
+    if let Some((lhs, rhs)) = assignment_parts(text) {
+        tokens_contain_reg(rhs, reg)
+            || (lhs.trim() != reg && tokens_contain_reg(lhs, reg))
+    } else {
+        tokens_contain_reg(text, reg)
+    }
+}
+
+fn tokens_contain_reg(text: &str, reg: &str) -> bool {
+    let mut found = false;
+    for_each_ident(text, |word| {
+        if !found && is_register(word) && canonical_reg(word) == reg {
+            found = true;
+        }
+    });
+    found
 }
 
 
@@ -378,6 +506,12 @@ mod tests {
         lines.into_iter().map(|l| l.text).collect()
     }
 
+    fn run_dead(lines: Vec<PseudoLine>) -> Vec<String> {
+        let mut lines = lines;
+        drop_dead_register_assignments(&mut lines);
+        lines.into_iter().map(|l| l.text).collect()
+    }
+
     #[test]
     fn alias_reaches_condition_and_is_dropped() {
         let out = run(vec![
@@ -462,6 +596,57 @@ mod tests {
             line("return rax;", LineKind::Return),
         ]);
         assert!(!out.iter().any(|l| l.contains("local_18")), "{:?}", out);
+    }
+
+    #[test]
+    fn dead_register_before_overwrite_is_dropped() {
+        let out = run_dead(vec![
+            line("rax = 1;", LineKind::Assignment),
+            line("rax = 2;", LineKind::Assignment),
+            line("local_4 = rax;", LineKind::Assignment),
+            line("return local_4;", LineKind::Return),
+        ]);
+        assert!(!out.iter().any(|l| l == "rax = 1;"), "{:?}", out);
+        assert!(out.iter().any(|l| l == "rax = 2;"), "{:?}", out);
+    }
+
+    #[test]
+    fn rax_before_bare_return_is_kept() {
+        let out = run_dead(vec![
+            line("rax = 1;", LineKind::Assignment),
+            line("return;", LineKind::Return),
+        ]);
+        assert_eq!(out, vec!["rax = 1;", "return;"]);
+    }
+
+    #[test]
+    fn register_read_in_rhs_is_not_dead() {
+        let out = run_dead(vec![
+            line("rax = 1;", LineKind::Assignment),
+            line("rax = rax + 1;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["rax = 1;", "rax = rax + 1;"]);
+    }
+
+    #[test]
+    fn register_live_across_branch_is_kept() {
+        let out = run_dead(vec![
+            line("rax = 1;", LineKind::Assignment),
+            line("if (x) {", LineKind::Branch),
+            line("y = 2;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+            line("return rax;", LineKind::Return),
+        ]);
+        assert!(out.iter().any(|l| l == "rax = 1;"), "{:?}", out);
+    }
+
+    #[test]
+    fn dead_xmm_assignment_is_dropped() {
+        let out = run_dead(vec![
+            line("xmm0 = 1;", LineKind::Assignment),
+            line("xmm0 = 2;", LineKind::Assignment),
+        ]);
+        assert_eq!(out, vec!["xmm0 = 2;"]);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use super::printing::*;
 use super::structure::{
-    Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, walk_block,
+    Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, squash_empty_branches,
+    walk_block,
 };
 use super::*;
 use super::alias;
@@ -514,6 +515,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     };
     walk_block(&ctx, entry_id, &mut visited, &mut lines, 1, 0);
     cleanup_labels(&mut lines);
+    squash_empty_branches(&mut lines);
     stats.t_structure = t_phase.elapsed();
 
     let mut unmodeled = 0usize;
@@ -590,6 +592,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     }
     lines.retain(|l| !is_stack_bookkeeping(&l.text));
     alias::propagate_aliases(&mut lines);
+    alias::drop_dead_register_assignments(&mut lines);
 
     if hints.out_truncated.get() {
         stats.truncated = true;
