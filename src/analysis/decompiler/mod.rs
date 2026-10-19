@@ -1,3 +1,4 @@
+pub mod alias;
 pub mod expr;
 pub mod lifting;
 pub mod pcode;

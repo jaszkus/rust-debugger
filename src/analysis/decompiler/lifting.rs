@@ -3,6 +3,7 @@ use super::structure::{
     Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, walk_block,
 };
 use super::*;
+use super::alias;
 use crate::analysis::flow::cfg::CFG;
 use crate::analysis::flow::stack::StackFrame;
 use crate::analysis::flow::variables;
@@ -588,6 +589,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         false
     }
     lines.retain(|l| !is_stack_bookkeeping(&l.text));
+    alias::propagate_aliases(&mut lines);
 
     if hints.out_truncated.get() {
         stats.truncated = true;

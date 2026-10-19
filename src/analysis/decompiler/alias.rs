@@ -1,0 +1,486 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+use super::{LineKind, PseudoLine};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+
+pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
+    let mut aliases: HashMap<String, String> = HashMap::default();
+    let mut scopes: Vec<Option<HashMap<String, String>>> = Vec::new();
+    let mut candidates: Vec<(usize, String)> = Vec::new();
+
+    for (i, line) in lines.iter_mut().enumerate() {
+        let kind = line.kind;
+        let text = line.text.clone();
+        let t = text.trim_start();
+
+        if kind == LineKind::Comment || t.is_empty() {
+            continue;
+        }
+
+        if t.starts_with("} else") {
+            let restore = scopes.pop().flatten();
+            aliases = restore.unwrap_or_default();
+            scopes.push(None);
+            continue;
+        }
+        if t.starts_with('}') {
+            scopes.pop();
+            aliases.clear();
+            continue;
+        }
+        if t.ends_with('{') || t.contains(" {") {
+            if t.starts_with("if (") {
+                line.text = substitute_condition(&text, &aliases);
+                scopes.push(Some(aliases.clone()));
+            } else {
+                
+                aliases.clear();
+                scopes.push(None);
+            }
+            continue;
+        }
+        if kind == LineKind::Label
+            || t.starts_with("break;")
+            || t.starts_with("continue;")
+            || t.starts_with("goto ")
+        {
+            aliases.clear();
+            continue;
+        }
+        if kind == LineKind::Return {
+            line.text = substitute_tokens(&text, &aliases);
+            aliases.clear();
+            continue;
+        }
+        if kind == LineKind::Call {
+            line.text = substitute_tokens(&text, &aliases);
+            aliases.clear();
+            continue;
+        }
+        if kind == LineKind::Declaration {
+            continue;
+        }
+
+        let new_text = substitute_line(&text, &aliases);
+        line.text = new_text.clone();
+
+        if let Some((lhs, rhs)) = simple_assignment(&new_text) {
+            aliases.remove(&lhs);
+            if is_removable(&lhs) {
+                candidates.push((i, lhs.clone()));
+            }
+            aliases.insert(lhs, rhs);
+        } else if let Some(lhs) = assignment_lhs(&new_text) {
+            aliases.remove(&lhs);
+        }
+    }
+
+    let mut remove: HashSet<usize> = HashSet::default();
+    for (idx, name) in candidates {
+        if !used_as_read(lines, &name, idx) {
+            remove.insert(idx);
+        }
+    }
+    if !remove.is_empty() {
+        let mut idx = 0;
+        lines.retain(|_| {
+            let keep = !remove.contains(&idx);
+            idx += 1;
+            keep
+        });
+    }
+    drop_unused_declarations(lines);
+}
+
+
+
+fn drop_unused_declarations(lines: &mut Vec<PseudoLine>) {
+    let mut referenced: HashSet<String> = HashSet::default();
+    for line in lines.iter() {
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        for_each_ident(line.text.split("//").next().unwrap_or(""), |word| {
+            referenced.insert(word.to_string());
+        });
+    }
+    lines.retain(|line| {
+        if line.kind != LineKind::Declaration {
+            return true;
+        }
+        let Some(name) = declared_name(&line.text) else {
+            return true;
+        };
+        !is_removable(name) || referenced.contains(name)
+    });
+    
+    let mut i = 0;
+    while i + 1 < lines.len() {
+        if lines[i].text.trim() == "{" && lines[i + 1].text.trim().is_empty() {
+            lines.remove(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn declared_name(text: &str) -> Option<&str> {
+    let code = text.split("//").next().unwrap_or(text);
+    let decl = code.trim().trim_end_matches(';').trim();
+    let name = decl.split_whitespace().last()?;
+    let name = name.trim_start_matches('*');
+    let name = name.split('[').next().unwrap_or(name);
+    is_identifier(name).then_some(name)
+}
+
+fn for_each_ident(text: &str, mut f: impl FnMut(&str)) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' || c == '\'' {
+            let quote = c;
+            i += 1;
+            while i < chars.len() {
+                let d = chars[i];
+                i += 1;
+                if d == quote {
+                    break;
+                }
+            }
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            f(&word);
+            continue;
+        }
+        i += 1;
+    }
+}
+
+
+fn substitute_condition(text: &str, aliases: &HashMap<String, String>) -> String {
+    substitute_tokens(text, aliases)
+}
+
+
+
+fn substitute_line(text: &str, aliases: &HashMap<String, String>) -> String {
+    if let Some(pos) = text.find(" = ") {
+        let (lhs, rhs) = text.split_at(pos + 3);
+        format!("{}{}", lhs, substitute_tokens(rhs, aliases))
+    } else {
+        substitute_tokens(text, aliases)
+    }
+}
+
+fn substitute_tokens(text: &str, aliases: &HashMap<String, String>) -> String {
+    if aliases.is_empty() {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' || c == '\'' {
+            let quote = c;
+            out.push(c);
+            i += 1;
+            while i < chars.len() {
+                let d = chars[i];
+                out.push(d);
+                i += 1;
+                if d == quote && chars.get(i.wrapping_sub(2)) != Some(&'\\') {
+                    break;
+                }
+            }
+            continue;
+        }
+        if c == '/' && chars.get(i + 1) == Some(&'/') {
+            out.extend(chars[i..].iter());
+            break;
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let prev = chars[..start].iter().rev().find(|c| !c.is_whitespace());
+            if prev != Some(&'&')
+                && let Some(replacement) = aliases.get(&word)
+            {
+                out.push_str(replacement);
+                continue;
+            }
+            out.push_str(&word);
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn simple_assignment(text: &str) -> Option<(String, String)> {
+    let t = text.trim().strip_suffix(';')?;
+    let (lhs, rhs) = t.split_once(" = ")?;
+    let lhs = lhs.trim();
+    let rhs = rhs.trim();
+    if !is_identifier(lhs) {
+        return None;
+    }
+    if is_identifier(rhs) || is_number(rhs) {
+        Some((lhs.to_string(), rhs.to_string()))
+    } else {
+        None
+    }
+}
+
+fn assignment_lhs(text: &str) -> Option<String> {
+    let t = text.trim().strip_suffix(';')?;
+    let (lhs, _) = t.split_once(" = ")?;
+    let lhs = lhs.trim();
+    is_identifier(lhs).then(|| lhs.to_string())
+}
+
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_number(s: &str) -> bool {
+    let s = s.trim();
+    let s = s.strip_prefix('-').unwrap_or(s);
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())
+    } else {
+        !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+    }
+}
+
+fn is_removable(name: &str) -> bool {
+    
+    
+    name.starts_with("local_") || name.starts_with("arg_") || name.starts_with("tmp_")
+}
+
+
+
+fn used_as_read(lines: &[PseudoLine], name: &str, skip: usize) -> bool {
+    for (idx, line) in lines.iter().enumerate() {
+        if idx == skip || line.kind == LineKind::Declaration {
+            continue;
+        }
+        let text = line.text.split("//").next().unwrap_or("");
+        let (lhs, rhs) = match text
+            .trim()
+            .strip_suffix(';')
+            .and_then(|t| t.split_once(" = "))
+        {
+            Some((lhs, rhs)) => (lhs, rhs),
+            None => ("", text),
+        };
+        if tokens_contain(rhs, name) {
+            return true;
+        }
+        let lhs = lhs.trim();
+        if lhs != name && tokens_contain(lhs, name) {
+            return true;
+        }
+    }
+    false
+}
+
+fn tokens_contain(text: &str, name: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' || c == '\'' {
+            let quote = c;
+            i += 1;
+            while i < chars.len() {
+                let d = chars[i];
+                i += 1;
+                if d == quote {
+                    break;
+                }
+            }
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            if chars[start..i].iter().copied().eq(name.chars()) {
+                return true;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(text: &str, kind: LineKind) -> PseudoLine {
+        PseudoLine {
+            indent: 0,
+            text: text.into(),
+            kind,
+            source_addr: None,
+        }
+    }
+
+    fn run(lines: Vec<PseudoLine>) -> Vec<String> {
+        let mut lines = lines;
+        propagate_aliases(&mut lines);
+        lines.into_iter().map(|l| l.text).collect()
+    }
+
+    #[test]
+    fn alias_reaches_condition_and_is_dropped() {
+        let out = run(vec![
+            line("local_18 = param_1;", LineKind::Assignment),
+            line("if (local_18 != 0) {", LineKind::Branch),
+            line("rax = *(int32_t *)local_18;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+            line("return rax;", LineKind::Return),
+        ]);
+        assert_eq!(out[0], "if (param_1 != 0) {");
+        assert_eq!(out[1], "rax = *(int32_t *)param_1;");
+        assert!(!out.iter().any(|l| l.contains("local_18")), "{:?}", out);
+    }
+
+    #[test]
+    fn alias_survives_into_else_branch() {
+        let out = run(vec![
+            line("local_8 = param_2;", LineKind::Assignment),
+            line("if (x) {", LineKind::Branch),
+            line("rax = local_8;", LineKind::Assignment),
+            line("} else {", LineKind::Branch),
+            line("rax = local_8;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+        ]);
+        assert!(!out.iter().any(|l| l.contains("local_8")), "{:?}", out);
+        assert_eq!(out[1], "rax = param_2;");
+        assert_eq!(out[3], "rax = param_2;");
+    }
+
+    #[test]
+    fn alias_not_applied_to_address_of() {
+        let out = run(vec![
+            line("local_8 = param_1;", LineKind::Assignment),
+            line("f(&local_8);", LineKind::Call),
+        ]);
+        assert!(out.iter().any(|l| l.contains("&local_8")), "{:?}", out);
+        assert!(
+            out.iter().any(|l| l.contains("local_8 = param_1")),
+            "{:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn loop_condition_is_not_substituted() {
+        let out = run(vec![
+            line("local_8 = param_1;", LineKind::Assignment),
+            line("while (local_8 != 0) {", LineKind::Branch),
+            line("local_8 = local_8 - 1;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+        ]);
+        assert!(out[1].contains("local_8"), "{:?}", out);
+        assert!(
+            out.iter().any(|l| l.contains("local_8 = param_1")),
+            "{:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn assignment_kept_when_read_after_branch() {
+        let out = run(vec![
+            line("local_8 = param_1;", LineKind::Assignment),
+            line("if (x) {", LineKind::Branch),
+            line("rax = 1;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+            line("return local_8;", LineKind::Return),
+        ]);
+        assert!(
+            out.iter().any(|l| l.contains("local_8 = param_1")),
+            "{:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn unused_declaration_is_dropped() {
+        let out = run(vec![
+            line("int64_t local_18;", LineKind::Declaration),
+            line("local_18 = param_1;", LineKind::Assignment),
+            line("rax = param_1;", LineKind::Assignment),
+            line("return rax;", LineKind::Return),
+        ]);
+        assert!(!out.iter().any(|l| l.contains("local_18")), "{:?}", out);
+    }
+
+    #[test]
+    fn declaration_kept_when_address_is_taken() {
+        let out = run(vec![
+            line("int64_t local_c;", LineKind::Declaration),
+            line("local_c = param_2;", LineKind::Assignment),
+            line("rax = &local_c;", LineKind::Assignment),
+            line("return rax;", LineKind::Return),
+        ]);
+        assert!(
+            out.iter().any(|l| l.contains("int64_t local_c")),
+            "{:?}",
+            out
+        );
+        assert!(
+            out.iter().any(|l| l.contains("local_c = param_2")),
+            "{:?}",
+            out
+        );
+    }
+}
