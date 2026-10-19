@@ -1444,6 +1444,92 @@ fn dwarf_function_names_seed_discovery() {
 }
 
 #[test]
+fn pe_pdb_function_names_are_applied() {
+    
+    
+    if !fixture("pdb_sample.exe").exists() || !fixture("pdb_sample.pdb").exists() {
+        eprintln!("skipped: pdb_sample fixtures not present");
+        return;
+    }
+    let bin = crate::parser::parse_file(&fixture("pdb_sample.exe")).expect("parse exe");
+    let disasm = crate::disasm::disassemble_binary(&bin).expect("disasm");
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let fid = crate::analysis::function_id::FunctionIDMatcher::new();
+    let path = fixture("pdb_sample.exe");
+    let result = crate::analysis::auto_analyze_with_source(
+        &disasm,
+        &bin,
+        path.to_str(),
+        &rustc_hash::FxHashMap::default(),
+        &fid,
+        &never,
+        &|_, _, _, _| {},
+    );
+    let names: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        names.contains(&"compute") && names.contains(&"main"),
+        "PDB names missing, got: {:?}",
+        names
+    );
+}
+
+#[test]
+fn pdb_path_is_found_next_to_the_binary() {
+    if !fixture("pdb_sample.exe").exists() || !fixture("pdb_sample.pdb").exists() {
+        eprintln!("skipped: pdb_sample fixtures not present");
+        return;
+    }
+    let bin = crate::parser::parse_file(&fixture("pdb_sample.exe")).expect("parse exe");
+    let path = fixture("pdb_sample.exe");
+    let found = crate::analysis::debug_symbols::find_pdb_path(&bin, path.to_str())
+        .expect("sibling PDB must be located");
+    assert_eq!(
+        found.file_name().and_then(|n| n.to_str()),
+        Some("pdb_sample.pdb"),
+        "found: {:?}",
+        found
+    );
+}
+
+#[test]
+fn elf_imports_point_into_the_image() {
+    
+    
+    if !fixture("dwarf_sample.elf").exists() {
+        eprintln!("skipped: dwarf_sample.elf not present");
+        return;
+    }
+    let bin = crate::parser::parse_file(&fixture("dwarf_sample.elf")).expect("parse elf");
+    assert!(!bin.imports.is_empty());
+    let mut got = 0;
+    for imp in &bin.imports {
+        assert_ne!(
+            imp.offset, bin.image_base,
+            "import {} points at the image base",
+            imp.name
+        );
+        let sec = bin
+            .sections
+            .iter()
+            .find(|s| imp.offset >= s.vaddr && imp.offset < s.vaddr + s.size);
+        assert!(
+            sec.is_some(),
+            "import {} at {:#x} is not inside any section",
+            imp.name,
+            imp.offset
+        );
+        got += 1;
+    }
+    let libc = bin
+        .imports
+        .iter()
+        .find(|i| i.name == "__libc_start_main")
+        .expect("__libc_start_main import");
+    assert_ne!(libc.offset, 0x100000, "must resolve to the GOT slot");
+    assert!(got >= 5);
+}
+
+#[test]
 fn pdb_types_import_structs_unions_enums() {
     let path = fixture("pdb_sample.pdb");
     if !path.exists() {
