@@ -1,13 +1,13 @@
 use super::binary_codec::{
-    R, T_EDGE_F, T_EDGE_FT, T_EDGE_JMP, T_EDGE_T, T_FUNC_AFTER_RET, T_FUNC_CALL, T_FUNC_ENTRY,
-    T_FUNC_PROLOGUE, T_FUNC_SYMBOL, T_FUNC_UNWIND, T_FUNC_USER, T_LINE_ASSIGN, T_LINE_BRANCH,
-    T_LINE_CALL, T_LINE_CLOSE, T_LINE_COMMENT, T_LINE_DECL, T_LINE_LABEL, T_LINE_OPEN, T_LINE_RET,
-    T_LINE_SIG, T_PRIM_BOOL, T_PRIM_CHAR, T_PRIM_DOUBLE, T_PRIM_FLOAT, T_PRIM_INT, T_PRIM_LLONG,
-    T_PRIM_LONG, T_PRIM_SHORT, T_PRIM_UCHAR, T_PRIM_UINT, T_PRIM_ULLONG, T_PRIM_ULONG,
-    T_PRIM_USHORT, T_PRIM_VOID, T_RT_ARRAY, T_RT_ENUM, T_RT_POINTER, T_RT_PRIM, T_RT_STRUCT,
-    T_STUB_IMPORT, T_STUB_TAIL, T_VAR_LOCAL, T_VAR_PARAM, T_VAR_SAVED, T_VAR_UNKNOWN, T_XREF_ADDR,
-    T_XREF_CALL, T_XREF_CALLIND, T_XREF_JMPIND, T_XREF_JUMP, T_XREF_READ, T_XREF_STRING,
-    T_XREF_TAIL, T_XREF_THUNK, T_XREF_WRITE, W,
+    R, T_EDGE_F, T_EDGE_FT, T_EDGE_JMP, T_EDGE_T, T_FUNC_AFTER_RET, T_FUNC_CALL, T_FUNC_DATA_PTR,
+    T_FUNC_ENTRY, T_FUNC_PROLOGUE, T_FUNC_SYMBOL, T_FUNC_UNWIND, T_FUNC_USER, T_LINE_ASSIGN,
+    T_LINE_BRANCH, T_LINE_CALL, T_LINE_CLOSE, T_LINE_COMMENT, T_LINE_DECL, T_LINE_LABEL,
+    T_LINE_OPEN, T_LINE_RET, T_LINE_SIG, T_PRIM_BOOL, T_PRIM_CHAR, T_PRIM_DOUBLE, T_PRIM_FLOAT,
+    T_PRIM_INT, T_PRIM_LLONG, T_PRIM_LONG, T_PRIM_SHORT, T_PRIM_UCHAR, T_PRIM_UINT, T_PRIM_ULLONG,
+    T_PRIM_ULONG, T_PRIM_USHORT, T_PRIM_VOID, T_RT_ARRAY, T_RT_ENUM, T_RT_POINTER, T_RT_PRIM,
+    T_RT_STRUCT, T_STUB_IMPORT, T_STUB_TAIL, T_VAR_LOCAL, T_VAR_PARAM, T_VAR_SAVED, T_VAR_UNKNOWN,
+    T_XREF_ADDR, T_XREF_CALL, T_XREF_CALLIND, T_XREF_JMPIND, T_XREF_JUMP, T_XREF_READ,
+    T_XREF_STRING, T_XREF_TAIL, T_XREF_THUNK, T_XREF_WRITE, W,
 };
 use crate::analysis::cfg::{BasicBlock, Edge};
 use crate::analysis::decompiler::PseudoLine;
@@ -55,6 +55,7 @@ pub(crate) fn write_analysis(w: &mut W, a: &AnalysisResult) {
             FuncSource::AfterReturn => T_FUNC_AFTER_RET,
             FuncSource::UnwindInfo => T_FUNC_UNWIND,
             FuncSource::UserDefined => T_FUNC_USER,
+            FuncSource::DataPointer => T_FUNC_DATA_PTR,
         });
         w.u8(f.is_thunk as u8);
         w.opt_u64(f.thunk_target);
@@ -314,6 +315,7 @@ pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, St
             T_FUNC_AFTER_RET => FuncSource::AfterReturn,
             T_FUNC_UNWIND => FuncSource::UnwindInfo,
             T_FUNC_USER => FuncSource::UserDefined,
+            T_FUNC_DATA_PTR => FuncSource::DataPointer,
             other => {
                 return Err(format!(
                     "corrupt project DB (function source tag {})",

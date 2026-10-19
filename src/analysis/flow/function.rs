@@ -23,6 +23,9 @@ pub enum FuncSource {
     AfterReturn,
     UnwindInfo,
     UserDefined,
+    
+    
+    DataPointer,
 }
 
 pub fn detect_functions(
@@ -31,6 +34,154 @@ pub fn detect_functions(
     symbols: &[crate::parser::Symbol],
 ) -> Vec<DetectedFunction> {
     detect_functions_impl(insns, entry_point, symbols, None)
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+pub fn scan_data_pointer_candidates(
+    binary: &crate::parser::ParsedBinary,
+    insns: &[DisasmInstruction],
+    max: usize,
+) -> Vec<u64> {
+    use rustc_hash::FxHashSet;
+    if binary.sections.is_empty() || insns.is_empty() || max == 0 {
+        return Vec::new();
+    }
+    let exec: Vec<(u64, u64)> = binary
+        .sections
+        .iter()
+        .filter(|s| s.is_executable && s.size > 0)
+        .map(|s| (s.vaddr, s.vaddr.saturating_add(s.size)))
+        .collect();
+    if exec.is_empty() {
+        return Vec::new();
+    }
+    let is_exec = |a: u64| exec.iter().any(|&(s, e)| a >= s && a < e);
+
+    let data = binary.data.as_slice();
+    let offset_of = |va: u64| -> Option<usize> {
+        let sec = binary
+            .sections
+            .iter()
+            .find(|s| va >= s.vaddr && va < s.vaddr.saturating_add(s.size))?;
+        let off = sec.offset.saturating_add(va - sec.vaddr);
+        (off < data.len() as u64).then_some(off as usize)
+    };
+    let padding_before = |va: u64| -> bool {
+        let Some(off) = offset_of(va) else {
+            return false;
+        };
+        let n = off.min(8);
+        if n < 2 {
+            return true; 
+        }
+        data[off - n..off]
+            .iter()
+            .rev()
+            .take_while(|b| matches!(**b, 0xCC | 0x90 | 0x00))
+            .count()
+            >= 2
+    };
+    let plausible_start = |va: u64| -> bool {
+        let i = insns.partition_point(|x| x.address < va);
+        let Some(insn) = insns.get(i).filter(|x| x.address == va) else {
+            return false;
+        };
+        matches!(
+            insn.mnem(),
+            "push"
+                | "sub"
+                | "mov"
+                | "lea"
+                | "jmp"
+                | "call"
+                | "xor"
+                | "test"
+                | "cmp"
+                | "endbr64"
+                | "endbr32"
+                | "nop"
+                | "int3"
+                | "pushfq"
+                | "pop"
+        )
+    };
+
+    let is64 = binary.arch.contains("64");
+    let step = if is64 { 8usize } else { 4 };
+    let mut out: Vec<u64> = Vec::new();
+    let mut seen: FxHashSet<u64> = FxHashSet::default();
+    let push_candidate = |va: u64, out: &mut Vec<u64>, seen: &mut FxHashSet<u64>| {
+        if out.len() >= max || va == 0 || !is_exec(va) || !seen.insert(va) {
+            return;
+        }
+        let aligned16 = va.is_multiple_of(16);
+        if !aligned16 && !padding_before(va) {
+            return;
+        }
+        if !plausible_start(va) {
+            return;
+        }
+        out.push(va);
+    };
+
+    
+    let mut budget: usize = 64 * 1024 * 1024;
+    for sec in binary
+        .sections
+        .iter()
+        .filter(|s| s.initialized && !s.is_executable && s.vaddr != 0 && s.size > 0)
+    {
+        if budget == 0 || out.len() >= max {
+            break;
+        }
+        let start = sec.offset as usize;
+        let end = start
+            .saturating_add(sec.size as usize)
+            .min(data.len());
+        if start >= end {
+            continue;
+        }
+        let scan_end = end.min(start.saturating_add(budget));
+        budget = budget.saturating_sub(scan_end - start);
+        let mut off = start;
+        while off + step <= scan_end {
+            let va = if is64 {
+                u64::from_le_bytes(data[off..off + 8].try_into().unwrap())
+            } else {
+                u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as u64
+            };
+            push_candidate(va, &mut out, &mut seen);
+            off += step;
+        }
+    }
+
+    
+    
+    const RELATIVE_TYPES: &[u32] = &[8, 23, 1027]; 
+    for rel in &binary.relocations {
+        if rel.symbol.is_none() && RELATIVE_TYPES.contains(&rel.rel_type) {
+            let mut target = rel.addend as u64;
+            if !is_exec(target) && binary.image_base != 0 {
+                target = target.saturating_add(binary.image_base);
+            }
+            push_candidate(target, &mut out, &mut seen);
+        }
+    }
+
+    out
 }
 
 pub fn detect_functions_impl(

@@ -24,7 +24,7 @@ pub use flow::cfg::{EdgeKind, CFG};
 pub use flow::function::{DetectedFunction, FuncSource};
 pub use flow::stack::{StackFrame, VarKind};
 pub use pipeline::{
-    auto_analyze, auto_analyze_with_progress, decompile_on_demand, decompile_snapshot,
-    AnalysisResult, ProgressFn,
+    auto_analyze, auto_analyze_with_progress, auto_analyze_with_source, decompile_on_demand,
+    decompile_snapshot, AnalysisResult, ProgressFn,
 };
 pub use xref::db::{XRefDB, XRefKind};

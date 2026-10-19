@@ -194,6 +194,50 @@ pub fn auto_analyze_with_progress(
     cancel: &AtomicBool,
     progress: ProgressFn,
 ) -> AnalysisResult {
+    auto_analyze_inner(
+        disasm,
+        binary,
+        user_names,
+        &HashMap::default(),
+        extra_fid,
+        cancel,
+        progress,
+    )
+}
+
+
+
+pub fn auto_analyze_with_source(
+    disasm: &DisasmResult,
+    binary: &ParsedBinary,
+    source_path: Option<&str>,
+    user_names: &HashMap<u64, String>,
+    extra_fid: &function_id::FunctionIDMatcher,
+    cancel: &AtomicBool,
+    progress: ProgressFn,
+) -> AnalysisResult {
+    let pdb_names = debug_symbols::load_pdb_function_names(binary, source_path);
+    auto_analyze_inner(
+        disasm,
+        binary,
+        user_names,
+        &pdb_names,
+        extra_fid,
+        cancel,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn auto_analyze_inner(
+    disasm: &DisasmResult,
+    binary: &ParsedBinary,
+    user_names: &HashMap<u64, String>,
+    pdb_names: &HashMap<u64, String>,
+    extra_fid: &function_id::FunctionIDMatcher,
+    cancel: &AtomicBool,
+    progress: ProgressFn,
+) -> AnalysisResult {
     let total_phases = TOTAL_PHASES;
     let stopped = || cancel.load(Ordering::Relaxed);
 
@@ -234,9 +278,48 @@ pub fn auto_analyze_with_progress(
 
     add_missed_import_thunks(&mut functions, disasm, binary);
     add_aligned_function_starts(&mut functions, disasm);
+
+    
+    
+    
+    
+    {
+        let candidates =
+            function::scan_data_pointer_candidates(binary, &disasm.instructions, 8192);
+        if !candidates.is_empty() {
+            let mut ranges: Vec<(u64, u64)> =
+                functions.iter().map(|f| (f.entry, f.end)).collect();
+            ranges.sort_unstable();
+            let covered = |a: u64| -> bool {
+                let i = ranges.partition_point(|&(s, _)| s <= a);
+                i > 0 && a < ranges[i - 1].1
+            };
+            let extra: Vec<(u64, FuncSource)> = candidates
+                .into_iter()
+                .filter(|a| !covered(*a))
+                .map(|a| (a, FuncSource::DataPointer))
+                .collect();
+            if !extra.is_empty() {
+                let mut all_extra = unwind_extra.clone();
+                all_extra.extend(extra);
+                functions = function::detect_functions_with_extra(
+                    &disasm.instructions,
+                    binary.entry_point,
+                    &binary.symbols,
+                    &all_extra,
+                    Some(cancel),
+                );
+                add_missed_import_thunks(&mut functions, disasm, binary);
+                add_aligned_function_starts(&mut functions, disasm);
+            }
+        }
+    }
     functions.sort_by_key(|f| f.entry);
 
     for func in functions.iter_mut() {
+        if let Some(name) = pdb_names.get(&func.entry) {
+            func.name.clone_from(name);
+        }
         if let Some(name) = dwarf_names.get(&func.entry) {
             func.name.clone_from(name);
         }
@@ -780,7 +863,10 @@ pub fn auto_analyze_with_progress(
                     if cancel.load(Ordering::Relaxed) {
                         return None;
                     }
-                    if !xr.kind.is_call_edge() {
+                    if !matches!(
+                        xr.kind,
+                        XRefKind::Call | XRefKind::TailCall | XRefKind::CallIndirect
+                    ) {
                         return None;
                     }
                     let from_func = find_func(xr.from)?;
@@ -799,7 +885,10 @@ pub fn auto_analyze_with_progress(
             if xi % 65536 == 0 && stopped() {
                 return AnalysisResult::default();
             }
-            if !xr.kind.is_call_edge() {
+            if !matches!(
+                xr.kind,
+                XRefKind::Call | XRefKind::TailCall | XRefKind::CallIndirect
+            ) {
                 continue;
             }
             let from_func = find_func(xr.from);
