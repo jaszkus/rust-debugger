@@ -517,6 +517,53 @@ impl<'a> Emulator<'a> {
                 self.assign(dst, v, *size);
                 OpFlow::Continue
             }
+            POp::CondCopy {
+                dst,
+                src,
+                cond,
+                size,
+            } => {
+                let Some(taken) =
+                    eval_cond(&format!("j{cond}"), &self.flags, self.regs[R_RCX])
+                else {
+                    return OpFlow::Halt(EndReason::Unmodeled(format!("cond {cond}")));
+                };
+                if taken {
+                    let v = ev!(self, src);
+                    self.assign(dst, v, *size);
+                }
+                OpFlow::Continue
+            }
+            POp::BitTest { a, b, size } => {
+                let x = ev!(self, a);
+                let bit = ev!(self, b);
+                let bits = (*size * 8).clamp(1, 64) as u64;
+                let set = ((x >> (bit % bits)) & 1) != 0;
+                self.flags.set(Flags::CF, set);
+                OpFlow::Continue
+            }
+            POp::BitModify {
+                dst,
+                bit,
+                kind,
+                size,
+            } => {
+                let old = ev!(self, dst);
+                let bitv = ev!(self, bit);
+                let bits = (*size * 8).clamp(1, 64) as u64;
+                let mask = 1u64 << (bitv % bits);
+                let set = (old & mask) != 0;
+                let v = match kind.as_str() {
+                    "set" => old | mask,
+                    "reset" => old & !mask,
+                    _ => old ^ mask,
+                };
+                self.flags.set(Flags::CF, set);
+                self.assign(dst, v, *size);
+                OpFlow::Continue
+            }
+            POp::Cmpxchg { .. } => OpFlow::Halt(EndReason::Unmodeled("cmpxchg".into())),
+            POp::Opaque(_) => OpFlow::Continue,
             POp::FloatBinop {
                 kind,
                 dst,

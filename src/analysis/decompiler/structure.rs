@@ -515,6 +515,7 @@ fn walk_region(
     }
 
     let ov_before = EXPR_OVERFLOWS.with(|c| c.get());
+    hints.last_cmp.borrow_mut().take();
     let lines_before = lines.len();
     let mut cse_map: HashMap<String, (&'static str, Vec<&'static str>)> = HashMap::default();
     let mut push_args: Vec<PVal> = Vec::new();

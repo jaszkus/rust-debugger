@@ -158,6 +158,35 @@ pub enum POp {
         cond: String,
         size: u32,
     },
+    
+    CondCopy {
+        dst: PVar,
+        src: PVar,
+        cond: String,
+        size: u32,
+    },
+    
+    BitTest {
+        a: PVar,
+        b: PVar,
+        size: u32,
+    },
+    
+    BitModify {
+        dst: PVar,
+        bit: PVar,
+        kind: String,
+        size: u32,
+    },
+    
+    Cmpxchg {
+        addr: PVar,
+        src: PVar,
+        size: u32,
+    },
+    
+    
+    Opaque(String),
     FloatBinop {
         kind: String,
         dst: PVar,
@@ -243,6 +272,53 @@ fn finish(insn: &DisasmInstruction, ops: Vec<POp>) -> PInstr {
         address: insn.address,
         mnemonic: insn.mnemonic.to_string(),
         ops,
+    }
+}
+
+fn read_operand(
+    op: &Operand,
+    insn: &DisasmInstruction,
+    ops: &mut Vec<POp>,
+    ctr: &mut u32,
+) -> PVar {
+    if matches!(op, Operand::Mem { .. }) {
+        let t = PVar::Tmp(next_tmp(ctr));
+        ops.push(POp::Load {
+            dst: t.clone(),
+            addr: to_pvar(op, insn),
+            size: src_width(op),
+        });
+        t
+    } else {
+        field_read(op, insn, ops, ctr)
+    }
+}
+
+fn write_operand(
+    op: &Operand,
+    value: PVar,
+    insn: &DisasmInstruction,
+    ops: &mut Vec<POp>,
+    ctr: &mut u32,
+) {
+    match op {
+        Operand::Reg(r) => {
+            if let Some((base, off, w)) = subreg_part(r) {
+                rmw_store(ops, PVar::Reg(base), off, w, value, ctr);
+            } else {
+                ops.push(POp::Copy {
+                    dst: to_pvar(op, insn),
+                    src: value,
+                    size: op_size(op, op),
+                });
+            }
+        }
+        Operand::Mem { .. } => ops.push(POp::Store {
+            addr: to_pvar(op, insn),
+            src: value,
+            size: src_width(op),
+        }),
+        _ => {}
     }
 }
 
@@ -405,10 +481,10 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
                 }
             }
         }
-        "add" => binop(insn, &parsed, &mut ops, ctr, |dst, a, b, size| {
+        "add" | "adc" => binop(insn, &parsed, &mut ops, ctr, |dst, a, b, size| {
             POp::IntAdd { dst, a, b, size }
         }),
-        "sub" => binop(insn, &parsed, &mut ops, ctr, |dst, a, b, size| {
+        "sub" | "sbb" => binop(insn, &parsed, &mut ops, ctr, |dst, a, b, size| {
             POp::IntSub { dst, a, b, size }
         }),
         "and" => binop(insn, &parsed, &mut ops, ctr, |dst, a, b, size| {
@@ -546,34 +622,10 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
         }),
         "xchg" => {
             if let [pa, pb] = parsed.as_slice() {
-                let is_narrow =
-                    |o: &Operand| matches!(o, Operand::Reg(r) if subreg_part(r).is_some());
-                if is_narrow(pa) || is_narrow(pb) {
-                    ops.push(POp::Unimplemented(format!(
-                        "narrow xchg needs RMW: {}",
-                        ops_text
-                    )));
-                } else {
-                    let a = to_pvar(pa, insn);
-                    let b = to_pvar(pb, insn);
-                    let size = op_size(pa, pb);
-                    let tmpv = PVar::Tmp(next_tmp(ctr));
-                    ops.push(POp::Copy {
-                        dst: tmpv.clone(),
-                        src: a.clone(),
-                        size,
-                    });
-                    ops.push(POp::Copy {
-                        dst: a,
-                        src: b.clone(),
-                        size,
-                    });
-                    ops.push(POp::Copy {
-                        dst: b,
-                        src: tmpv,
-                        size,
-                    });
-                }
+                let a_val = read_operand(pa, insn, &mut ops, ctr);
+                let b_val = read_operand(pb, insn, &mut ops, ctr);
+                write_operand(pa, b_val, insn, &mut ops, ctr);
+                write_operand(pb, a_val, insn, &mut ops, ctr);
             }
         }
         "push" => {
@@ -639,6 +691,68 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
             });
         }
         "nop" => ops.push(POp::Nop),
+        "bt" | "bts" | "btr" | "btc" => {
+            if let [d, bit] = parsed.as_slice() {
+                let a = to_pvar(d, insn);
+                let b = field_read(bit, insn, &mut ops, ctr);
+                let size = op_size(d, bit);
+                ops.push(POp::BitTest {
+                    a: a.clone(),
+                    b: b.clone(),
+                    size,
+                });
+                if m != "bt" {
+                    let kind = match m {
+                        "bts" => "set",
+                        "btr" => "reset",
+                        _ => "complement",
+                    };
+                    ops.push(POp::BitModify {
+                        dst: a,
+                        bit: b,
+                        kind: kind.into(),
+                        size,
+                    });
+                }
+            }
+        }
+        "cmpxchg" | "lock cmpxchg" => {
+            if let [d, s] = parsed.as_slice()
+                && matches!(d, Operand::Mem { .. })
+            {
+                let addr = to_pvar(d, insn);
+                let size = op_size(d, s);
+                
+                
+                ops.push(POp::Cmp {
+                    a: PVar::Reg("rax"),
+                    b: addr.clone(),
+                    size,
+                });
+                let src = field_read(s, insn, &mut ops, ctr);
+                ops.push(POp::Cmpxchg { addr, src, size });
+            }
+        }
+        _ if m.starts_with("cmov") => {
+            if let [d, s] = parsed.as_slice() {
+                let src = field_read(s, insn, &mut ops, ctr);
+                ops.push(POp::CondCopy {
+                    dst: to_pvar(d, insn),
+                    src,
+                    cond: m[4..].to_string(),
+                    size: op_size(d, s),
+                });
+            }
+        }
+        "ud2" => ops.push(POp::Opaque("ud2".into())),
+        "cpuid" => ops.push(POp::Opaque("cpuid".into())),
+        "xgetbv" => ops.push(POp::Opaque("xgetbv".into())),
+        "pause" => ops.push(POp::Nop),
+        "lfence" | "mfence" | "sfence" => ops.push(POp::Nop),
+        _ if m.starts_with("prefetch") => ops.push(POp::Nop),
+        _ if m.starts_with("lock ") => {
+            ops.push(POp::Opaque(format!("{} {}", m, ops_text)));
+        }
         _ if is_setcc(m) => {
             if let [op] = parsed.as_slice() {
                 ops.push(POp::SetCC {

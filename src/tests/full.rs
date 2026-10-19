@@ -596,8 +596,16 @@ fn lift_narrow_not_neg_xchg() {
     );
     let pin = lifted(&[0x86, 0xD8], 0x1000);
     assert!(
-        matches!(first_op(&pin), POp::Unimplemented(_)),
-        "got {:?}",
+        !matches!(first_op(&pin), POp::Unimplemented(_)),
+        "narrow xchg must be modeled, got {:?}",
+        pin[0].ops
+    );
+    assert!(
+        pin[0]
+            .ops
+            .iter()
+            .any(|o| matches!(o, POp::Copy { .. } | POp::IntOr { .. } | POp::IntAnd { .. })),
+        "narrow xchg must swap through RMW, got {:?}",
         pin[0].ops
     );
 }
@@ -692,6 +700,52 @@ fn lift_xorps_zeroing_is_intxor() {
 fn lift_genuinely_unknown_marks_unimplemented() {
     let pin = lifted(&[0xD9, 0xF1], 0x1000);
     assert!(matches!(first_op(&pin), POp::Unimplemented(_)));
+}
+
+#[test]
+fn lift_cmov_renders_conditional_select() {
+    
+    let text = render(&[0x48, 0x83, 0xF8, 0x00, 0x48, 0x0F, 0x45, 0xC1, 0xC3], 0x1000, true);
+    assert!(
+        text.contains("?") && text.contains("rcx"),
+        "cmov must render a select:\n{}",
+        text
+    );
+    assert!(!text.contains("not modeled"), "cmov lifted:\n{}", text);
+}
+
+#[test]
+fn lift_bt_recovers_bit_condition() {
+    
+    let text = render(&[0x48, 0x0F, 0xBA, 0xE0, 0x05, 0x72, 0x01, 0xC3, 0xC3], 0x1000, true);
+    assert!(
+        text.contains(">> 5") && text.contains("& 1"),
+        "bt condition must be a bit test:\n{}",
+        text
+    );
+}
+
+#[test]
+fn lift_bts_renders_bit_set() {
+    
+    let text = render(&[0x48, 0x0F, 0xAB, 0xD8, 0xC3], 0x1000, true);
+    assert!(
+        text.contains("1 << rbx") && text.contains('|'),
+        "bts must render a bit set:\n{}",
+        text
+    );
+}
+
+#[test]
+fn lift_lock_cmpxchg_is_visible() {
+    
+    let text = render(&[0xF0, 0x0F, 0xB1, 0x51, 0x2C, 0xC3], 0x1000, true);
+    assert!(
+        text.contains("atomic_cmpxchg"),
+        "lock cmpxchg must be modeled:\n{}",
+        text
+    );
+    assert!(!text.contains("not modeled"), "no omission:\n{}", text);
 }
 
 #[test]

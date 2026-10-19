@@ -185,6 +185,22 @@ fn collect_stack_accesses(op: &POp, accesses: &mut BTreeMap<i64, (u32, u32)>) {
             }
         }
         POp::SetCC { dst, size, .. } => visit(dst, *size, accesses),
+        POp::CondCopy { dst, src, size, .. } => {
+            visit(dst, *size, accesses);
+            visit(src, *size, accesses);
+        }
+        POp::BitTest { a, b, size, .. } => {
+            visit(a, *size, accesses);
+            visit(b, *size, accesses);
+        }
+        POp::BitModify { dst, bit, size, .. } => {
+            visit(dst, *size, accesses);
+            visit(bit, *size, accesses);
+        }
+        POp::Cmpxchg { addr, src, size, .. } => {
+            visit(addr, *size, accesses);
+            visit(src, *size, accesses);
+        }
         POp::Branch { .. }
         | POp::CBranch { .. }
         | POp::Call { .. }
@@ -193,6 +209,7 @@ fn collect_stack_accesses(op: &POp, accesses: &mut BTreeMap<i64, (u32, u32)>) {
         | POp::Nop
         | POp::LeaAddr { .. }
         | POp::CallOther { .. }
+        | POp::Opaque(_)
         | POp::Unimplemented(_) => {}
         POp::BranchInd { target } | POp::CallInd { target } => {
             visit(target, 8, accesses);

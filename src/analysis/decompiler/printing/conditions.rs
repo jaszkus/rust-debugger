@@ -55,9 +55,22 @@ pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
             visit(addr, &mut out);
             visit(src, &mut out);
         }
-        POp::Cmp { a, b, .. } | POp::Test { a, b, .. } => {
+        POp::Cmp { a, b, .. } | POp::Test { a, b, .. } | POp::BitTest { a, b, .. } => {
             visit(a, &mut out);
             visit(b, &mut out);
+        }
+        POp::CondCopy { dst, src, .. } => {
+            visit(dst, &mut out);
+            visit(src, &mut out);
+        }
+        POp::BitModify { dst, bit, .. } => {
+            visit(dst, &mut out);
+            visit(bit, &mut out);
+        }
+        POp::Cmpxchg { addr, src, .. } => {
+            visit(addr, &mut out);
+            visit(src, &mut out);
+            out.push("rax");
         }
         POp::Push { src, .. } => visit(src, &mut out),
         POp::AddrOf { base, index, .. } => {
@@ -110,6 +123,11 @@ pub(crate) fn written_reg(op: &POp) -> Option<&'static str> {
             PVar::Reg(r) => Some(r),
             _ => None,
         },
+        POp::CondCopy { dst, .. } | POp::BitModify { dst, .. } => match dst {
+            PVar::Reg(r) => Some(r),
+            _ => None,
+        },
+        POp::Cmpxchg { .. } => Some("rax"),
         _ => None,
     }
 }
@@ -134,6 +152,8 @@ pub(crate) fn is_pure(op: &POp) -> bool {
             | POp::SetCC { .. }
             | POp::LeaAddr { .. }
             | POp::AddrOf { .. }
+            | POp::CondCopy { .. }
+            | POp::BitTest { .. }
     )
 }
 
@@ -497,6 +517,7 @@ pub(crate) fn recover_condition(
 
     let mut cmp_pair: Option<(PVar, PVar, bool)> = None;
     let mut float_cmp_pair: Option<(PVar, PVar)> = None;
+    let mut bit_test: Option<(PVar, PVar)> = None;
     let mut flag_setter: Option<(String, PVar, PVar, String)> = None;
     let mut jcc_mnemonic = String::new();
     let mut ah_float_cmp: Option<(PVar, PVar)> = None;
@@ -533,6 +554,9 @@ pub(crate) fn recover_condition(
                 ah_float_cmp = Some((a.clone(), b.clone()));
                 ah_test_mask = None;
             }
+            POp::BitTest { a, b, .. } => {
+                bit_test = Some((a.clone(), b.clone()));
+            }
             POp::IntAdd { dst, a, b, .. } => {
                 flag_setter = Some(("add".into(), a.clone(), b.clone(), fmt_var(dst)))
             }
@@ -558,6 +582,17 @@ pub(crate) fn recover_condition(
             let bv = cv(&fb);
             return float_cc_via_mask(&jcc_mnemonic, mask, &av, &bv);
         }
+
+    if let Some((a, b)) = bit_test {
+        let av = cv(&a);
+        let bv = cv(&b);
+        let expr = format!("(({} >> {}) & 1)", av, bv);
+        return match jcc_mnemonic.as_str() {
+            "jc" | "jb" | "jnae" => format!("{} != 0", expr),
+            "jnc" | "jae" | "jnb" => format!("{} == 0", expr),
+            _ => "cond".into(),
+        };
+    }
 
     if let Some((a, b, is_test)) = cmp_pair {
         let av = cv(&a);

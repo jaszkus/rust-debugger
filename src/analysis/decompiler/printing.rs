@@ -105,6 +105,7 @@ pub(crate) struct TypeHints {
     pub(crate) param_slots: HashSet<i64>,
     pub(crate) imports: HashMap<u64, String>,
     pub(crate) structs: HashMap<String, StructHint>,
+    pub(crate) last_cmp: std::cell::RefCell<Option<(String, String, bool)>>,
     pub(crate) out_bytes: std::cell::Cell<usize>,
     pub(crate) out_truncated: std::cell::Cell<bool>,
     pub(crate) cur_pc: std::cell::Cell<u64>,
@@ -358,7 +359,62 @@ pub(crate) fn render_op(
                 Some((format!("return {};", ret_val), LineKind::Return))
             }
         }
-        POp::Cmp { .. } | POp::Test { .. } | POp::FloatCmp { .. } => None,
+        POp::Cmp { a, b, .. } => {
+            let av = pval_str(&resolve_pval_with_hints(a, reg_values, hints));
+            let bv = pval_str(&resolve_pval_with_hints(b, reg_values, hints));
+            *hints.last_cmp.borrow_mut() = Some((av, bv, false));
+            None
+        }
+        POp::Test { a, b, .. } => {
+            let av = pval_str(&resolve_pval_with_hints(a, reg_values, hints));
+            let bv = pval_str(&resolve_pval_with_hints(b, reg_values, hints));
+            *hints.last_cmp.borrow_mut() = Some((av, bv, true));
+            None
+        }
+        POp::FloatCmp { .. } => {
+            *hints.last_cmp.borrow_mut() = None;
+            None
+        }
+        POp::BitTest { .. } => None,
+        POp::CondCopy { dst, src, cond, .. } => {
+            let cond_expr = hints
+                .last_cmp
+                .borrow()
+                .as_ref()
+                .map(|(a, b, is_test)| jcc_to_expr(&format!("j{}", cond), a, b, *is_test))
+                .unwrap_or_else(|| format!("({})", cond));
+            let sv = pval_str(&resolve_pval_with_hints(src, reg_values, hints));
+            let dv = fmt_var_with_hints(dst, hints);
+            let v = format!("({}) ? {} : {}", cond_expr, sv, dv);
+            track(reg_values, dst, PVal::E(v.clone()));
+            Some((format!("{} = {};", dv, v), LineKind::Assignment))
+        }
+        POp::BitModify { dst, bit, kind, .. } => {
+            let dv = fmt_var_with_hints(dst, hints);
+            let bv = pval_str(&resolve_pval_with_hints(bit, reg_values, hints));
+            let one = format!("(1 << {})", bv);
+            let v = match kind.as_str() {
+                "set" => format!("{} | {}", dv, one),
+                "reset" => format!("{} & ~{}", dv, one),
+                _ => format!("{} ^ {}", dv, one),
+            };
+            if matches!(dst, PVar::Reg(_)) {
+                track(reg_values, dst, PVal::E(v.clone()));
+            }
+            Some((format!("{} = {};", dv, v), LineKind::Assignment))
+        }
+        POp::Cmpxchg { addr, src, size } => {
+            let mem = fmt_load(addr, *size, reg_values, None, Some(hints));
+            let sv = pval_str(&resolve_pval_with_hints(src, reg_values, hints));
+            let call = format!("atomic_cmpxchg(&{}, {})", mem, sv);
+            let rax = PVar::Reg("rax");
+            track(reg_values, &rax, PVal::E(call.clone()));
+            Some((
+                format!("rax = {};  // returns the old value", call),
+                LineKind::Assignment,
+            ))
+        }
+        POp::Opaque(text) => Some((format!("// {}", text), LineKind::Comment)),
         POp::Branch { .. } => None,
         POp::BranchInd { target } => Some((
             format!(
