@@ -554,6 +554,33 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         variables::apply_names(&mut lines, rv);
     }
 
+    
+    
+    
+    fn is_stack_bookkeeping(text: &str) -> bool {
+        let t = text.trim().strip_suffix(';').unwrap_or(text.trim());
+        let Some((lhs, rhs)) = t.split_once('=') else {
+            return false;
+        };
+        let lhs = lhs.trim();
+        let rhs = rhs.trim();
+        let is_sp = |s: &str| matches!(s, "rsp" | "esp" | "rbp" | "ebp");
+        if !is_sp(lhs) {
+            return false;
+        }
+        if rhs == lhs || is_sp(rhs) {
+            return true;
+        }
+        if let Some(rest) = rhs.strip_prefix(lhs) {
+            let rest = rest.trim_start();
+            if rest.starts_with('+') || rest.starts_with('-') {
+                return true;
+            }
+        }
+        false
+    }
+    lines.retain(|l| !is_stack_bookkeeping(&l.text));
+
     if hints.out_truncated.get() {
         stats.truncated = true;
         lines.push(PseudoLine {

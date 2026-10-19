@@ -112,6 +112,11 @@ pub struct VarNames {
     pub read_reg: HashMap<(u64, &'static str), String>,
     pub write_stack: HashMap<(u64, u8, i64), String>,
     pub read_stack: HashMap<(u64, u8, i64), String>,
+    
+    
+    
+    
+    pub stack_by_raw: HashMap<(u8, i64), String>,
     pub type_of: HashMap<String, VarType>,
     pub size_of: HashMap<String, u32>,
     pub kept: HashSet<String>,
@@ -325,6 +330,9 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         if !a.taken {
             if a.write { vn.write_stack.insert((a.pc, a.base, a.off), name.clone()); }
             else { vn.read_stack.insert((a.pc, a.base, a.off), name.clone()); }
+            vn.stack_by_raw
+                .entry((a.base, a.off))
+                .or_insert_with(|| name.clone());
         }
         let cl = *class;
         let e = raw_class.entry((a.base, a.off)).or_insert((a.pc, cl));

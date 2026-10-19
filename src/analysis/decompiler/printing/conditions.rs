@@ -273,7 +273,9 @@ pub(crate) fn fmt_load(
             let name = if let Some(h) = hints {
                 if let Some(vn) = &h.var_names {
                     let pc = h.cur_pc.get();
-                    if let Some(n) = vn.read_stack.get(&(pc, b, *off)).or_else(|| vn.write_stack.get(&(pc, b, *off))) {
+                    if let Some(n) = vn.read_stack.get(&(pc, b, *off))
+                        .or_else(|| vn.write_stack.get(&(pc, b, *off)))
+                        .or_else(|| vn.stack_by_raw.get(&(b, *off))) {
                         n.clone()
                     } else {
                         fallback_slot_name(*off, h)
@@ -403,7 +405,9 @@ pub(crate) fn fmt_var_with_hints(v: &PVar, hints: &TypeHints) -> String {
             let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
             if let Some(vn) = &hints.var_names {
                 let pc = hints.cur_pc.get();
-                if let Some(n) = vn.read_stack.get(&(pc, b, *off)).or_else(|| vn.write_stack.get(&(pc, b, *off))) {
+                if let Some(n) = vn.read_stack.get(&(pc, b, *off))
+                    .or_else(|| vn.write_stack.get(&(pc, b, *off)))
+                    .or_else(|| vn.stack_by_raw.get(&(b, *off))) {
                     return n.clone();
                 }
             }
