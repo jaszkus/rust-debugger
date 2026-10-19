@@ -1,7 +1,7 @@
 use super::printing::*;
 use super::structure::{
-    Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, squash_empty_branches,
-    walk_block,
+    Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, inline_terminal_gotos,
+    prune_unreachable_returns, retarget_goto_chains, squash_empty_branches, walk_block,
 };
 use super::*;
 use super::alias;
@@ -987,7 +987,6 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         hints: &hints,
     };
     walk_block(&ctx, entry_id, &mut visited, &mut lines, 1, 0);
-    cleanup_labels(&mut lines);
     stats.t_structure = t_phase.elapsed();
 
     let mut unmodeled = 0usize;
@@ -1104,6 +1103,13 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         kind: LineKind::CloseBrace,
         source_addr: None,
     });
+
+    retarget_goto_chains(&mut lines);
+    inline_terminal_gotos(&mut lines);
+    retarget_goto_chains(&mut lines);
+    inline_terminal_gotos(&mut lines);
+    prune_unreachable_returns(&mut lines);
+    cleanup_labels(&mut lines);
 
     stats.emitted_lines = lines.len();
     stats.output_bytes = total_bytes;

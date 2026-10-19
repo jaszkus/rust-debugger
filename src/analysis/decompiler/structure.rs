@@ -1169,6 +1169,232 @@ fn goto_target(text: &str) -> Option<&str> {
     name.starts_with("LAB_").then_some(name)
 }
 
+type CopiedLine = (String, LineKind, Option<u64>, u32);
+
+
+
+
+pub(crate) fn inline_terminal_gotos(lines: &mut Vec<PseudoLine>) {
+    let Some(close) = lines
+        .iter()
+        .rposition(|l| l.kind == LineKind::CloseBrace && l.indent == 0)
+    else {
+        return;
+    };
+    let mut labels: HashMap<String, (usize, usize)> = HashMap::default();
+    let label_positions: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| label_of(&l.text).is_some())
+        .map(|(i, _)| i)
+        .collect();
+    for (n, &i) in label_positions.iter().enumerate() {
+        let name = label_of(&lines[i].text).unwrap_or_default().to_string();
+        let end = label_positions.get(n + 1).copied().unwrap_or(close);
+        labels.insert(name, (i, end));
+    }
+    if labels.is_empty() {
+        return;
+    }
+
+    let mut replacements: Vec<(usize, Vec<PseudoLine>)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let Some(target) = goto_target(&line.text) else {
+            continue;
+        };
+        let Some(&(label_idx, end)) = labels.get(target) else {
+            continue;
+        };
+        let mut seen: HashSet<String> = HashSet::default();
+        let Some(body) =
+            terminal_return_body(lines, label_idx + 1, end, Some(&labels), &mut seen, 0)
+        else {
+            continue;
+        };
+        let copied: Vec<PseudoLine> = body
+            .into_iter()
+            .map(|(text, kind, source_addr, _)| PseudoLine {
+                indent: line.indent,
+                text,
+                kind,
+                source_addr,
+            })
+            .collect();
+        replacements.push((i, copied));
+    }
+    for (idx, copied) in replacements.into_iter().rev() {
+        lines.splice(idx..=idx, copied);
+    }
+}
+
+
+
+
+pub(crate) fn retarget_goto_chains(lines: &mut [PseudoLine]) {
+    let Some(close) = lines
+        .iter()
+        .rposition(|l| l.kind == LineKind::CloseBrace && l.indent == 0)
+    else {
+        return;
+    };
+    let mut alias: HashMap<String, String> = HashMap::default();
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(name) = label_of(&lines[i].text).map(str::to_string) else {
+            i += 1;
+            continue;
+        };
+        let mut next = i + 1;
+        while next < lines.len() && lines[next].text.trim().is_empty() {
+            next += 1;
+        }
+        if next < close
+            && lines[next].kind != LineKind::Label
+            && let Some(target) = goto_target(&lines[next].text)
+            && target != name
+        {
+            alias.insert(name, target.to_string());
+        }
+        i = next.max(i + 1);
+    }
+    if alias.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        let Some(mut target) = goto_target(&line.text).map(str::to_string) else {
+            continue;
+        };
+        let mut seen: HashSet<String> = HashSet::default();
+        while let Some(next) = alias.get(&target) {
+            if !seen.insert(target.clone()) {
+                break;
+            }
+            target.clone_from(next);
+        }
+        line.text = format!("goto {};", target);
+    }
+}
+
+
+
+fn terminal_return_body(
+    lines: &[PseudoLine],
+    start: usize,
+    end: usize,
+    labels: Option<&HashMap<String, (usize, usize)>>,
+    seen: &mut HashSet<String>,
+    depth: usize,
+) -> Option<Vec<CopiedLine>> {
+    if depth > 8 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for line in &lines[start..end.min(lines.len())] {
+        let t = line.text.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with("return") {
+            out.push((line.text.clone(), line.kind, line.source_addr, line.indent));
+            return Some(out);
+        }
+        if let Some(target) = goto_target(t)
+            && let Some(labels) = labels
+            && let Some(&(label_idx, label_end)) = labels.get(target)
+        {
+            if !seen.insert(target.to_string()) {
+                return None;
+            }
+            let rest = terminal_return_body(
+                lines,
+                label_idx + 1,
+                label_end,
+                Some(labels),
+                seen,
+                depth + 1,
+            )?;
+            out.extend(rest);
+            return Some(out);
+        }
+        if t == "{" || t.starts_with('}') || label_of(t).is_some() {
+            return None;
+        }
+        if t.starts_with("if ")
+            || t.starts_with("if(")
+            || t.starts_with("while")
+            || t.starts_with("do")
+            || t.starts_with("for")
+            || t.starts_with("switch")
+            || t.starts_with("goto ")
+            || t.starts_with("break;")
+            || t.starts_with("continue;")
+            || t.starts_with("else")
+        {
+            return None;
+        }
+        if !t.starts_with("//") {
+            out.push((line.text.clone(), line.kind, line.source_addr, line.indent));
+        }
+    }
+    None
+}
+
+
+
+pub(crate) fn prune_unreachable_returns(lines: &mut Vec<PseudoLine>) {
+    loop {
+        let mut refs: HashSet<String> = HashSet::default();
+        for l in lines.iter() {
+            if let Some(t) = goto_target(&l.text) {
+                refs.insert(t.to_string());
+            }
+        }
+        let mut remove: Option<(usize, usize)> = None;
+        for (i, l) in lines.iter().enumerate() {
+            let Some(name) = label_of(&l.text) else {
+                continue;
+            };
+            if refs.contains(name) {
+                continue;
+            }
+            let prev = lines[..i].iter().rposition(|p| !p.text.trim().is_empty());
+            let unreachable = prev.is_some_and(|p| {
+                let t = lines[p].text.trim();
+                t.starts_with("return")
+                    || t.starts_with("goto ")
+                    || t == "break;"
+                    || t == "continue;"
+            });
+            if !unreachable {
+                continue;
+            }
+            let next_label = lines[i + 1..]
+                .iter()
+                .position(|p| label_of(&p.text).is_some())
+                .map(|p| i + 1 + p)
+                .unwrap_or(lines.len());
+            if terminal_return_body(
+                lines,
+                i + 1,
+                next_label,
+                None,
+                &mut HashSet::default(),
+                0,
+            )
+            .is_some()
+            {
+                remove = Some((i, next_label));
+                break;
+            }
+        }
+        if let Some((start, end)) = remove {
+            lines.drain(start..end);
+        } else {
+            break;
+        }
+    }
+}
+
 
 
 pub(crate) fn cleanup_labels(lines: &mut Vec<PseudoLine>) {
@@ -1396,6 +1622,63 @@ mod cleanup_tests {
             kind,
             source_addr: None,
         }
+    }
+
+    #[test]
+    fn inlines_terminal_return_gotos() {
+        let mut lines = vec![
+            line("if (x) {", LineKind::Branch),
+            line("goto LAB_10;", LineKind::Branch),
+            line("}", LineKind::Branch),
+            line("LAB_10:", LineKind::Label),
+            line("// pop rbx", LineKind::Comment),
+            line("return;", LineKind::Return),
+            line("}", LineKind::CloseBrace),
+        ];
+        inline_terminal_gotos(&mut lines);
+        assert!(
+            !lines.iter().any(|l| l.text.contains("goto LAB_")),
+            "goto should be inlined: {:?}",
+            lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+        );
+        assert!(lines.iter().any(|l| l.text == "return;"));
+    }
+
+    #[test]
+    fn inlines_goto_chain_to_return() {
+        let mut lines = vec![
+            line("if (x) {", LineKind::Branch),
+            line("goto LAB_10;", LineKind::Branch),
+            line("}", LineKind::Branch),
+            line("LAB_10:", LineKind::Label),
+            line("goto LAB_20;", LineKind::Branch),
+            line("LAB_20:", LineKind::Label),
+            line("return 7;", LineKind::Return),
+            line("}", LineKind::CloseBrace),
+        ];
+        retarget_goto_chains(&mut lines);
+        inline_terminal_gotos(&mut lines);
+        assert!(
+            !lines.iter().any(|l| l.text.contains("goto LAB_")),
+            "goto chain to return should be inlined: {:?}",
+            lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+        );
+        assert!(lines.iter().any(|l| l.text == "return 7;"));
+    }
+
+    #[test]
+    fn does_not_inline_fallthrough_block() {
+        let mut lines = vec![
+            line("goto LAB_10;", LineKind::Branch),
+            line("LAB_10:", LineKind::Label),
+            line("rax = 1;", LineKind::Assignment),
+            line("}", LineKind::CloseBrace),
+        ];
+        inline_terminal_gotos(&mut lines);
+        assert!(
+            lines.iter().any(|l| l.text == "goto LAB_10;"),
+            "fallthrough block must keep its goto"
+        );
     }
 
     #[test]
