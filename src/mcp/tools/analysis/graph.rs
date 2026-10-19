@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use crate::gui::AppState;
 
 use super::common::*;
-use crate::mcp::tools::parse_addr;
 use std::collections::{HashMap, HashSet};
 
 pub fn find_imports_called_by(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
@@ -15,52 +14,20 @@ pub fn find_imports_called_by(args: &Value, state: &Arc<Mutex<AppState>>) -> Res
         .analysis
         .as_ref()
         .ok_or("No analysis loaded - run the run_analysis tool first")?;
-    let disasm = s.disasm.as_ref().ok_or("No disasm")?;
     let f = function_containing(analysis, addr).ok_or_else(|| not_in_function(addr))?;
 
-    let import_map: HashMap<u64, (&str, &str)> = bin
-        .imports
-        .iter()
-        .map(|i| (i.offset, (i.library.as_str(), i.name.as_str())))
-        .collect();
-
-    let stub_to_import: HashMap<u64, &str> = analysis
-        .stubs
-        .iter()
-        .map(|(addr, info)| (*addr, info.target_name.as_str()))
-        .collect();
-
-    let s_idx = disasm.instructions.partition_point(|i| i.address < f.entry);
-    let e_idx = disasm.instructions.partition_point(|i| i.address < f.end);
+    let edges = crate::analysis::xref::import_edges::function_import_callees(bin, analysis);
     let mut found: Vec<Value> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-
-    for ins in &disasm.instructions[s_idx..e_idx] {
-        if !(ins.mnemonic.starts_with("call") || ins.mnem() == "jmp") {
-            continue;
-        }
-        let target = match parse_addr(extract_hex_token(&ins.ops()).unwrap_or(&ins.ops())) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        if let Some((lib, name)) = import_map.get(&target) {
-            let key = format!("{}!{}", lib, name);
+    if let Some(list) = edges.get(&f.entry) {
+        for c in list {
+            let key = format!("{}!{}", c.library, c.name);
             if seen.insert(key.clone()) {
                 found.push(json!({
-                    "from": format!("{:#x}", ins.address),
-                    "import_address": format!("{:#x}", target),
-                    "library": lib,
-                    "name": name
-                }));
-            }
-        } else if let Some(via) = stub_to_import.get(&target) {
-            let key = via.to_string();
-            if seen.insert(key.clone()) {
-                found.push(json!({
-                    "from": format!("{:#x}", ins.address),
-                    "via_stub": format!("{:#x}", target),
-                    "import": via
+                    "import_address": format!("{:#x}", c.import_offset),
+                    "library": c.library,
+                    "name": c.name,
+                    "via": format!("{:#x}", c.via)
                 }));
             }
         }
@@ -237,6 +204,14 @@ pub fn get_call_tree(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
         .iter()
         .map(|f| (f.entry, f.name.as_str()))
         .collect();
+    let import_edges = s.binary.as_ref().map(|bin| {
+        crate::analysis::xref::import_edges::function_import_callees(bin, analysis)
+    });
+    let no_imports: rustc_hash::FxHashMap<
+        u64,
+        Vec<crate::analysis::xref::import_edges::ImportCallee>,
+    > = rustc_hash::FxHashMap::default();
+    let import_edges = import_edges.as_ref().unwrap_or(&no_imports);
 
     fn walk(
         addr: u64,
@@ -245,6 +220,10 @@ pub fn get_call_tree(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
         visited: &mut HashSet<u64>,
         analysis: &crate::analysis::AnalysisResult,
         lookup: &HashMap<u64, &str>,
+        import_edges: &rustc_hash::FxHashMap<
+            u64,
+            Vec<crate::analysis::xref::import_edges::ImportCallee>,
+        >,
     ) -> Value {
         if depth >= max {
             return Value::Null;
@@ -254,12 +233,25 @@ pub fn get_call_tree(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
         }
         let empty = vec![];
         let callees = analysis.callees.get(&addr).unwrap_or(&empty);
-        let children: Vec<Value> = callees
+        let mut children: Vec<Value> = callees
             .iter()
             .take(50)
-            .map(|c| walk(*c, depth + 1, max, visited, analysis, lookup))
+            .map(|c| walk(*c, depth + 1, max, visited, analysis, lookup, import_edges))
             .filter(|v| !v.is_null())
             .collect();
+        if let Some(imports) = import_edges.get(&addr) {
+            for c in imports.iter().take(50) {
+                children.push(json!({
+                    "address": format!("{:#x}", c.import_offset),
+                    "name": c.name,
+                    "library": c.library,
+                    "via": format!("{:#x}", c.via),
+                    "import": true,
+                    "depth": depth + 1,
+                    "callees": [],
+                }));
+            }
+        }
         json!({
             "address": format!("{:#x}", addr),
             "name": lookup.get(&addr).copied().unwrap_or("?"),
@@ -269,7 +261,15 @@ pub fn get_call_tree(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value
     }
 
     let mut visited = HashSet::new();
-    let tree = walk(entry, 0, max_depth, &mut visited, analysis, &func_lookup);
+    let tree = walk(
+        entry,
+        0,
+        max_depth,
+        &mut visited,
+        analysis,
+        &func_lookup,
+        import_edges,
+    );
     Ok(json!({
         "root": format!("{:#x}", entry),
         "max_depth": max_depth,
@@ -373,12 +373,23 @@ pub fn find_leaf_functions(args: &Value, state: &Arc<Mutex<AppState>>) -> Result
         .analysis
         .as_ref()
         .ok_or("No analysis loaded - run the run_analysis tool first")?;
+    let import_edges = s
+        .binary
+        .as_ref()
+        .map(|bin| crate::analysis::xref::import_edges::function_import_callees(bin, analysis));
     let leaves: Vec<Value> = analysis
         .functions
         .iter()
         .filter(|f| {
-            !analysis.callees.contains_key(&f.entry)
-                || analysis.callees.get(&f.entry).is_none_or(|v| v.is_empty())
+            let no_calls = analysis
+                .callees
+                .get(&f.entry)
+                .is_none_or(|v| v.is_empty());
+            let no_imports = import_edges
+                .as_ref()
+                .and_then(|m| m.get(&f.entry))
+                .is_none_or(|v| v.is_empty());
+            no_calls && no_imports
         })
         .take(limit)
         .map(|f| {

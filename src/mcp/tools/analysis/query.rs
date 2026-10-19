@@ -5,7 +5,7 @@ use crate::gui::AppState;
 
 use super::common::*;
 use crate::mcp::tools::parse_addr;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub fn get_function_at(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
     let addr = arg_addr(args, "address")?;
@@ -300,19 +300,27 @@ pub fn get_function_summary(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
         })
         .collect();
 
-    let import_addrs: HashMap<u64, &str> = bin
-        .imports
+    let import_edges =
+        crate::analysis::xref::import_edges::function_import_callees(bin, analysis);
+    let imports_here = import_edges.get(&addr).cloned().unwrap_or_default();
+    let mut used_imports: Vec<Value> = imports_here
         .iter()
-        .map(|i| (i.offset, i.name.as_str()))
+        .map(|c| {
+            json!({
+                "address": format!("{:#x}", c.import_offset),
+                "library": c.library,
+                "name": c.name,
+                "via": format!("{:#x}", c.via)
+            })
+        })
         .collect();
-    let mut used_imports: HashSet<&str> = HashSet::new();
-    for ins in &disasm.instructions[s_idx..e_idx] {
-        if (ins.mnemonic.starts_with("call") || ins.mnem() == "jmp")
-            && let Some(target) = parse_addr(extract_hex_token(&ins.ops()).unwrap_or(&ins.ops()))
-                && let Some(name) = import_addrs.get(&target) {
-                    used_imports.insert(name);
-                }
-    }
+    used_imports.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+    used_imports.dedup_by(|a, b| a["address"] == b["address"]);
 
     let mut used_strings: Vec<Value> = Vec::new();
     for ins in &disasm.instructions[s_idx..e_idx] {
@@ -360,7 +368,7 @@ pub fn get_function_summary(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
         "basic_blocks": bb_count,
         "xrefs_to_count": xrefs_to_count,
         "callers_count": callers.len(),
-        "callees_count": callees.len(),
+        "callees_count": callees.len() + imports_here.len(),
         "stack_variables": sf.map(|s| s.variables.len()).unwrap_or(0),
         "is_stub": stub,
         "callers_names": callers.iter().take(10).map(|a| {
@@ -370,8 +378,13 @@ pub fn get_function_summary(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
         "callees_names": callees.iter().take(20).map(|a| {
             json!({ "address": format!("{:#x}", a),
                     "name": func_lookup.get(a).copied().unwrap_or("?") })
-        }).collect::<Vec<_>>(),
-        "used_imports": used_imports.iter().collect::<Vec<_>>(),
+        }).chain(imports_here.iter().take(20).map(|c| {
+            json!({ "address": format!("{:#x}", c.import_offset),
+                    "name": c.name,
+                    "library": c.library,
+                    "kind": "import" })
+        })).collect::<Vec<_>>(),
+        "used_imports": used_imports,
         "used_strings": used_strings,
         "preview_first_instructions": preview,
         "decompiled_available": analysis.pseudocode.contains_key(&addr)
