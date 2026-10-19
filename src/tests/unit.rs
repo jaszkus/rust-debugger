@@ -1505,6 +1505,9 @@ fn pdb_debug_types_extract_signatures_and_fields() {
         .find(|f| f.name == "compute")
         .expect("compute signature");
     assert_eq!(compute.params.len(), 3);
+    assert_eq!(compute.params[0].name, "n");
+    assert_eq!(compute.params[1].name, "p");
+    assert_eq!(compute.params[2].name, "c");
     assert!(compute.params[0].type_name.contains("Node"));
     assert_eq!(compute.params[0].struct_name.as_deref(), Some("Node"));
     assert!(compute.params[1].type_name.contains("Point"));
@@ -1579,8 +1582,8 @@ fn debug_types_reach_eager_decompilation() {
         .map(|l| l.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Node * param_1"), "signature:\n{}", text);
-    assert!(text.contains("param_1->id"), "member access:\n{}", text);
+    assert!(text.contains("Node * n"), "signature:\n{}", text);
+    assert!(text.contains("n->id"), "member access:\n{}", text);
 }
 
 #[test]

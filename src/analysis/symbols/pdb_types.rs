@@ -394,7 +394,7 @@ fn load_pdb_debug_types(
     
     
     let sections = crate::analysis::symbols::debug_symbols::pdb_sections(binary);
-    let mut symbols: Vec<(u64, String, TypeIndex)> = Vec::new();
+    let mut symbols: Vec<(u64, String, TypeIndex, Vec<String>)> = Vec::new();
     {
         let dbi = pdb.debug_information().ok()?;
         let mut modules = dbi.modules().ok()?;
@@ -405,23 +405,43 @@ fn load_pdb_debug_types(
             let Ok(mut syms) = info.symbols() else {
                 continue;
             };
+            let mut current: Option<usize> = None;
             while let Ok(Some(sym)) = syms.next() {
-                let Ok(pdb::SymbolData::Procedure(proc)) = sym.parse() else {
+                let Ok(data) = sym.parse() else {
                     continue;
                 };
-                if proc.type_index.0 == 0 {
-                    continue;
+                match data {
+                    pdb::SymbolData::Procedure(proc) => {
+                        if proc.type_index.0 == 0 {
+                            current = None;
+                            continue;
+                        }
+                        let Some(va) = crate::analysis::symbols::debug_symbols::pdb_offset_to_va(
+                            &sections,
+                            proc.offset,
+                        ) else {
+                            current = None;
+                            continue;
+                        };
+                        let name = proc.name.to_string().into_owned();
+                        if name.is_empty() {
+                            current = None;
+                            continue;
+                        }
+                        symbols.push((va, name, proc.type_index, Vec::new()));
+                        current = Some(symbols.len() - 1);
+                    }
+                    pdb::SymbolData::Local(local) if local.flags.isparam => {
+                        if let Some(i) = current {
+                            let name = local.name.to_string().into_owned();
+                            if !name.is_empty() {
+                                symbols[i].3.push(name);
+                            }
+                        }
+                    }
+                    pdb::SymbolData::ProcedureEnd => current = None,
+                    _ => {}
                 }
-                let Some(va) =
-                    crate::analysis::symbols::debug_symbols::pdb_offset_to_va(&sections, proc.offset)
-                else {
-                    continue;
-                };
-                let name = proc.name.to_string().into_owned();
-                if name.is_empty() {
-                    continue;
-                }
-                symbols.push((va, name, proc.type_index));
             }
         }
     }
@@ -447,7 +467,7 @@ fn load_pdb_debug_types(
             };
             let name = proc.name.to_string().into_owned();
             if !name.is_empty() {
-                symbols.push((va, name, proc.type_index));
+                symbols.push((va, name, proc.type_index, Vec::new()));
             }
         }
     }
@@ -498,7 +518,7 @@ fn load_pdb_debug_types(
             let _ = ty;
         }
         let mut memo: FxHashMap<TypeIndex, Option<CType>> = FxHashMap::default();
-        for (va, name, type_index) in symbols {
+        for (va, name, type_index, param_names) in symbols {
             let Some(proc) = resolve_procedure(&finder, type_index) else {
                 continue;
             };
@@ -531,8 +551,13 @@ fn load_pdb_debug_types(
                     }
                     None => ("void *".into(), None),
                 };
+                let pname = param_names
+                    .get(i)
+                    .filter(|n| !n.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| format!("param_{}", i + 1));
                 params.push(DebugParam {
-                    name: format!("param_{}", i + 1),
+                    name: pname,
                     type_name,
                     struct_name,
                 });
