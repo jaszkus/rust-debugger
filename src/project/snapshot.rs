@@ -179,7 +179,20 @@ pub fn save_project_db(program: &ProgramData, path: &str) -> Result<(), String> 
     std::fs::write(&tmp, &data).map_err(|e| format!("cannot write project DB {}: {}", tmp, e))?;
     std::fs::rename(&tmp, path)
         .map_err(|e| format!("cannot finalize project DB {}: {}", path, e))?;
+    
+    
+    
+    let _ = std::fs::write(stamp_path(path), ANALYSIS_STAMP);
     Ok(())
+}
+
+
+
+
+pub const ANALYSIS_STAMP: &str = concat!(env!("CARGO_PKG_VERSION"), "/analysis-2026-10");
+
+fn stamp_path(db: &str) -> String {
+    format!("{db}.stamp")
 }
 
 pub fn db_path_for(source: &str) -> String {
@@ -274,6 +287,14 @@ fn rd_fail(e: String) -> Option<ProjectSnapshot> {
         eprintln!("RDDB load error: {}", e);
     }
     None
+}
+
+
+
+
+pub fn load_project_db_checked(path: &str) -> Option<ProjectSnapshot> {
+    let stamp = std::fs::read_to_string(stamp_path(path)).ok()?;
+    (stamp.trim() == ANALYSIS_STAMP).then(|| load_project_db(path))?
 }
 
 pub fn load_project_db(path: &str) -> Option<ProjectSnapshot> {

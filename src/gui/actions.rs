@@ -99,6 +99,34 @@ pub(crate) fn toggle_mcp(state: &mut AppState) {
     }
 }
 
+
+
+
+pub(crate) fn auto_import_debug_types(state: &mut AppState) {
+    if state.program.types.len() > 16 {
+        return;
+    }
+    let file_path = state.program.file_path.clone();
+    let source_path = (!file_path.is_empty()).then_some(file_path.as_str());
+    let Some(bin) = state.program.binary.as_ref() else {
+        return;
+    };
+    let Some(stats) = crate::analysis::symbols::pdb_types::import_pdb_types_from_binary(
+        bin,
+        source_path,
+        &mut state.program.types,
+    ) else {
+        return;
+    };
+    let total = stats.structs + stats.unions + stats.enums + stats.typedefs;
+    if total > 0 {
+        state.status_msg = format!(
+            "Imported PDB types: {} structs, {} unions, {} enums, {} typedefs",
+            stats.structs, stats.unions, stats.enums, stats.typedefs
+        );
+    }
+}
+
 pub(crate) fn run_analysis(state: &mut AppState) {
     if state.analysis_progress.is_some() {
         state.status_msg = "Analysis already running".into();
@@ -108,6 +136,7 @@ pub(crate) fn run_analysis(state: &mut AppState) {
         state.status_msg = "Starting analysis...".into();
         let user_names = state.user_func_names.clone();
         let fid_shared = state.fid_shared();
+        let source_path = (!state.file_path.is_empty()).then(|| state.file_path.clone());
         let disasm_shared = std::sync::Arc::new(disasm);
         let bin_shared = std::sync::Arc::new(bin);
 
@@ -162,10 +191,12 @@ pub(crate) fn run_analysis(state: &mut AppState) {
                 });
             }
             let flag = cancel_flag.clone();
+            let source_path = source_path.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::analysis::auto_analyze_with_progress(
+                crate::analysis::auto_analyze_with_source(
                     &disasm_shared,
                     &bin_shared,
+                    source_path.as_deref(),
                     &user_names,
                     &fid_shared,
                     &flag,
@@ -304,7 +335,7 @@ pub(crate) fn spawn_async_load(
             if raw_base.is_none() {
                 let db_path = crate::project::resolve_db_path(&path);
                 set_phase("loading project DB");
-                if let Some(snap) = crate::project::load_project_db(&db_path)
+                if let Some(snap) = crate::project::load_project_db_checked(&db_path)
                     && snap.source_path == path {
                         let mut analysis = snap.analysis;
                         let mut pe = crate::analysis::pe_resources::PEResourceAnalyzer::new();
@@ -445,7 +476,8 @@ pub fn open_file_into_program_with_auto_analysis(
 ) -> Result<(), String> {
     let bin = crate::parser::parse_file(std::path::Path::new(path))?;
     let db_path = crate::project::resolve_db_path(path);
-    let snap = crate::project::load_project_db(&db_path).filter(|s| s.source_path == path);
+    let snap = crate::project::load_project_db_checked(&db_path)
+        .filter(|s| s.source_path == path);
     let db_project_name = snap.as_ref().map(|s| s.project_name.clone());
     let (d, mut analysis, annotations) = match snap {
         Some(s) => (s.disasm, Some(s.analysis), Some(s.annotations)),

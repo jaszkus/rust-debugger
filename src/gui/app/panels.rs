@@ -508,6 +508,7 @@ pub fn poll_analysis_install(app: &mut AppState) {
         app.analysis_error = None;
         app.analysis_seq = app.analysis_seq.wrapping_add(1);
         app.db_last_save_attempt = None;
+        crate::gui::actions::auto_import_debug_types(app);
     } else {
         let (cancelled, timed_out) = arc
             .lock()

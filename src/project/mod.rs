@@ -5,7 +5,9 @@ mod compat_tests;
 pub mod snapshot;
 
 #[allow(unused_imports)]
-pub use snapshot::{apply_annotations, db_path_for, load_project_db, save_project_db};
+pub use snapshot::{
+    apply_annotations, db_path_for, load_project_db, load_project_db_checked, save_project_db,
+};
 pub use snapshot::{resolve_db_path, Annotations};
 
 const MAGIC: &[u8; 4] = b"RDDB";

@@ -1,7 +1,7 @@
 use crate::debugger::thread::spawn_debug_thread;
 use crate::gui::AppState;
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -322,7 +322,8 @@ fn run_batch_analyze(path: &str, fresh: bool) -> Result<(), String> {
     let cached = if fresh || !cache_usable {
         None
     } else {
-        crate::project::load_project_db(&db_path).filter(|s| s.source_path == abs_path.as_str())
+        crate::project::load_project_db_checked(&db_path)
+            .filter(|s| s.source_path == abs_path.as_str())
     };
 
     let (cache_hit, functions, xrefs, findings) = match cached {
@@ -343,9 +344,10 @@ fn run_batch_analyze(path: &str, fresh: bool) -> Result<(), String> {
                 .map_err(|e| format!("disasm failed: {e}"))?;
             let never_cancel = AtomicBool::new(false);
             let empty_fid = crate::analysis::function_id::FunctionIDMatcher::new();
-            let result = crate::analysis::auto_analyze_with_progress(
+            let result = crate::analysis::auto_analyze_with_source(
                 &disasm,
                 &bin,
+                Some(path),
                 &rustc_hash::FxHashMap::default(),
                 &empty_fid,
                 &never_cancel,
@@ -460,9 +462,10 @@ fn run_bench(path: &str, parse_only: bool) -> Result<(), String> {
     let t3 = Instant::now();
     let never_cancel = AtomicBool::new(false);
     let empty_fid = crate::analysis::function_id::FunctionIDMatcher::new();
-    let result = crate::analysis::auto_analyze_with_progress(
+    let result = crate::analysis::auto_analyze_with_source(
         &d,
         &bin,
+        Some(path),
         &rustc_hash::FxHashMap::default(),
         &empty_fid,
         &never_cancel,
@@ -490,6 +493,7 @@ enum Outcome<R> {
     Done(R, Duration),
     NoProgram,
     Busy,
+    Cancelled,
     Panicked(String),
 }
 
@@ -521,13 +525,14 @@ fn spawn_analysis_worker(state: Arc<Mutex<AppState>>) {
                     eprintln!("[analysis-loop] request flag seen");
 
                     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let (disasm, bin, user_names, fid_shared) =
+                        let (disasm, bin, user_names, fid_shared, file_path) =
                             match lock_state_timeout(&state, Duration::from_secs(5)) {
                                 Ok(s) => (
                                     s.disasm.clone(),
                                     s.binary.clone(),
                                     s.user_func_names.clone(),
                                     s.fid_shared(),
+                                    s.file_path.clone(),
                                 ),
                                 Err(_) => return Outcome::Busy,
                             };
@@ -536,17 +541,58 @@ fn spawn_analysis_worker(state: Arc<Mutex<AppState>>) {
                         };
                         println!("Running analysis...");
                         let started = Instant::now();
-                        let never_cancel = AtomicBool::new(false);
-                        let r = crate::analysis::auto_analyze_with_progress(
+                        
+                        
+                        
+                        let cancel_flag = Arc::new(AtomicBool::new(false));
+                        let progress = Arc::new(std::sync::Mutex::new(crate::gui::AnalysisProgress {
+                            phase: "Starting".into(),
+                            message: "Initializing...".into(),
+                            current: 0,
+                            total: 13,
+                            done: false,
+                            started_at: Some(Instant::now()),
+                            result: None,
+                            cancel: false,
+                            log: Vec::new(),
+                        }));
+                        if let Ok(mut s) = lock_state_timeout(&state, Duration::from_secs(5)) {
+                            s.analysis_progress = Some(progress.clone());
+                        }
+                        let cf = cancel_flag.clone();
+                        let pg = progress.clone();
+                        let r = crate::analysis::auto_analyze_with_source(
                             &d,
                             &b,
+                            (!file_path.is_empty()).then_some(file_path.as_str()),
                             &user_names,
                             &fid_shared,
-                            &never_cancel,
-                            &|p, _, _, _| {
-                                println!("  phase: {}", p);
+                            &cf,
+                            &|phase, msg, cur, total| {
+                                println!("  phase: {}", phase);
+                                let Ok(mut g) = pg.try_lock() else {
+                                    return;
+                                };
+                                if g.cancel {
+                                    cf.store(true, Ordering::Relaxed);
+                                }
+                                g.phase = phase.into();
+                                g.message = msg.into();
+                                g.current = cur;
+                                g.total = total;
+                                let line = format!("[{}] {}", phase, msg);
+                                if g.log.last() != Some(&line) {
+                                    g.log.push(line);
+                                    let excess = g.log.len().saturating_sub(64);
+                                    if excess > 0 {
+                                        g.log.drain(..excess);
+                                    }
+                                }
                             },
                         );
+                        if cancel_flag.load(Ordering::Relaxed) {
+                            return Outcome::Cancelled;
+                        }
                         Outcome::Done(r, started.elapsed())
                     }));
                     let outcome = match run {
@@ -580,6 +626,7 @@ fn spawn_analysis_worker(state: Arc<Mutex<AppState>>) {
                     s.analysis_progress = None;
                     s.analysis_error = None;
                     s.analysis_seq = s.analysis_seq.wrapping_add(1);
+                    crate::gui::actions::auto_import_debug_types(&mut s);
                     println!("Analysis done in {}", fmt_dur(elapsed));
                     None
                 }
@@ -589,6 +636,7 @@ fn spawn_analysis_worker(state: Arc<Mutex<AppState>>) {
                 Outcome::Busy => {
                     Some("Could not read program state (lock contention); try again".to_string())
                 }
+                Outcome::Cancelled => Some("Analysis cancelled".to_string()),
                 Outcome::Panicked(msg) => Some(format!("Analysis worker panicked: {msg}")),
             };
             if let Some(msg) = failure {
@@ -596,8 +644,7 @@ fn spawn_analysis_worker(state: Arc<Mutex<AppState>>) {
                 s.analysis_progress = None;
                 s.analysis_error = Some(msg);
                 s.analysis_seq = s.analysis_seq.wrapping_add(1);
-            }
-        }
+            }        }
     });
 }
 

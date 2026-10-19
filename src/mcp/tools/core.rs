@@ -111,18 +111,20 @@ pub fn run_analysis(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
                     s.binary.clone(),
                     s.user_func_names.clone(),
                     s.fid_shared(),
+                    s.file_path.clone(),
                 )
             };
-            let (disasm, bin, user_names, fid_shared) = snap2;
+            let (disasm, bin, user_names, fid_shared, file_path) = snap2;
             let (d, b) = match (disasm, bin) {
                 (Some(d), Some(b)) => (d, b),
                 _ => return Err("Binary/disassembly vanished mid-run".to_string()),
             };
             let never_cancel = std::sync::atomic::AtomicBool::new(false);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::analysis::auto_analyze_with_progress(
+                crate::analysis::auto_analyze_with_source(
                     &d,
                     &b,
+                    (!file_path.is_empty()).then_some(file_path.as_str()),
                     &user_names,
                     &fid_shared,
                     &never_cancel,
@@ -139,6 +141,7 @@ pub fn run_analysis(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
                     s.analysis_progress = None;
                     s.analysis_error = None;
                     s.analysis_seq = s.analysis_seq.wrapping_add(1);
+                    crate::gui::actions::auto_import_debug_types(&mut s);
                 }
                 Err(_) => {
                     s.analysis_error = Some("Inline analysis panicked".into());
@@ -483,16 +486,34 @@ pub fn get_function_callees(args: &Value, state: &Arc<Mutex<AppState>>) -> Resul
         .iter()
         .map(|f| (f.entry, f.name.as_str()))
         .collect();
-    let items: Vec<Value> = callees
+    let mut items: Vec<Value> = callees
         .iter()
         .map(|&c| {
             json!({
                 "address": format!("{:#x}", c),
-                "name": lookup.get(&c).copied().unwrap_or("?")
+                "name": lookup.get(&c).copied().unwrap_or("?"),
+                "kind": "function",
             })
         })
         .collect();
-    Ok(json!({ "address": format!("{:#x}", addr), "callees": items, "count": callees.len() }))
+    
+    
+    if let Some(bin) = s.binary.as_ref() {
+        let imports =
+            crate::analysis::xref::import_edges::function_import_callees(bin, analysis);
+        if let Some(list) = imports.get(&addr) {
+            for c in list {
+                items.push(json!({
+                    "address": format!("{:#x}", c.import_offset),
+                    "name": c.name,
+                    "library": c.library,
+                    "via": format!("{:#x}", c.via),
+                    "kind": "import",
+                }));
+            }
+        }
+    }
+    Ok(json!({ "address": format!("{:#x}", addr), "callees": items, "count": items.len() }))
 }
 
 pub fn get_function_pcode(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, String> {
