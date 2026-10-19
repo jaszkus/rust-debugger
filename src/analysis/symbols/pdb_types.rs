@@ -13,11 +13,33 @@ pub struct PdbImportStats {
     pub skipped: usize,
 }
 
+
+
+
+pub fn import_pdb_types_from_binary(
+    binary: &crate::parser::ParsedBinary,
+    source_path: Option<&str>,
+    tm: &mut DataTypeManager,
+) -> Option<PdbImportStats> {
+    if !(binary.format.starts_with("PE") || binary.format == "COFF") {
+        return None;
+    }
+    let path = crate::analysis::symbols::debug_symbols::find_pdb_path(binary, source_path)?;
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        import_pdb_types(&path, tm)
+    }))
+    .ok()
+    .and_then(|r| r.ok());
+    std::panic::set_hook(prev_hook);
+    result
+}
+
 pub fn import_pdb_types(
     pdb_path: &std::path::Path,
     tm: &mut DataTypeManager,
-) -> Result<PdbImportStats, String> {
-    let file = std::fs::File::open(pdb_path).map_err(|e| format!("open: {}", e))?;
+) -> Result<PdbImportStats, String> {    let file = std::fs::File::open(pdb_path).map_err(|e| format!("open: {}", e))?;
     let mut pdb = pdb::PDB::open(file).map_err(|e| format!("open pdb: {}", e))?;
     let tpi = pdb.type_information().map_err(|e| format!("tpi: {}", e))?;
     let mut finder = tpi.finder();

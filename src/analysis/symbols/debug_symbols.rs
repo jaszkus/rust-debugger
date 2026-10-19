@@ -1,6 +1,147 @@
 use crate::parser::{ParsedBinary, Symbol};
 use rustc_hash::FxHashSet as HashSet;
 
+fn pdb_sections(binary: &ParsedBinary) -> Vec<(u16, u64, u64)> {
+    binary
+        .sections
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i as u16 + 1, s.vaddr, s.size))
+        .collect()
+}
+
+fn pdb_offset_to_va(
+    sections: &[(u16, u64, u64)],
+    off: pdb::PdbInternalSectionOffset,
+) -> Option<u64> {
+    let (idx, vaddr, size) = sections.iter().find(|(i, _, _)| *i == off.section)?;
+    if off.offset as u64 >= *size {
+        return None;
+    }
+    (*idx != 0).then(|| vaddr.wrapping_add(off.offset as u64))
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+pub fn find_pdb_path(
+    binary: &ParsedBinary,
+    source_path: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let mut probe = DebugSymbolsAnalyzer::new();
+    probe.parse_pdb_reference(binary);
+    let mut candidates: Vec<std::path::PathBuf> = probe
+        .source_files
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    if let Some(src) = source_path {
+        let sp = std::path::Path::new(src);
+        if let Some(dir) = sp.parent() {
+            let rsds_names: Vec<std::path::PathBuf> = candidates
+                .iter()
+                .filter_map(|c| std::path::Path::new(c).file_name())
+                .map(|n| dir.join(n))
+                .collect();
+            candidates.extend(rsds_names);
+            if let Some(stem) = sp.file_stem() {
+                candidates.push(dir.join(format!("{}.pdb", stem.to_string_lossy())));
+            }
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                let mut pdbs: Vec<std::path::PathBuf> = rd
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| {
+                        p.extension()
+                            .is_some_and(|x| x.eq_ignore_ascii_case("pdb"))
+                    })
+                    .collect();
+                if pdbs.len() == 1 {
+                    candidates.push(pdbs.remove(0));
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+fn read_pdb_names(path: &std::path::Path, sections: &[(u16, u64, u64)]) -> rustc_hash::FxHashMap<u64, String> {
+    use pdb::FallibleIterator;
+    let mut out: rustc_hash::FxHashMap<u64, String> = rustc_hash::FxHashMap::default();
+    let Ok(file) = std::fs::File::open(path) else {
+        return out;
+    };
+    let Ok(mut pdb) = pdb::PDB::open(file) else {
+        return out;
+    };
+    let Ok(dbi) = pdb.debug_information() else {
+        return out;
+    };
+    let Ok(module_iter) = dbi.modules() else {
+        return out;
+    };
+    let mut modules = module_iter;
+    while let Ok(Some(module)) = modules.next() {
+        let Ok(Some(info)) = pdb.module_info(&module) else {
+            continue;
+        };
+        let Ok(mut symbols) = info.symbols() else {
+            continue;
+        };
+        while let Ok(Some(sym)) = symbols.next() {
+            let Ok(data) = sym.parse() else {
+                continue;
+            };
+            let (off, name, is_code) = match data {
+                pdb::SymbolData::Public(p) => (p.offset, p.name.to_string(), p.function && p.code),
+                pdb::SymbolData::Procedure(p) => (p.offset, p.name.to_string(), true),
+                _ => continue,
+            };
+            if !is_code || name.is_empty() {
+                continue;
+            }
+            let Some(va) = pdb_offset_to_va(sections, off) else {
+                continue;
+            };
+            out.entry(va).or_insert_with(|| name.to_string());
+        }
+    }
+    out
+}
+
+
+
+
+pub fn load_pdb_function_names(
+    binary: &ParsedBinary,
+    source_path: Option<&str>,
+) -> rustc_hash::FxHashMap<u64, String> {
+    if !(binary.format.starts_with("PE") || binary.format == "COFF") {
+        return Default::default();
+    }
+    let Some(path) = find_pdb_path(binary, source_path) else {
+        return Default::default();
+    };
+    let sections = pdb_sections(binary);
+    
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let names = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        read_pdb_names(&path, &sections)
+    }))
+    .unwrap_or_default();
+    std::panic::set_hook(prev_hook);
+    names
+}
+
 #[derive(Debug, Clone)]
 pub struct DebugSymbolsAnalyzer {
     pub symbols: Vec<Symbol>,
@@ -44,20 +185,7 @@ impl DebugSymbolsAnalyzer {
     }
 
     fn load_pdb_if_present(&mut self, binary: &ParsedBinary, source_path: Option<&str>) {
-        let Some(pdb_path) = self
-            .source_files
-            .iter()
-            .find(|p| p.ends_with(".pdb"))
-            .cloned()
-        else {
-            return;
-        };
-        let mut candidates: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from(&pdb_path)];
-        if let Some(dir) = source_path.and_then(|p| std::path::Path::new(p).parent())
-            && let Some(name) = std::path::Path::new(&pdb_path).file_name() {
-                candidates.push(dir.join(name));
-            }
-        let Some(path) = candidates.into_iter().find(|p| p.is_file()) else {
+        let Some(path) = find_pdb_path(binary, source_path) else {
             return;
         };
         let Ok(file) = std::fs::File::open(&path) else {
@@ -76,18 +204,9 @@ impl DebugSymbolsAnalyzer {
             return;
         };
         let _image_base = binary.image_base;
-        let sections: Vec<(u16, u64, u64)> = binary
-            .sections
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (i as u16 + 1, s.vaddr, s.size))
-            .collect();
+        let sections = pdb_sections(binary);
         let to_va = |off: pdb::PdbInternalSectionOffset| -> Option<u64> {
-            let (idx, vaddr, size) = sections.iter().find(|(i, _, _)| *i == off.section)?;
-            if off.offset as u64 >= *size {
-                return None;
-            }
-            (*idx != 0).then(|| vaddr.wrapping_add(off.offset as u64))
+            pdb_offset_to_va(&sections, off)
         };
         let mut seen = rustc_hash::FxHashSet::default();
         use pdb::FallibleIterator;
