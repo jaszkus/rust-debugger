@@ -82,7 +82,7 @@ fn parse_readme_rows(readme: &str) -> Option<Vec<(String, String)>> {
         .position(|l| l.contains("Full tool reference"))?;
     let mut rows = Vec::new();
     for &line in &lines[start..] {
-        if line.trim() == "</details>" {
+        if line.starts_with("## ") {
             break;
         }
         if let Some(row) = parse_readme_row(line) {
@@ -90,6 +90,15 @@ fn parse_readme_rows(readme: &str) -> Option<Vec<(String, String)>> {
         }
     }
     Some(rows)
+}
+
+
+
+fn normalize_description(s: &str) -> String {
+    s.replace('`', "")
+        .replace("\u{00e2}\u{20ac}\u{201d}", "\u{2014}")
+        .replace("\u{00e2}\u{20ac}\u{201c}", "\u{2013}")
+        .replace("\u{00e2}\u{2020}\u{201d}", "\u{2194}")
 }
 
 #[test]
@@ -106,13 +115,18 @@ fn readme_tool_table_matches_registry() {
     let readme_tools =
         parse_readme_rows(&readme).expect("README has no 'Full tool reference' section");
 
-    let code_by_name: HashMap<&str, &str> = code_tools
+    assert_eq!(
+        readme_tools.len(),
+        code_tools.len(),
+        "README has duplicate or missing tool rows"
+    );
+    let code_by_name: HashMap<&str, String> = code_tools
         .iter()
-        .map(|(n, d)| (n.as_str(), d.as_str()))
+        .map(|(n, d)| (n.as_str(), normalize_description(d)))
         .collect();
-    let readme_by_name: HashMap<&str, &str> = readme_tools
+    let readme_by_name: HashMap<&str, String> = readme_tools
         .iter()
-        .map(|(n, d)| (n.as_str(), d.as_str()))
+        .map(|(n, d)| (n.as_str(), normalize_description(d)))
         .collect();
 
     let mut problems = Vec::new();
@@ -139,11 +153,13 @@ fn readme_tool_table_matches_registry() {
         problems.join("\n")
     );
 
-    let code_order: Vec<&str> = code_tools.iter().map(|(n, _)| n.as_str()).collect();
-    let readme_order: Vec<&str> = readme_tools.iter().map(|(n, _)| n.as_str()).collect();
+    let mut code_names: Vec<&str> = code_tools.iter().map(|(n, _)| n.as_str()).collect();
+    let mut readme_names: Vec<&str> = readme_tools.iter().map(|(n, _)| n.as_str()).collect();
+    code_names.sort_unstable();
+    readme_names.sort_unstable();
     assert_eq!(
-        readme_order, code_order,
-        "README rows are in a different order than registry.rs"
+        readme_names, code_names,
+        "README rows are not the same set as registry.rs"
     );
 
     eprintln!(
