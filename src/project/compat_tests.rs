@@ -483,14 +483,14 @@ fn rddb_v4_loads_with_ghidra_tags() {
 }
 
 #[test]
-fn rddb_v8_roundtrip_zstd_and_ranges() {
+fn rddb_v9_roundtrip_zstd_and_ranges() {
     let dir = fresh_dir("v6");
-    let src = dir.join("sample_v8.exe");
+    let src = dir.join("sample_v9.exe");
     std::fs::write(&src, b"RDBV8ROUNDTRIPDATA").unwrap();
 
     let mut p = ProgramData {
         file_path: src.to_string_lossy().into_owned(),
-        current_program_name: "v8 proj".into(),
+        current_program_name: "v9 proj".into(),
         disasm: Some(crate::disasm::DisasmResult {
             instructions: std::sync::Arc::new(vec![crate::disasm::DisasmInstruction {
                 address: 0x5000,
@@ -502,7 +502,7 @@ fn rddb_v8_roundtrip_zstd_and_ranges() {
         }),
         ..Default::default()
     };
-    p.comments.insert(0x5000, "hello v8".into());
+    p.comments.insert(0x5000, "hello v9".into());
     p.user_func_names.insert(0x5000, "tiny_fn".into());
 
     let mut a = crate::analysis::AnalysisResult::default();
@@ -541,14 +541,21 @@ fn rddb_v8_roundtrip_zstd_and_ranges() {
                         offset: 0,
                         type_name: "int32_t".into(),
                         size: 4,
+                        bitfield: Some((0, 3)),
                     },
                     crate::analysis::symbols::debug_types::DebugField {
                         name: "next".into(),
                         offset: 8,
                         type_name: "Node *".into(),
                         size: 8,
+                        bitfield: None,
                     },
                 ],
+            }],
+            enums: vec![crate::analysis::symbols::debug_types::DebugEnum {
+                name: "Color".into(),
+                size: 4,
+                variants: vec![("RED".into(), 1), ("GREEN".into(), 2)],
             }],
             functions: [(0x5000, crate::analysis::symbols::debug_types::DebugFunction {
                 name: "tiny".into(),
@@ -574,14 +581,14 @@ fn rddb_v8_roundtrip_zstd_and_ranges() {
     a.is_win64 = true;
     p.analysis = Some(std::sync::Arc::new(a));
 
-    let db = dir.join("sample_v8.exe.rdb");
+    let db = dir.join("sample_v9.exe.rdb");
     let db_str = db.to_string_lossy().into_owned();
     save_project_db(&p, &db_str).expect("save");
     let raw = std::fs::read(&db).unwrap();
-    assert_eq!(&raw[8..12], super::MAGIC_ZSTD, "v8 file is zstd framed");
+    assert_eq!(&raw[8..12], super::MAGIC_ZSTD, "v9 file is zstd framed");
 
-    let snap = load_project_db(db.to_str().unwrap()).expect("v8 round trip");
-    assert_eq!(snap.project_name, "v8 proj");
+    let snap = load_project_db(db.to_str().unwrap()).expect("v9 round trip");
+    assert_eq!(snap.project_name, "v9 proj");
     assert!(snap.analysis.is_win64, "ABI flag round trip");
     assert_eq!(snap.analysis.functions[0].name, "tiny");
     assert_eq!(
@@ -592,6 +599,8 @@ fn rddb_v8_roundtrip_zstd_and_ranges() {
     let debug = snap.analysis.debug_types.as_ref().expect("debug types round trip");
     assert_eq!(debug.structs[0].name, "Node");
     assert_eq!(debug.structs[0].fields[1].name, "next");
+    assert_eq!(debug.structs[0].fields[0].bitfield, Some((0, 3)));
+    assert_eq!(debug.enums[0].variants[1], ("GREEN".into(), 2));
     assert_eq!(debug.functions[&0x5000].params[0].struct_name.as_deref(), Some("Node"));
     let local = &debug.functions[&0x5000].locals[0];
     assert_eq!(local.name, "n");
@@ -599,7 +608,7 @@ fn rddb_v8_roundtrip_zstd_and_ranges() {
     assert_eq!(local.offset, -32);
     assert_eq!(
         snap.annotations.comments.get(&0x5000).map(String::as_str),
-        Some("hello v8")
+        Some("hello v9")
     );
     assert_eq!(
         snap.annotations

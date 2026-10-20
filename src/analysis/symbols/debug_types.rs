@@ -13,6 +13,7 @@ use crate::parser::ParsedBinary;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DebugTypes {
     pub structs: Vec<DebugStruct>,
+    pub enums: Vec<DebugEnum>,
     pub functions: HashMap<u64, DebugFunction>,
 }
 
@@ -29,6 +30,15 @@ pub struct DebugField {
     pub offset: usize,
     pub type_name: String,
     pub size: usize,
+    
+    pub bitfield: Option<(u8, u8)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugEnum {
+    pub name: String,
+    pub size: usize,
+    pub variants: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +81,7 @@ pub struct DebugParam {
 
 impl DebugTypes {
     pub fn is_empty(&self) -> bool {
-        self.structs.is_empty() && self.functions.is_empty()
+        self.structs.is_empty() && self.enums.is_empty() && self.functions.is_empty()
     }
 
     pub fn load(binary: &ParsedBinary, source_path: Option<&str>) -> Option<Self> {
@@ -93,6 +103,9 @@ impl DebugTypes {
         self.structs.append(&mut other.structs);
         self.structs.sort_by(|a, b| a.name.cmp(&b.name));
         self.structs.dedup_by(|a, b| a.name == b.name);
+        self.enums.append(&mut other.enums);
+        self.enums.sort_by(|a, b| a.name.cmp(&b.name));
+        self.enums.dedup_by(|a, b| a.name == b.name);
         for (addr, func) in other.functions {
             self.functions.entry(addr).or_insert(func);
         }

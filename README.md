@@ -122,7 +122,7 @@ and a **Ghidra-compatible MCP server** for AI agents.
 
 ### Patching & projects
 - Byte and **branch patching** with history and rebuild-after-patch
-- **RDDB v8** project files — zstd-compressed analysis cache + annotations
+- **RDDB v9** project files — zstd-compressed analysis cache + annotations
 
 </td>
 </tr>

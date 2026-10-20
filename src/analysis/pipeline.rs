@@ -325,6 +325,7 @@ fn auto_analyze_inner(
             }
         }
     }
+    add_debug_function_starts(&mut functions, disasm, debug_types.as_deref());
     functions.sort_by_key(|f| f.entry);
 
     for func in functions.iter_mut() {
@@ -1066,6 +1067,52 @@ fn auto_analyze_inner(
         reconstructed_types,
         debug_types,
         is_win64,
+    }
+}
+
+fn add_debug_function_starts(
+    functions: &mut Vec<function::DetectedFunction>,
+    disasm: &DisasmResult,
+    debug_types: Option<&DebugTypes>,
+) {
+    let Some(debug) = debug_types else {
+        return;
+    };
+    if debug.functions.is_empty() {
+        return;
+    }
+    let last_addr = disasm
+        .instructions
+        .iter()
+        .map(|i| i.address.saturating_add(i.bytes.len() as u64))
+        .max()
+        .unwrap_or(0);
+    let entries: Vec<u64> = functions.iter().map(|f| f.entry).collect();
+    let mut added = Vec::new();
+    for (&addr, sig) in &debug.functions {
+        if addr == 0 || entries.contains(&addr) {
+            continue;
+        }
+        let end = entries
+            .iter()
+            .copied()
+            .filter(|&e| e > addr)
+            .min()
+            .unwrap_or(last_addr)
+            .max(addr.saturating_add(1));
+        added.push(function::DetectedFunction {
+            entry: addr,
+            end,
+            name: sig.name.clone(),
+            stack_size: 0,
+            source: function::FuncSource::SymbolTable,
+            has_frame: false,
+            is_thunk: false,
+            thunk_target: None,
+        });
+    }
+    if !added.is_empty() {
+        functions.extend(added);
     }
 }
 

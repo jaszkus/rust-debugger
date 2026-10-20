@@ -315,6 +315,14 @@ fn write_debug_types(w: &mut W, d: &crate::analysis::symbols::debug_types::Debug
             w.u64(f.offset as u64);
             w.str(&f.type_name);
             w.u64(f.size as u64);
+            match f.bitfield {
+                Some((off, width)) => {
+                    w.u8(1);
+                    w.u8(off);
+                    w.u8(width);
+                }
+                None => w.u8(0),
+            }
         }
     }
     w.u32(d.functions.len() as u32);
@@ -357,6 +365,16 @@ fn write_debug_types(w: &mut W, d: &crate::analysis::symbols::debug_types::Debug
             w.u64(l.size as u64);
         }
     }
+    w.u32(d.enums.len() as u32);
+    for e in &d.enums {
+        w.str(&e.name);
+        w.u64(e.size as u64);
+        w.u32(e.variants.len() as u32);
+        for (name, value) in &e.variants {
+            w.str(name);
+            w.i64(*value);
+        }
+    }
 }
 
 fn read_debug_types(
@@ -364,7 +382,7 @@ fn read_debug_types(
     db_ver: u32,
 ) -> Result<crate::analysis::symbols::debug_types::DebugTypes, String> {
     use crate::analysis::symbols::debug_types::{
-        DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes,
+        DebugEnum, DebugField, DebugFunction, DebugParam, DebugStruct, DebugTypes,
     };
     let n = r.u32()? as usize;
     let mut structs = Vec::with_capacity(n.min(1 << 20));
@@ -379,6 +397,19 @@ fn read_debug_types(
                 offset: r.u64()? as usize,
                 type_name: r.str()?,
                 size: r.u64()? as usize,
+                bitfield: if db_ver >= 9 {
+                    match r.u8()? {
+                        0 => None,
+                        1 => Some((r.u8()?, r.u8()?)),
+                        other => {
+                            return Err(format!(
+                                "corrupt project DB (bitfield tag {other})"
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                },
             });
         }
         structs.push(DebugStruct { name, size, fields });
@@ -454,7 +485,32 @@ fn read_debug_types(
             },
         );
     }
-    Ok(DebugTypes { structs, functions })
+    let enums = if db_ver >= 9 {
+        let n = r.u32()? as usize;
+        let mut enums = Vec::with_capacity(n.min(1 << 20));
+        for _ in 0..n {
+            let name = r.str()?;
+            let size = r.u64()? as usize;
+            let vn = r.u32()? as usize;
+            let mut variants = Vec::with_capacity(vn.min(1 << 20));
+            for _ in 0..vn {
+                variants.push((r.str()?, r.i64()?));
+            }
+            enums.push(DebugEnum {
+                name,
+                size,
+                variants,
+            });
+        }
+        enums
+    } else {
+        Vec::new()
+    };
+    Ok(DebugTypes {
+        structs,
+        enums,
+        functions,
+    })
 }
 
 pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, String> {

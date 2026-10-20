@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::analysis::decompiler::pcode::StackBase;
 use super::{
-    c_type_for_size, fmt_const, mentions_reg, pval_str, resolve_pval, PVal, TypeHints, ABI_ARG_REGS, WIN64_ARG_REGS,
+    c_type_for_size, fmt_const, mentions_reg, pval_str, resolve_pval, PVal, TypeHints, ABI_ARG_REGS, SSE_ARG_REGS, WIN64_ARG_REGS,
 };
 use crate::analysis::flow::cfg::CFG;
 use crate::disasm::DisasmInstruction;
@@ -90,7 +90,7 @@ pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
             for r in WIN64_ARG_REGS {
                 out.push(r);
             }
-            for r in ["xmm0", "xmm1", "xmm2", "xmm3"] {
+            for r in SSE_ARG_REGS {
                 out.push(r);
             }
         }
@@ -101,14 +101,15 @@ pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
             for r in WIN64_ARG_REGS {
                 out.push(r);
             }
-            for r in [
-                "rax", "rsp", "eax", "esp", "xmm0", "xmm1", "xmm2", "xmm3",
-            ] {
+            for r in SSE_ARG_REGS {
+                out.push(r);
+            }
+            for r in ["rax", "rsp", "eax", "esp"] {
                 out.push(r);
             }
         }
         POp::Return | POp::ReturnPop { .. } => {
-            for r in ["rax", "rbp", "rsp", "eax", "ebp", "esp"] {
+            for r in ["rax", "rbp", "rsp", "eax", "ebp", "esp", "xmm0"] {
                 out.push(r);
             }
         }
@@ -228,7 +229,7 @@ pub(crate) fn clobber_call(reg_values: &mut HashMap<&'static str, PVal>, is64: b
     let removed: Vec<&'static str> = CALL_CLOBBERED
         .iter()
         .copied()
-        .chain(["xmm0", "xmm1", "xmm2", "xmm3"])
+        .chain(SSE_ARG_REGS)
         .collect();
     for r in &removed {
         reg_values.remove(*r);
@@ -268,6 +269,58 @@ pub(crate) fn collect_call_args(
         }
     }
     args
+}
+
+pub(crate) fn take_call_args_sig(
+    reg_values: &HashMap<&'static str, PVal>,
+    is64: bool,
+    is_win64: bool,
+    params: &[bool],
+    push_args: &mut Vec<PVal>,
+) -> Vec<String> {
+    if !is64 {
+        return take_call_args(reg_values, is64, is_win64, push_args);
+    }
+    push_args.clear();
+    let mut out = Vec::new();
+    let mut gp = 0usize;
+    let mut sse = 0usize;
+    for (idx, &is_float) in params.iter().enumerate() {
+        let reg = if is_win64 {
+            if idx >= WIN64_ARG_REGS.len() {
+                break;
+            }
+            if is_float {
+                SSE_ARG_REGS[idx]
+            } else {
+                WIN64_ARG_REGS[idx]
+            }
+        } else if is_float {
+            let Some(&r) = SSE_ARG_REGS.get(sse) else {
+                break;
+            };
+            sse += 1;
+            r
+        } else {
+            let Some(&r) = ABI_ARG_REGS.get(gp) else {
+                break;
+            };
+            gp += 1;
+            r
+        };
+        match reg_values.get(reg) {
+            Some(v) => {
+                let s = pval_str(v);
+                if s != reg || matches!(v, PVal::Opaque(_)) {
+                    out.push(s);
+                } else {
+                    out.push(reg.to_string());
+                }
+            }
+            None => out.push(reg.to_string()),
+        }
+    }
+    out
 }
 
 pub(crate) fn take_call_args(
@@ -373,6 +426,11 @@ pub(crate) fn fmt_load(
                     {
                         return format!("{}.{}", base_name, fname);
                     }
+                }
+                if let Some((name, local_size)) = h.stack_names.get(&norm)
+                    && *local_size == size as usize
+                {
+                    return name.clone();
                 }
             }
             let name = if let Some(h) = hints {
@@ -548,6 +606,20 @@ pub(crate) fn resolve_pval_with_hints(
             .cloned()
             .unwrap_or_else(|| PVal::E(r.to_string())),
         PVar::Const(c) => PVal::C(*c),
+        PVar::StackSlot { base, off } => {
+            let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
+            let pc = hints.cur_pc.get();
+            let norm = if b == 1 {
+                *off + hints.rsp_at.get(&pc).copied().unwrap_or(0)
+            } else {
+                *off + hints.rbp_delta
+            };
+            if let Some((name, _)) = hints.stack_names.get(&norm) {
+                PVal::E(name.clone())
+            } else {
+                PVal::E(fmt_var_with_hints(v, hints))
+            }
+        }
         other => PVal::E(fmt_var_with_hints(other, hints)),
     }
 }

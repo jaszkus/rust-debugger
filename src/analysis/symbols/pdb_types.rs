@@ -2,7 +2,7 @@ use pdb::{FallibleIterator, TypeData, TypeIndex};
 use rustc_hash::FxHashMap;
 
 use super::debug_types::{
-    DebugBase, DebugField, DebugFunction, DebugLocal, DebugParam, DebugStruct, DebugTypes,
+    DebugBase, DebugEnum, DebugField, DebugFunction, DebugLocal, DebugParam, DebugStruct, DebugTypes,
 };
 use crate::type_system::manager::DataTypeManager;
 use crate::type_system::types::TypeId;
@@ -362,6 +362,7 @@ fn load_pdb_debug_types(
     
     
     let mut struct_specs: Vec<(String, usize, Option<TypeIndex>)> = Vec::new();
+    let mut enum_specs: Vec<(String, TypeIndex, TypeIndex)> = Vec::new();
     {
         let tpi = pdb.type_information().ok()?;
         let mut finder = tpi.finder();
@@ -386,12 +387,21 @@ fn load_pdb_debug_types(
                     }
                     struct_specs.push((name, u.size as usize, Some(u.fields)));
                 }
+                TypeData::Enumeration(e) if !e.properties.forward_reference() => {
+                    let name = e.name.to_string().into_owned();
+                    if name.is_empty() || name.starts_with('<') {
+                        continue;
+                    }
+                    enum_specs.push((name, e.fields, e.underlying_type));
+                }
                 _ => {}
             }
         }
     }
     struct_specs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
     struct_specs.dedup_by(|a, b| a.0 == b.0);
+    enum_specs.sort_by(|a, b| a.0.cmp(&b.0));
+    enum_specs.dedup_by(|a, b| a.0 == b.0);
 
     
     
@@ -529,6 +539,59 @@ fn load_pdb_debug_types(
         }
     }
 
+    if !enum_specs.is_empty() {
+        let tpi = pdb.type_information().ok()?;
+        let mut finder = tpi.finder();
+        let mut iter = tpi.iter();
+        while let Ok(Some(ty)) = iter.next() {
+            finder.update(&iter);
+            let _ = ty;
+        }
+        let mut memo: FxHashMap<TypeIndex, Option<CType>> = FxHashMap::default();
+    for (name, fields, underlying) in enum_specs {
+        let mut variants = Vec::new();
+        if let Ok(item) = finder.find(fields)
+            && let Ok(TypeData::FieldList(fl)) = item.parse()
+        {
+            for f in &fl.fields {
+                if let TypeData::Enumerate(en) = f {
+                    variants.push((
+                        en.name.to_string().into_owned(),
+                        variant_i64(&en.value),
+                    ));
+                }
+            }
+            let mut cont = fl.continuation;
+            while let Some(ci) = cont {
+                let Ok(item) = finder.find(ci) else { break };
+                let Ok(TypeData::FieldList(next)) = item.parse() else {
+                    break;
+                };
+                for f in &next.fields {
+                    if let TypeData::Enumerate(en) = f {
+                        variants.push((
+                            en.name.to_string().into_owned(),
+                            variant_i64(&en.value),
+                        ));
+                    }
+                }
+                cont = next.continuation;
+            }
+        }
+        if variants.is_empty() {
+            continue;
+        }
+        let size = resolve_c(&finder, &mut memo, underlying, ptr_size, 0)
+            .map(|c| c.size)
+            .unwrap_or(4);
+        out.enums.push(DebugEnum {
+            name,
+            size,
+            variants,
+        });
+    }
+    }
+
     
     if !symbols.is_empty() {
         let tpi = pdb.type_information().ok()?;
@@ -650,6 +713,10 @@ fn collect_debug_fields(
                 if name.is_empty() {
                     continue;
                 }
+                let bitfield = match finder.find(m.field_type).ok().and_then(|i| i.parse().ok()) {
+                    Some(TypeData::Bitfield(b)) => Some((b.position, b.length)),
+                    _ => None,
+                };
                 let Some(ct) = resolve_c(finder, memo, m.field_type, ptr_size, 0) else {
                     continue;
                 };
@@ -658,6 +725,7 @@ fn collect_debug_fields(
                     offset: m.offset as usize,
                     type_name: ct.name,
                     size: ct.size,
+                    bitfield,
                 });
             }
         }

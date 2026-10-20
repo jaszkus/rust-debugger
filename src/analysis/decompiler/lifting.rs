@@ -415,17 +415,30 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut recovery = recovery;
     let debug = debug_types.map(|a| a.as_ref());
     let debug_sig = debug.and_then(|d| d.function(cfg.func_entry));
-    let mut callee_params: HashMap<u64, usize> = debug
+    let mut callee_params: HashMap<u64, Vec<bool>> = debug
         .map(|d| {
             d.functions
                 .iter()
-                .map(|(&addr, f)| (addr, f.params.len()))
+                .map(|(&addr, f)| {
+                    (
+                        addr,
+                        f.params
+                            .iter()
+                            .map(|p| param_is_float(&p.type_name))
+                            .collect(),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
+    for (&addr, name) in imports {
+        if let Some(n) = known_import_param_count(name) {
+            callee_params.entry(addr).or_insert_with(|| vec![false; n]);
+        }
+    }
     for (&from, &to) in thunk_targets {
-        if let Some(&n) = callee_params.get(&to) {
-            callee_params.insert(from, n);
+        if let Some(sig) = callee_params.get(&to).cloned() {
+            callee_params.insert(from, sig);
         }
     }
     let param_names: HashSet<String> = debug_sig
@@ -676,6 +689,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
+    let mut stack_names: HashMap<i64, (String, usize)> = HashMap::default();
     
     
     
@@ -737,6 +751,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         });
                     }
                 }
+                stack_names.insert(target_norm, (local.name.clone(), local.size));
                 continue;
             }
             let mut new_name = sanitize_param_name(&local.name, &old_name);
@@ -751,6 +766,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 param_renames.insert(old_name.clone(), new_name.clone());
             }
             local_types.insert(old_name.clone(), local.type_name.clone());
+            stack_names.insert(target_norm, (new_name.clone(), local.size));
             if let Some(sname) = local.struct_name.as_deref()
                 && let Some(ds) = dbg.struct_named(sname)
             {
@@ -786,6 +802,34 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
+    let mut enum_variants: HashMap<String, Vec<(String, i64)>> = HashMap::default();
+    let mut enum_fields: HashMap<String, String> = HashMap::default();
+    let mut bitfields: Vec<(String, u8, u8, String)> = Vec::new();
+    if let Some(dbg) = debug {
+        for e in &dbg.enums {
+            enum_variants.insert(e.name.clone(), e.variants.clone());
+        }
+        for st in &dbg.structs {
+            for f in &st.fields {
+                let ty = f.type_name.trim().trim_start_matches("enum ").trim();
+                if enum_variants.contains_key(ty) {
+                    enum_fields.insert(f.name.clone(), ty.to_string());
+                }
+            }
+            let mut first_by_off: HashMap<usize, String> = HashMap::default();
+            for f in &st.fields {
+                first_by_off.entry(f.offset).or_insert_with(|| f.name.clone());
+            }
+            for f in &st.fields {
+                if let Some((bit, width)) = f.bitfield
+                    && bit > 0
+                    && let Some(first) = first_by_off.get(&f.offset)
+                {
+                    bitfields.push((first.clone(), bit, width, f.name.clone()));
+                }
+            }
+        }
+    }
     let hints = TypeHints {
         floats,
         float_slots,
@@ -805,10 +849,15 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         is_win64,
         thunk_targets: thunk_targets.clone(),
         callee_params,
+        ret_type: debug_sig.map(|s| s.ret.clone()),
         structs,
         value_structs,
         stack_structs,
         local_types,
+        stack_names,
+        enum_variants,
+        enum_fields,
+        bitfields,
         rbp_delta: recovery.as_ref().map(|r| r.rbp_delta).unwrap_or(0),
         rsp_at: recovery.as_ref().map(|r| r.rsp_at.clone()).unwrap_or_default(),
         hidden_locals,
@@ -1103,7 +1152,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     
     
     
-    fn is_stack_bookkeeping(text: &str) -> bool {
+fn is_stack_bookkeeping(text: &str) -> bool {
         let t = text.trim().strip_suffix(';').unwrap_or(text.trim());
         let Some((lhs, rhs)) = t.split_once('=') else {
             return false;
@@ -1125,13 +1174,18 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
         false
     }
+    drop_stack_canary(&mut lines);
     lines.retain(|l| !is_stack_bookkeeping(&l.text));
     alias::propagate_aliases(&mut lines);
     alias::cse_repeated_expressions(&mut lines);
     alias::propagate_aliases(&mut lines);
     alias::drop_dead_register_assignments(&mut lines);
     alias::inline_single_use_temps(&mut lines);
+    alias::drop_self_assignments(&mut lines);
     alias::propagate_aliases(&mut lines);
+    alias::reuse_assigned_subexpressions(&mut lines);
+    substitute_enum_values(&mut lines, &hints);
+    fold_bitfield_accesses(&mut lines, &hints);
     squash_empty_branches(&mut lines);
     drop_call_arg_setups(&mut lines);
     drop_hidden_local_spills(&mut lines, &hints.hidden_locals, &param_names);
@@ -1176,6 +1230,203 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     stats.output_bytes = total_bytes;
     stats.t_total = t_total.elapsed();
     (make_pseudocode(cfg, func_name, lines), stats)
+}
+
+
+
+
+
+fn substitute_enum_values(lines: &mut [PseudoLine], hints: &TypeHints) {
+    if hints.enum_fields.is_empty() || hints.enum_variants.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        let mut text = line.text.clone();
+        for (field, enum_name) in &hints.enum_fields {
+            let Some(variants) = hints.enum_variants.get(enum_name) else {
+                continue;
+            };
+            for (name, value) in variants {
+                let forms = [value.to_string(), format!("{:#x}", value), format!("0x{:X}", value)];
+                for form in forms {
+                    for op in [" = ", " == ", " != ", " > ", " < ", " >= ", " <= "] {
+                        let from = format!(".{field}{op}{form}");
+                        let to = format!(".{field}{op}{name}");
+                        if text.contains(&from) {
+                            text = text.replace(&from, &to);
+                        }
+                    }
+                }
+            }
+        }
+        line.text = text;
+    }
+}
+
+fn fold_bitfield_accesses(lines: &mut [PseudoLine], hints: &TypeHints) {
+    if hints.bitfields.is_empty() {
+        return;
+    }
+    for i in 0..lines.len() {
+        let mut text = lines[i].text.clone();
+        for (base, bit, width, name) in &hints.bitfields {
+            let mask = (1u64 << (*width as u32).min(63)) - 1;
+            let storage_mask = (!(mask << *bit)) & 0xFFFF_FFFF;
+            let forms = [
+                fmt_const(storage_mask as i64),
+                format!("{:#x}", storage_mask),
+                format!("0x{:X}", storage_mask),
+            ];
+            let mask_forms = [format!("{:#x}", mask), format!("0x{:X}", mask)];
+            
+            for form in &mask_forms {
+                let tail = format!(" >> {} & {}", bit, form);
+                let needle = format!(".{base}");
+                if let Some(rel) = text.find(&needle) {
+                    let at = rel;
+                    let after = at + needle.len();
+                    if text[after..].starts_with(&tail)
+                        && let Some(start) = field_expr_start(&text, at)
+                    {
+                        let base_expr = text[start..at].trim().to_string();
+                        let end = after + tail.len();
+                        text.replace_range(start..end, &format!("{}.{}", base_expr, name));
+                    }
+                }
+            }
+            let rhs_match = forms
+                .iter()
+                .any(|m| text.contains(&format!(".{base} & {m}")));
+            if !rhs_match {
+                continue;
+            }
+            let Some((lhs, _)) = text.split_once(" = ") else {
+                continue;
+            };
+            if lhs.contains(&format!(".{base}")) {
+                if let Some(at) = text.find(&format!(".{base}"))
+                    && let Some(start) = field_expr_start(&text, at)
+                {
+                    let base_expr = text[start..at].trim().to_string();
+                    text.replace_range(
+                        start..at + 1 + base.len(),
+                        &format!("{}.{}", base_expr, name),
+                    );
+                }
+            } else if i + 1 < lines.len() {
+                
+                
+                let tmp = lhs.trim().to_string();
+                let next = lines[i + 1].text.clone();
+                let needle = format!(".{base} = {tmp}");
+                if let Some(at) = next.find(&needle)
+                    && let Some(start) = field_expr_start(&next, at)
+                {
+                    let base_expr = next[start..at].trim().to_string();
+                    lines[i + 1].text = format!(
+                        "{}{}.{}{}",
+                        &next[..start],
+                        base_expr,
+                        name,
+                        &next[start + base_expr.len() + 1 + base.len()..]
+                    );
+                }
+            }
+        }
+        lines[i].text = text;
+    }
+}
+
+fn field_expr_start(text: &str, dot: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut start = dot;
+    while start > 0 {
+        let c = bytes[start - 1] as char;
+        if c.is_ascii_alphanumeric() || c == '_' || c == '>' || c == '-' {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    let first = text[start..dot].chars().next()?;
+    (first.is_ascii_alphabetic() || first == '_').then_some(start)
+}
+
+fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
+let mut remove: HashSet<usize> = HashSet::default();
+let mut canary_locals: HashSet<String> = HashSet::default();
+for i in 0..lines.len() {
+    let t = lines[i].text.trim();
+    let is_canary_load = (t.contains("*(fs:") || t.contains("*(gs:"))
+        && (t.contains("+ 0x28") || t.contains("+ 0x14"));
+    if !is_canary_load {
+        continue;
+    }
+    remove.insert(i);
+    let Some((dest, _)) = t.split_once(" = ") else {
+        continue;
+    };
+    let dest = dest.trim();
+    if dest.starts_with("local_") || dest.starts_with("tmp_") || dest.starts_with("stk_") {
+        canary_locals.insert(dest.to_string());
+    }
+    let Some(j) = (i + 1..lines.len()).find(|&j| !lines[j].text.trim().is_empty()) else {
+        continue;
+    };
+    let Some((lhs, rhs)) = lines[j].text.split_once(" = ") else {
+        continue;
+    };
+    let rhs = rhs
+        .split("//")
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    let lhs = lhs.trim();
+    let same_cookie = rhs.contains("*(fs:") || rhs.contains("*(gs:");
+    if (rhs == dest || same_cookie)
+        && (lhs.starts_with("local_") || lhs.starts_with("tmp_") || lhs.starts_with("stk_"))
+    {
+        canary_locals.insert(lhs.to_string());
+        remove.insert(j);
+    }
+}
+if !remove.is_empty() {
+    for (i, line) in lines.iter().enumerate() {
+        if line.text.contains("__stack_chk_fail") {
+            remove.insert(i);
+        }
+    }
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.text.split("//").next().unwrap_or("").trim();
+        if line.kind == LineKind::Declaration
+            && t.split_whitespace()
+                .nth(1)
+                .is_some_and(|w| canary_locals.contains(w.trim_end_matches(';')))
+        {
+            remove.insert(i);
+            continue;
+        }
+        let Some((lhs, rhs)) = t.split_once(" = ") else {
+            continue;
+        };
+        let rhs = rhs.trim().trim_end_matches(';').trim();
+        let lhs = lhs.trim();
+        if canary_locals.contains(lhs) && canary_locals.contains(rhs) {
+            remove.insert(i);
+        }
+        if canary_locals.contains(rhs) && lhs != rhs {
+            
+            remove.insert(i);
+        }
+    }
+    let mut idx: Vec<usize> = remove.into_iter().collect();
+    idx.sort_unstable();
+    for i in idx.into_iter().rev() {
+        lines.remove(i);
+    }
+}
 }
 
 
@@ -1288,6 +1539,28 @@ fn rename_identifiers(text: &str, map: &HashMap<String, String>) -> String {
     out
 }
 
+fn param_is_float(type_name: &str) -> bool {
+    let t = type_name.trim();
+    !t.contains('*')
+        && !t.ends_with("[]")
+        && (t.contains("float") || t.contains("double") || t.contains("_Float"))
+}
+
+fn known_import_param_count(name: &str) -> Option<usize> {
+    let base = name.rsplit('!').next().unwrap_or(name);
+    let base = base.trim_start_matches("__imp_").to_ascii_lowercase();
+    match base.as_str() {
+        "__stack_chk_fail" | "__stack_chk_fail_local" => Some(0),
+        "abort" => Some(0),
+        "getlasterror" | "getprocessid" | "getcurrentprocessid" => Some(0),
+        "free" | "malloc" | "strlen" | "puts" | "exit" | "_exit" | "sleep"
+        | "closehandle" | "exitprocess" => Some(1),
+        "memcpy" | "memmove" | "memset" => Some(3),
+        "strcpy" | "strcmp" => Some(2),
+        _ => None,
+    }
+}
+
 fn drop_hidden_local_spills(
     lines: &mut Vec<PseudoLine>,
     hidden: &HashSet<String>,
@@ -1329,7 +1602,10 @@ fn drop_call_arg_setups(lines: &mut Vec<PseudoLine>) {
                 break;
             };
             let reg = canonical_reg(lhs);
-            if ABI_ARG_REGS.contains(&reg) || WIN64_ARG_REGS.contains(&reg) {
+            if ABI_ARG_REGS.contains(&reg)
+                || WIN64_ARG_REGS.contains(&reg)
+                || SSE_ARG_REGS.contains(&reg)
+            {
                 lines.remove(j);
                 i = i.saturating_sub(1);
                 continue;
@@ -2091,5 +2367,28 @@ mod graph_tests {
         for m in ["mov", "add", "verw", "lea", "pxor"] {
             assert!(!is_float_mnemonic(m), "{m}");
         }
+    }
+
+    #[test]
+    fn stack_canary_bookkeeping_is_removed() {
+        fn pl(text: &str, kind: LineKind) -> PseudoLine {
+            PseudoLine { indent: 0, text: text.into(), kind, source_addr: None }
+        }
+        let mut lines = vec![
+            pl("rax = *(fs:64 + 0x28);  // TLS/PEB via fs", LineKind::Assignment),
+            pl("local_10 = *(fs:64 + 0x28);", LineKind::Assignment),
+            pl("int64_t local_10;  // [rbp-0x8]", LineKind::Declaration),
+            pl("rdx = local_10;", LineKind::Assignment),
+            pl("if (c != 0xff) {", LineKind::Branch),
+            pl("__stack_chk_fail();", LineKind::Call),
+            pl("}", LineKind::Branch),
+            pl("return rax;", LineKind::Return),
+        ];
+        drop_stack_canary(&mut lines);
+        let out = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(!out.contains("fs:"), "{out}");
+        assert!(!out.contains("local_10"), "{out}");
+        assert!(!out.contains("__stack_chk_fail"), "{out}");
+        assert!(out.contains("return rax;"), "{out}");
     }
 }

@@ -9,6 +9,9 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 pub(crate) const WIN64_ARG_REGS: [&str; 4] = ["rcx", "rdx", "r8", "r9"];
 pub(crate) const SYSV_ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 pub(crate) const ABI_ARG_REGS: [&str; 6] = SYSV_ARG_REGS;
+pub(crate) const SSE_ARG_REGS: [&str; 8] = [
+    "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) enum PVal {
@@ -119,7 +122,8 @@ pub(crate) struct StackStructHint {
 pub(crate) struct TypeHints {
     pub(crate) is_win64: bool,
     pub(crate) thunk_targets: HashMap<u64, u64>,
-    pub(crate) callee_params: HashMap<u64, usize>,
+    pub(crate) callee_params: HashMap<u64, Vec<bool>>,
+    pub(crate) ret_type: Option<String>,
     pub(crate) floats: HashSet<String>,
     pub(crate) float_slots: HashSet<i64>,
     pub(crate) spill_slots: HashSet<i64>,
@@ -130,6 +134,10 @@ pub(crate) struct TypeHints {
     pub(crate) value_structs: HashMap<String, StructHint>,
     pub(crate) stack_structs: Vec<StackStructHint>,
     pub(crate) local_types: HashMap<String, String>,
+    pub(crate) stack_names: HashMap<i64, (String, usize)>,
+    pub(crate) enum_variants: HashMap<String, Vec<(String, i64)>>,
+    pub(crate) enum_fields: HashMap<String, String>,
+    pub(crate) bitfields: Vec<(String, u8, u8, String)>,
     pub(crate) rbp_delta: i64,
     pub(crate) rsp_at: HashMap<u64, i64>,
     pub(crate) hidden_locals: HashSet<String>,
@@ -338,10 +346,11 @@ pub(crate) fn render_op(
                 .or_else(|| func_lookup.get(target))
                 .cloned()
                 .unwrap_or_else(|| format!("FUN_{:X}", real_target));
-            let mut args = take_call_args(reg_values, is64, hints.is_win64, push_args);
-            if let Some(&n) = hints.callee_params.get(&real_target) {
-                args.truncate(n);
-            }
+            let args = if let Some(sig) = hints.callee_params.get(&real_target) {
+                take_call_args_sig(reg_values, is64, hints.is_win64, sig, push_args)
+            } else {
+                take_call_args(reg_values, is64, hints.is_win64, push_args)
+            };
             let line = if args.is_empty() {
                 format!("{}();", name)
             } else {
@@ -379,13 +388,48 @@ pub(crate) fn render_op(
             Some((line, LineKind::Call))
         }
         POp::Return | POp::ReturnPop { .. } => {
-            let ret_val = match reg_values.get("rax") {
-                Some(PVal::Opaque(r)) => r.to_string(),
-                other => other
-                    .map(pval_str)
-                    .filter(|v| v != "rax")
-                    .unwrap_or_default(),
+            let float_ret = hints.ret_type.as_deref().is_some_and(|t| {
+                let t = t.trim();
+                !t.contains('*')
+                    && (t.contains("float") || t.contains("double") || t.contains("_Float"))
+            });
+            let ret_val = if float_ret {
+                match reg_values.get("xmm0") {
+                    Some(PVal::Opaque(r)) => r.to_string(),
+                    other => other
+                        .map(pval_str)
+                        .filter(|v| v != "xmm0")
+                        .unwrap_or_default(),
+                }
+            } else {
+                match reg_values.get("rax") {
+                    Some(PVal::Opaque(r)) => r.to_string(),
+                    other => other
+                        .map(pval_str)
+                        .filter(|v| v != "rax")
+                        .unwrap_or_default(),
+                }
             };
+            let mut ret_val = ret_val;
+            if ret_val.is_empty()
+                && hints
+                    .ret_type
+                    .as_deref()
+                    .is_some_and(|t| !t.is_empty() && !t.eq_ignore_ascii_case("void"))
+            {
+                let reg = if float_ret {
+                    "xmm0"
+                } else if is64 {
+                    "rax"
+                } else {
+                    "eax"
+                };
+                ret_val = reg_values
+                    .get(reg)
+                    .map(pval_str)
+                    .filter(|v| v != reg)
+                    .unwrap_or_else(|| reg.to_string());
+            }
             if ret_val.is_empty() {
                 Some(("return;".into(), LineKind::Return))
             } else {
@@ -583,8 +627,17 @@ pub(crate) fn binop_render(
     op_sym: &str,
     hints: &TypeHints,
 ) -> Option<(String, LineKind)> {
-    let av = resolve_pval_with_hints(a, reg_values, hints);
-    let bv = resolve_pval_with_hints(b, reg_values, hints);
+    let bitwise = matches!(op_sym, "&" | "|" | "^");
+    let av = if bitwise && matches!(a, PVar::Addr(_)) {
+        if let PVar::Addr(v) = a { PVal::C(*v as i64) } else { unreachable!() }
+    } else {
+        resolve_pval_with_hints(a, reg_values, hints)
+    };
+    let bv = if bitwise && matches!(b, PVar::Addr(_)) {
+        if let PVar::Addr(v) = b { PVal::C(*v as i64) } else { unreachable!() }
+    } else {
+        resolve_pval_with_hints(b, reg_values, hints)
+    };
     let v = match (&av, &bv) {
         (PVal::C(x), PVal::C(y)) => fold_const(op_sym, *x, *y),
         _ => match expr::Expr::from_sym(op_sym, pval_to_expr(&av), pval_to_expr(&bv)) {

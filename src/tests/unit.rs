@@ -1627,7 +1627,7 @@ fn debug_types_reach_eager_decompilation() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        main_text.contains("compute((rsp") && main_text.contains(", rax, 0xff)"),
+        main_text.contains("compute((rsp") && main_text.contains(", local_20, 0xff)"),
         "Win64 call arguments:\n{}",
         main_text
     );
@@ -1710,11 +1710,123 @@ fn dwarf_debug_types_reach_eager_decompilation() {
     assert!(main_text.contains("Color c;"), "Color local:\n{}", main_text);
     assert!(main_text.contains("n.pos.x = 1"), "nested field x:\n{}", main_text);
     assert!(main_text.contains("n.pos.y = 2"), "nested field y:\n{}", main_text);
+    assert!(!main_text.contains("__stack_chk_fail"), "canary removed:\n{}", main_text);
+    assert!(!main_text.contains("fs:64"), "TLS canary load removed:\n{}", main_text);
+    assert!(text.contains("return rax;"), "missing return value:\n{}", text);
     assert!(
         main_text.contains("compute((rbp - 0x20))"),
         "SysV call argument:\n{}",
         main_text
     );
+}
+
+fn analyze_pdb_fixture(name: &str) -> Option<crate::analysis::AnalysisResult> {
+    if !fixture(&format!("{name}.exe")).exists() || !fixture(&format!("{name}.pdb")).exists() {
+        eprintln!("skipped: {name} fixtures not present");
+        return None;
+    }
+    let path = fixture(&format!("{name}.exe"));
+    let bin = crate::parser::parse_file(&path).expect("parse exe");
+    let disasm = crate::disasm::disassemble_binary(&bin).expect("disasm");
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let fid = crate::analysis::function_id::FunctionIDMatcher::new();
+    Some(crate::analysis::auto_analyze_with_source(
+        &disasm,
+        &bin,
+        path.to_str(),
+        &rustc_hash::FxHashMap::default(),
+        &fid,
+        &never,
+        &|_, _, _, _| {},
+    ))
+}
+
+#[test]
+fn pdb_float_calls_use_sse_arguments() {
+    let Some(result) = analyze_pdb_fixture("pdb_float_sample") else {
+        return;
+    };
+    let text = |name: &str| -> String {
+        let f = result
+            .functions
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name} function"));
+        result
+            .pseudocode
+            .get(&f.entry)
+            .unwrap_or_else(|| panic!("{name} was eagerly decompiled"))
+            .lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let main = text("main");
+    assert!(main.contains("add(x, y)"), "float call args:\n{}", main);
+    assert!(main.contains("scale(z)"), "float single arg:\n{}", main);
+    let add = text("add");
+    assert!(add.contains("double add(double a, double b)"), "float signature:\n{}", add);
+    assert!(add.contains("xmm0 = a + b"), "float body:\n{}", add);
+    assert!(add.contains("return sum") || add.contains("return xmm0"), "float return:\n{}", add);
+}
+
+#[test]
+fn pdb_enums_and_bitfields_reach_decompilation() {
+    if !fixture("pdb_enum_sample.exe").exists() || !fixture("pdb_enum_sample.pdb").exists() {
+        eprintln!("skipped: pdb_enum_sample fixtures not present");
+        return;
+    }
+    let path = fixture("pdb_enum_sample.exe");
+    let bin = crate::parser::parse_file(&path).expect("parse exe");
+    let types = crate::analysis::symbols::debug_types::DebugTypes::load(&bin, path.to_str())
+        .expect("PDB debug types");
+    let color = types
+        .enums
+        .iter()
+        .find(|e| e.name == "Color")
+        .expect("Color enum");
+    assert_eq!(color.variants, vec![("RED".into(), 1), ("GREEN".into(), 2), ("BLUE".into(), 4)]);
+    let flags = types
+        .structs
+        .iter()
+        .find(|s| s.name == "Flags")
+        .expect("Flags struct");
+    assert_eq!(flags.fields[0].bitfield, Some((0, 3)));
+    assert_eq!(flags.fields[1].bitfield, Some((3, 5)));
+
+    let result = analyze_pdb_fixture("pdb_enum_sample").expect("analysis");
+    let text = |name: &str| -> String {
+        let f = result.functions.iter().find(|f| f.name == name).expect(name);
+        result
+            .pseudocode
+            .get(&f.entry)
+            .expect("decompiled")
+            .lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let main = text("main");
+    assert!(main.contains("Flags f;"), "bitfield local:\n{}", main);
+    assert!(main.contains("f.color = GREEN;"), "enum constant:\n{}", main);
+    assert!(main.contains("f.b = rax;"), "bitfield destination:\n{}", main);
+    let classify = text("classify");
+    assert!(classify.contains("f.b"), "bitfield read:\n{}", classify);
+}
+
+#[test]
+fn pdb_o2_debug_types_are_accepted() {
+    let Some(result) = analyze_pdb_fixture("pdb_o2_sample") else {
+        return;
+    };
+    for name in ["add_points", "compute", "main"] {
+        assert!(
+            result.functions.iter().any(|f| f.name == name),
+            "missing optimized function {name}"
+        );
+    }
 }
 
 #[test]

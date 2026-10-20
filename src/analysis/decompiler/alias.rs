@@ -30,6 +30,19 @@ pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
     let mut aliases: HashMap<String, String> = HashMap::default();
     let mut scopes: Vec<Option<HashMap<String, String>>> = Vec::new();
     let mut candidates: Vec<(usize, String)> = Vec::new();
+    let declared: HashSet<String> = lines
+        .iter()
+        .filter(|l| l.kind == LineKind::Declaration)
+        .filter_map(|l| {
+            l.text
+                .split("//")
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .nth(1)
+                .map(|w| w.trim_end_matches(';').to_string())
+        })
+        .collect();
 
     for (i, line) in lines.iter_mut().enumerate() {
         let kind = line.kind;
@@ -89,12 +102,16 @@ pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
 
         if let Some((lhs, rhs)) = simple_assignment(&new_text) {
             aliases.remove(&lhs);
+            aliases.retain(|k, v| k != &lhs && !tokens_contain(v, &lhs));
             if is_removable(&lhs) {
                 candidates.push((i, lhs.clone()));
             }
-            aliases.insert(lhs, rhs);
+            if !declared.contains(&lhs) || !is_register(&rhs) {
+                aliases.insert(lhs, rhs);
+            }
         } else if let Some(lhs) = assignment_lhs(&new_text) {
             aliases.remove(&lhs);
+            aliases.retain(|k, v| k != &lhs && !tokens_contain(v, &lhs));
         }
     }
 
@@ -113,6 +130,18 @@ pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
         });
     }
     drop_unused_declarations(lines);
+}
+
+
+
+pub(crate) fn drop_self_assignments(lines: &mut Vec<PseudoLine>) {
+    lines.retain(|line| {
+        let t = line.text.split("//").next().unwrap_or("").trim();
+        let Some((lhs, rhs)) = t.strip_suffix(';').and_then(|t| t.split_once(" = ")) else {
+            return true;
+        };
+        lhs.trim() != rhs.trim()
+    });
 }
 
 
@@ -274,6 +303,114 @@ fn is_cse_expr(rhs: &str) -> bool {
         && !is_identifier(rhs)
         && !is_number(rhs)
         && !rhs.contains(" = ")
+}
+
+
+
+
+
+
+
+
+
+
+
+
+pub(crate) fn reuse_assigned_subexpressions(lines: &mut [PseudoLine]) {
+    for _ in 0..4 {
+        let mut changed = false;
+        for i in 0..lines.len() {
+            if lines[i].kind == LineKind::Comment || lines[i].kind == LineKind::Declaration {
+                continue;
+            }
+            let Some((lhs, rhs)) = assignment_parts(&lines[i].text) else {
+                continue;
+            };
+            if !is_identifier(lhs) || !is_cse_expr(rhs) || tokens_contain(rhs, lhs) {
+                continue;
+            }
+            let Some(j) = (i + 1..lines.len()).find(|&j| !lines[j].text.trim().is_empty()) else {
+                continue;
+            };
+            if j != i + 1 && lines[i + 1..j].iter().any(|l| l.kind != LineKind::Comment) {
+                continue;
+            }
+            let next = lines[j].kind;
+            if matches!(
+                next,
+                LineKind::Label
+                    | LineKind::CloseBrace
+                    | LineKind::Declaration
+                    | LineKind::Return
+                    | LineKind::Call
+            ) {
+                continue;
+            }
+            let text = lines[j].text.clone();
+            let (code, comment) = match text.split_once("//") {
+                Some((c, cm)) => (c, Some(cm)),
+                None => (text.as_str(), None),
+            };
+            let (lhs_part, target) = match code.split_once(" = ") {
+                Some((l, r)) => (Some(l), r.trim()),
+                None => (None, code.trim()),
+            };
+            if target.is_empty() || !target.contains(rhs) || target == rhs {
+                continue;
+            }
+            if lhs_part.is_some_and(|l| l.trim() == lhs) {
+                continue;
+            }
+            let replaced = replace_expr(target, rhs, lhs);
+            if replaced == target {
+                continue;
+            }
+            let mut out = String::new();
+            if let Some(l) = lhs_part {
+                out.push_str(l);
+                out.push_str(" = ");
+            }
+            out.push_str(&replaced);
+            if let Some(cm) = comment {
+                out.push_str("  //");
+                out.push_str(cm);
+            }
+            if !out.ends_with(';') && code.trim_end().ends_with(';') {
+                out.push(';');
+            }
+            if out != lines[j].text {
+                lines[j].text = out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn replace_expr(text: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some(rel) = text[pos..].find(from) {
+        let at = pos + rel;
+        let before = text[..at].chars().last();
+        let after = text[at + from.len()..].chars().next();
+        let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+        if boundary(before) && boundary(after) {
+            out.push_str(&text[pos..at]);
+            out.push_str(to);
+            pos = at + from.len();
+        } else {
+            out.push_str(&text[pos..=at]);
+            pos = at + 1;
+        }
+    }
+    out.push_str(&text[pos..]);
+    out
 }
 
 
@@ -1123,5 +1260,50 @@ mod tests {
             "{:?}",
             out
         );
+    }
+
+    #[test]
+    fn repeated_subexpression_uses_assigned_temp() {
+        let mut lines = vec![
+            line("rax = n->id;", LineKind::Assignment),
+            line("rcx = rax + n->id;", LineKind::Assignment),
+        ];
+        reuse_assigned_subexpressions(&mut lines);
+        assert_eq!(lines[1].text, "rcx = rax + rax;");
+    }
+
+    #[test]
+    fn repeated_subexpression_does_not_cross_control_flow() {
+        let mut lines = vec![
+            line("rax = n->id;", LineKind::Assignment),
+            line("LAB_1:", LineKind::Label),
+            line("rcx = rax + n->id;", LineKind::Assignment),
+        ];
+        reuse_assigned_subexpressions(&mut lines);
+        assert_eq!(lines[2].text, "rcx = rax + n->id;");
+    }
+
+    #[test]
+    fn writes_invalidate_aliases_to_the_register() {
+        let mut lines = vec![
+            line("xmm0 = foo();", LineKind::Assignment),
+            line("x = xmm0;", LineKind::Assignment),
+            line("xmm0 = bar();", LineKind::Assignment),
+            line("use(x);", LineKind::Call),
+        ];
+        propagate_aliases(&mut lines);
+        assert_eq!(lines[3].text, "use(x);");
+    }
+
+    #[test]
+    fn self_assignments_are_dropped() {
+        let mut lines = vec![
+            line("a = a;", LineKind::Assignment),
+            line("x = x;", LineKind::Assignment),
+            line("x = y;", LineKind::Assignment),
+        ];
+        drop_self_assignments(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "x = y;");
     }
 }

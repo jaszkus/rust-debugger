@@ -2,7 +2,7 @@ use gimli::{AttributeValue, Dwarf, EndianSlice, RunTimeEndian, Unit};
 use rustc_hash::FxHashMap;
 
 use super::debug_types::{
-    DebugBase, DebugField, DebugFunction, DebugLocal, DebugParam, DebugStruct, DebugTypes,
+    DebugBase, DebugEnum, DebugField, DebugFunction, DebugLocal, DebugParam, DebugStruct, DebugTypes,
 };
 use crate::parser::ParsedBinary;
 use crate::type_system::manager::DataTypeManager;
@@ -27,6 +27,7 @@ struct Member {
     name: String,
     offset: u64,
     ty: Key,
+    bitfield: Option<(u8, u8)>,
 }
 
 type Key = (usize, usize);
@@ -373,10 +374,7 @@ fn collect_unit(
             gimli::DW_TAG_member => {
                 if let Some((_, Parent::Composite(ck))) = stack.last() {
                     let ck = *ck;
-                    if attr_u64(entry, gimli::DW_AT_bit_size).is_some() {
-                        *skipped += 1;
-                        continue;
-                    }
+                    let bit_size = attr_u64(entry, gimli::DW_AT_bit_size);
                     let (Some(name), Some(ty)) = (
                         attr_str(dwarf, unit, entry, gimli::DW_AT_name),
                         type_ref(entry, unit_idx),
@@ -385,12 +383,19 @@ fn collect_unit(
                         continue;
                     };
                     let off = attr_u64(entry, gimli::DW_AT_data_member_location).unwrap_or(0);
+                    let bitfield = bit_size.map(|width| {
+                        let bit = attr_u64(entry, gimli::DW_AT_data_bit_offset)
+                            .or_else(|| attr_u64(entry, gimli::DW_AT_bit_offset))
+                            .unwrap_or(0);
+                        ((bit % 8) as u8, width.min(255) as u8)
+                    });
                     if let Some(t) = types.get_mut(&ck)
                         && let DieKind::Composite { members, .. } = &mut t.kind {
                             members.push(Member {
                                 name,
                                 offset: off,
                                 ty,
+                                bitfield,
                             });
                         }
                 }
@@ -581,6 +586,7 @@ pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
                 offset: m.offset as usize,
                 type_name,
                 size: field_size,
+                bitfield: m.bitfield,
             });
         }
         if fields.is_empty() {
@@ -600,6 +606,21 @@ pub fn debug_types_from_dwarf(bin: &ParsedBinary) -> Option<DebugTypes> {
     }
     out.structs.sort_by(|a, b| a.name.cmp(&b.name));
     out.structs.dedup_by(|a, b| a.name == b.name);
+    for info in types.values() {
+        if let DieKind::Enum { name, variants } = &info.kind
+            && !name.is_empty()
+            && !name.starts_with("__anon")
+            && !variants.is_empty()
+        {
+            out.enums.push(DebugEnum {
+                name: name.clone(),
+                size: 4,
+                variants: variants.clone(),
+            });
+        }
+    }
+    out.enums.sort_by(|a, b| a.name.cmp(&b.name));
+    out.enums.dedup_by(|a, b| a.name == b.name);
 
     
     

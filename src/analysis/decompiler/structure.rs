@@ -653,10 +653,11 @@ fn walk_region(
         {
             let target = *target;
             let real_target = hints.thunk_targets.get(&target).copied().unwrap_or(target);
-            let mut args = take_call_args(&reg_values, is64, hints.is_win64, &mut push_args);
-            if let Some(&n) = hints.callee_params.get(&real_target) {
-                args.truncate(n);
-            }
+            let args = if let Some(sig) = hints.callee_params.get(&real_target) {
+                take_call_args_sig(&reg_values, is64, hints.is_win64, sig, &mut push_args)
+            } else {
+                take_call_args(&reg_values, is64, hints.is_win64, &mut push_args)
+            };
             let (text, kind) = match func_lookup.get(&real_target) {
                 Some(name) if args.is_empty() => (
                     format!("return {}();  // tail call", name),
