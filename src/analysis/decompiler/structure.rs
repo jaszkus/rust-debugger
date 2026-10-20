@@ -5,6 +5,10 @@ use crate::analysis::operands::canonical_reg;
 use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+
+const MAX_CLONE_BLOCKS: usize = 16;
+const MAX_CLONE_LINES: usize = 100;
+
 pub(crate) fn compute_dowhile(
     cfg: &CFG,
     bops: &[Vec<(u64, &POp)>],
@@ -406,7 +410,7 @@ fn clone_terminal_region(
         if !region.insert(b) {
             continue;
         }
-        if region.len() > 8 {
+        if region.len() > MAX_CLONE_BLOCKS {
             return None;
         }
         for edge in &ctx.cfg.blocks[b].successors {
@@ -449,7 +453,7 @@ fn clone_terminal_region(
         }
     }
     if out.is_empty()
-        || out.len() > 60
+        || out.len() > MAX_CLONE_LINES
         || balance != 0
         || text.contains("LAB_")
         || text.contains("goto ")
@@ -1227,12 +1231,19 @@ fn walk_arm(
         return;
     }
     if visited.contains(&block) {
-        lines.push(PseudoLine {
-            indent,
-            text: format!("goto LAB_{:X};", ctx.cfg.blocks[block].start),
-            kind: LineKind::Branch,
-            source_addr: None,
-        });
+        
+        
+        
+        if let Some(cloned) = clone_terminal_region(ctx, block, visited, indent, depth, stops) {
+            lines.extend(cloned);
+        } else {
+            lines.push(PseudoLine {
+                indent,
+                text: format!("goto LAB_{:X};", ctx.cfg.blocks[block].start),
+                kind: LineKind::Branch,
+                source_addr: None,
+            });
+        }
     } else {
         walk_region(ctx, block, visited, lines, indent, depth + 1, stops);
     }
@@ -1899,6 +1910,71 @@ mod cleanup_tests {
         assert_eq!(
             lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
             vec!["// WARNING: missing branch", "y = 2;"]
+        );
+    }
+
+    #[test]
+    fn visited_arm_target_clones_a_terminal_region_instead_of_goto() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        let blk = |id: usize, succ: Vec<usize>| BasicBlock {
+            id,
+            start: 0x1000 + id as u64 * 0x10,
+            end: 0x1000 + id as u64 * 0x10 + 0x10,
+            instr_indices: id..id + 1,
+            successors: succ
+                .into_iter()
+                .map(|target| Edge {
+                    target,
+                    kind: EdgeKind::Jump,
+                })
+                .collect(),
+            predecessors: vec![],
+        };
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks: vec![blk(0, vec![1]), blk(1, vec![])],
+            block_at: Default::default(),
+        };
+        let ret = POp::Return;
+        let bops: Vec<Vec<(u64, &POp)>> = vec![vec![], vec![(0x1010, &ret)]];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> =
+            vec![HashMap::default(), HashMap::default()];
+        let func_lookup = HashMap::default();
+        let back_edges = HashMap::default();
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &[],
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            clone: false,
+            clone_depth: 0,
+        };
+        let mut visited: HashSet<usize> = HashSet::default();
+        visited.insert(1);
+        let mut lines = Vec::new();
+        walk_arm(&ctx, 1, &mut visited, &mut lines, 1, 0, &[]);
+        assert!(
+            lines.iter().any(|l| l.text.starts_with("return")),
+            "terminal arm should be cloned: {:?}",
+            lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            !lines.iter().any(|l| l.text.contains("goto LAB_")),
+            "visited terminal arm must not fall back to a goto"
         );
     }
 
