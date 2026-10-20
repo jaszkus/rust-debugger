@@ -104,6 +104,8 @@ pub struct RecoveredVar {
     pub id: u32, pub name: String, pub storage: Loc, pub size: u32,
     pub kind: VarKind, pub ty: VarType, pub first_pc: u64, pub last_pc: u64,
     pub def_count: u32, pub use_count: u32, pub keep: bool,
+    
+    pub norm_off: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -131,6 +133,10 @@ pub struct RecoveredFunction {
     pub locals: Vec<u32>,
     pub local_slots: HashSet<(u8, i64)>,
     pub param_slots: HashSet<(u8, i64)>,
+    
+    pub rbp_delta: i64,
+    
+    pub rsp_at: HashMap<u64, i64>,
 }
 
 impl RecoveredFunction {
@@ -320,6 +326,7 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
             first_pc: s.first_pc, last_pc: s.last_pc,
             def_count: s.writes, use_count: s.reads + s.taken,
             keep,
+            norm_off: noff,
         });
         slot_info.insert(noff, (name, class));
     }
@@ -366,6 +373,7 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
             def_count: if p.synthetic { 0 } else { 1 },
             use_count: p.uses,
             keep: true,
+            norm_off: 0,
         });
     }
     for r in &input_reads {
@@ -391,6 +399,8 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         locals: locals_list,
         local_slots,
         param_slots,
+        rbp_delta: rbp_delta.unwrap_or(0),
+        rsp_at,
     }
 }
 
@@ -407,6 +417,8 @@ fn empty_function(is64: bool) -> RecoveredFunction {
         locals: Vec::new(),
         local_slots: HashSet::default(),
         param_slots: HashSet::default(),
+        rbp_delta: 0,
+        rsp_at: HashMap::default(),
     }
 }
 

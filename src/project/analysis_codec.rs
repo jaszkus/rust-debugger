@@ -301,6 +301,7 @@ pub(crate) fn write_analysis(w: &mut W, a: &AnalysisResult) {
         }
         None => w.u8(0),
     }
+    w.u8(a.is_win64 as u8);
 }
 
 fn write_debug_types(w: &mut W, d: &crate::analysis::symbols::debug_types::DebugTypes) {
@@ -887,6 +888,7 @@ pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, St
     } else {
         None
     };
+    a.is_win64 = db_ver >= 8 && r.u8()? != 0;
 
     a.pe_resources = None;
     a.debug_symbols = None;

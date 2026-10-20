@@ -17,6 +17,8 @@ pub(crate) struct DecompileJob<'a> {
     pub func_lookup: &'a HashMap<u64, String>,
     pub import_lookup: &'a HashMap<u64, String>,
     pub debug_types: Option<&'a Arc<DebugTypes>>,
+    pub is_win64: bool,
+    pub thunk_targets: &'a HashMap<u64, u64>,
     pub cancel: &'a AtomicBool,
     pub is64: bool,
     pub progress_fn: &'a (dyn Fn(&str, usize) + Send + Sync),
@@ -31,6 +33,8 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
         func_lookup,
         import_lookup,
         debug_types,
+        is_win64,
+        thunk_targets,
         cancel,
         is64,
         progress_fn,
@@ -69,6 +73,8 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
                         is64,
                         imports: import_lookup,
                         debug_types,
+                        is_win64,
+                        thunk_targets,
                         cancel: Some(cancel),
                     })
                 }))
@@ -167,6 +173,12 @@ pub fn decompile_snapshot(
         .collect();
     let fname = f.name.clone();
     let is64 = disasm.arch.contains("64");
+    let thunk_targets: HashMap<u64, u64> = analysis
+        .functions
+        .iter()
+        .filter_map(|f| f.thunk_target.map(|t| (f.entry, t)))
+        .collect();
+    let is_win64 = analysis.is_win64;
     let pc = if c.blocks.len() > decompiler::BIG_STACK_BLOCKS {
         let imap_arc = disasm.instructions.clone();
         let debug_types = analysis.debug_types.clone();
@@ -184,6 +196,8 @@ pub fn decompile_snapshot(
                     is64,
                     imports: &import_lookup,
                     debug_types: debug_types.as_ref(),
+                    is_win64,
+                    thunk_targets: &thunk_targets,
                     cancel: None,
                 });
                 (c, sf, pc)
@@ -207,6 +221,8 @@ pub fn decompile_snapshot(
             is64,
             imports: &import_lookup,
             debug_types: analysis.debug_types.as_ref(),
+            is_win64,
+            thunk_targets: &thunk_targets,
             cancel: None,
         });
         (c, sf, pc)

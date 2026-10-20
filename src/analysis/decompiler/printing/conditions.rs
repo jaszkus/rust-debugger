@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::analysis::decompiler::pcode::StackBase;
 use super::{
-    c_type_for_size, fmt_const, mentions_reg, pval_str, resolve_pval, PVal, TypeHints, ABI_ARG_REGS,
+    c_type_for_size, fmt_const, mentions_reg, pval_str, resolve_pval, PVal, TypeHints, ABI_ARG_REGS, WIN64_ARG_REGS,
 };
 use crate::analysis::flow::cfg::CFG;
 use crate::disasm::DisasmInstruction;
@@ -81,10 +81,28 @@ pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
                 visit(i, &mut out);
             }
         }
-        POp::BranchInd { target } | POp::CallInd { target } => visit(target, &mut out),
+        POp::BranchInd { target } => visit(target, &mut out),
+        POp::CallInd { target } => {
+            visit(target, &mut out);
+            for r in ABI_ARG_REGS {
+                out.push(r);
+            }
+            for r in WIN64_ARG_REGS {
+                out.push(r);
+            }
+            for r in ["xmm0", "xmm1", "xmm2", "xmm3"] {
+                out.push(r);
+            }
+        }
         POp::Call { .. } => {
+            for r in ABI_ARG_REGS {
+                out.push(r);
+            }
+            for r in WIN64_ARG_REGS {
+                out.push(r);
+            }
             for r in [
-                "rcx", "rdx", "r8", "r9", "rax", "rsp", "eax", "ecx", "edx", "esp",
+                "rax", "rsp", "eax", "esp", "xmm0", "xmm1", "xmm2", "xmm3",
             ] {
                 out.push(r);
             }
@@ -230,34 +248,32 @@ pub(crate) fn clobber_call(reg_values: &mut HashMap<&'static str, PVal>, is64: b
 pub(crate) fn collect_call_args(
     reg_values: &HashMap<&'static str, PVal>,
     is64: bool,
+    is_win64: bool,
 ) -> Vec<String> {
     let mut args = Vec::new();
     if !is64 {
-        for r in ["rcx", "rdx"] {
-            if let Some(v) = reg_values.get(r) {
-                let s = pval_str(v);
-                if s != *r || matches!(v, PVal::Opaque(_)) {
-                    args.push(s);
-                }
-            }
-        }
         return args;
     }
-    for r in ABI_ARG_REGS {
+    let regs: &[&str] = if is_win64 {
+        &WIN64_ARG_REGS
+    } else {
+        &ABI_ARG_REGS
+    };
+    for r in regs {
         if let Some(v) = reg_values.get(r) {
             let s = pval_str(v);
-            if s != r || matches!(v, PVal::Opaque(_)) {
+            if s != *r || matches!(v, PVal::Opaque(_)) {
                 args.push(s);
             }
         }
     }
-    args.dedup();
     args
 }
 
 pub(crate) fn take_call_args(
     reg_values: &HashMap<&'static str, PVal>,
     is64: bool,
+    is_win64: bool,
     push_args: &mut Vec<PVal>,
 ) -> Vec<String> {
     if !is64 && !push_args.is_empty() {
@@ -266,7 +282,7 @@ pub(crate) fn take_call_args(
         return vals;
     }
     push_args.clear();
-    collect_call_args(reg_values, is64)
+    collect_call_args(reg_values, is64, is_win64)
 }
 
 
@@ -316,37 +332,47 @@ pub(crate) fn fmt_load(
     match addr {
         PVar::StackSlot { base, off } => {
             let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
-            if let Some(h) = hints
-                && let Some(st) = h.stack_structs.iter().find(|s| {
+            if let Some(h) = hints {
+                let pc = h.cur_pc.get();
+                let norm = if b == 1 {
+                    *off + h.rsp_at.get(&pc).copied().unwrap_or(0)
+                } else {
+                    *off + h.rbp_delta
+                };
+                if let Some(st) = h.stack_structs.iter().find(|s| {
                     s.base_reg == b
-                        && *off >= s.base
-                        && *off < s.base.saturating_add(s.size as i64)
-                })
-            {
-                let base_name = h
-                    .var_names
-                    .as_ref()
-                    .and_then(|vn| vn.stack_by_raw.get(&(b, st.base)))
-                    .cloned()
-                    .unwrap_or_else(|| fallback_slot_name(st.base, h));
-                let rel = *off - st.base;
-                if st.is_union
-                    && let Some((_, _fsize, fname)) = st
+                        && norm >= s.base_norm
+                        && norm < s.base_norm.saturating_add(s.size as i64)
+                }) {
+                    let base_name = st
+                        .base_display
+                        .clone()
+                        .or_else(|| {
+                            h.var_names
+                                .as_ref()
+                                .and_then(|vn| vn.stack_by_raw.get(&(b, st.base)))
+                                .cloned()
+                        })
+                        .unwrap_or_else(|| fallback_slot_name(st.base, h));
+                    let rel = norm - st.base_norm;
+                    if st.is_union
+                        && let Some((_, _fsize, fname)) = st
+                            .fields
+                            .iter()
+                            .find(|(o, fs, _)| *o == rel && *fs == size as usize)
+                    {
+                        return format!("{}.{}", base_name, fname);
+                    }
+                    if norm == st.base_norm && size as usize >= st.size {
+                        return base_name;
+                    }
+                    if let Some((_, _fsize, fname)) = st
                         .fields
                         .iter()
                         .find(|(o, fs, _)| *o == rel && *fs == size as usize)
-                {
-                    return format!("{}.{}", base_name, fname);
-                }
-                if *off == st.base && size as usize >= st.size {
-                    return base_name;
-                }
-                if let Some((_, _fsize, fname)) = st
-                    .fields
-                    .iter()
-                    .find(|(o, fs, _)| *o == rel && *fs == size as usize)
-                {
-                    return format!("{}.{}", base_name, fname);
+                    {
+                        return format!("{}.{}", base_name, fname);
+                    }
                 }
             }
             let name = if let Some(h) = hints {

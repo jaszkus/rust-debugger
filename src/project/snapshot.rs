@@ -189,7 +189,7 @@ pub fn save_project_db(program: &ProgramData, path: &str) -> Result<(), String> 
 
 
 
-pub const ANALYSIS_STAMP: &str = concat!(env!("CARGO_PKG_VERSION"), "/analysis-2026-10-dwarf-locals");
+pub const ANALYSIS_STAMP: &str = concat!(env!("CARGO_PKG_VERSION"), "/analysis-2026-10-call-abi");
 
 fn stamp_path(db: &str) -> String {
     format!("{db}.stamp")

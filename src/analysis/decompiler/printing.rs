@@ -6,7 +6,9 @@ use super::expr;
 use super::*;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-pub(crate) const ABI_ARG_REGS: [&str; 6] = ["rcx", "rdx", "r8", "r9", "rdi", "rsi"];
+pub(crate) const WIN64_ARG_REGS: [&str; 4] = ["rcx", "rdx", "r8", "r9"];
+pub(crate) const SYSV_ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+pub(crate) const ABI_ARG_REGS: [&str; 6] = SYSV_ARG_REGS;
 
 #[derive(Debug, Clone)]
 pub(crate) enum PVal {
@@ -104,6 +106,9 @@ impl StructHint {
 pub(crate) struct StackStructHint {
     pub(crate) base_reg: u8,
     pub(crate) base: i64,
+    
+    pub(crate) base_norm: i64,
+    pub(crate) base_display: Option<String>,
     pub(crate) size: usize,
     pub(crate) is_union: bool,
     
@@ -112,6 +117,9 @@ pub(crate) struct StackStructHint {
 
 #[derive(Default)]
 pub(crate) struct TypeHints {
+    pub(crate) is_win64: bool,
+    pub(crate) thunk_targets: HashMap<u64, u64>,
+    pub(crate) callee_params: HashMap<u64, usize>,
     pub(crate) floats: HashSet<String>,
     pub(crate) float_slots: HashSet<i64>,
     pub(crate) spill_slots: HashSet<i64>,
@@ -122,6 +130,8 @@ pub(crate) struct TypeHints {
     pub(crate) value_structs: HashMap<String, StructHint>,
     pub(crate) stack_structs: Vec<StackStructHint>,
     pub(crate) local_types: HashMap<String, String>,
+    pub(crate) rbp_delta: i64,
+    pub(crate) rsp_at: HashMap<u64, i64>,
     pub(crate) hidden_locals: HashSet<String>,
     pub(crate) last_cmp: std::cell::RefCell<Option<(String, String, bool)>>,
     pub(crate) out_bytes: std::cell::Cell<usize>,
@@ -322,11 +332,16 @@ pub(crate) fn render_op(
             ))
         }
         POp::Call { target } => {
+            let real_target = hints.thunk_targets.get(target).copied().unwrap_or(*target);
             let name = func_lookup
-                .get(target)
+                .get(&real_target)
+                .or_else(|| func_lookup.get(target))
                 .cloned()
-                .unwrap_or_else(|| format!("FUN_{:X}", target));
-            let args = take_call_args(reg_values, is64, push_args);
+                .unwrap_or_else(|| format!("FUN_{:X}", real_target));
+            let mut args = take_call_args(reg_values, is64, hints.is_win64, push_args);
+            if let Some(&n) = hints.callee_params.get(&real_target) {
+                args.truncate(n);
+            }
             let line = if args.is_empty() {
                 format!("{}();", name)
             } else {
@@ -336,7 +351,7 @@ pub(crate) fn render_op(
             Some((line, LineKind::Call))
         }
         POp::CallInd { target } => {
-            let args = take_call_args(reg_values, is64, push_args);
+            let args = take_call_args(reg_values, is64, hints.is_win64, push_args);
             let import_name = match target {
                 PVar::Addr(a) => hints.imports.get(a).cloned(),
                 _ => None,
@@ -512,7 +527,7 @@ pub(crate) fn render_op(
             }
         }
         POp::CallOther { name } => {
-            let args = take_call_args(reg_values, is64, push_args);
+            let args = take_call_args(reg_values, is64, hints.is_win64, push_args);
             let line = if args.is_empty() {
                 format!("{}();  // trap/syscall", name)
             } else {

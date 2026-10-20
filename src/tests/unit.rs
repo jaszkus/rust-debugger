@@ -372,6 +372,8 @@ fn decompiler_folds_constants_and_dce() {
         func_name: "test",
         func_lookup: &lookup,
         is64: true,
+        is_win64: false,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
         debug_types: None,
@@ -692,6 +694,8 @@ fn decompiler_x86_renders_32bit_names_and_absolute_mem() {
         func_name: "t",
         func_lookup: &lookup,
         is64: false,
+        is_win64: false,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
         debug_types: None,
@@ -751,6 +755,8 @@ fn sse_instructions_lift_without_unimplemented() {
         func_name: "t",
         func_lookup: &lookup,
         is64: false,
+        is_win64: false,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
         cancel: None,
         debug_types: None,
@@ -996,6 +1002,8 @@ fn decompiler_renders_iat_calls_with_import_names() {
         func_name: "t",
         func_lookup: &lookup,
         is64: true,
+        is_win64: false,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &imports,
         cancel: None,
         debug_types: None,
@@ -1603,6 +1611,26 @@ fn debug_types_reach_eager_decompilation() {
     assert!(text.contains("Node * n"), "signature:\n{}", text);
     assert!(text.contains("n->id"), "member access:\n{}", text);
     assert!(text.contains("p.x"), "struct-by-value field:\n{}", text);
+
+    let main = result
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function");
+    let main_text = result
+        .pseudocode
+        .get(&main.entry)
+        .expect("main was eagerly decompiled")
+        .lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        main_text.contains("compute((rsp") && main_text.contains(", rax, 0xff)"),
+        "Win64 call arguments:\n{}",
+        main_text
+    );
 }
 
 #[test]
@@ -1658,6 +1686,11 @@ fn dwarf_debug_types_reach_eager_decompilation() {
         .join("\n");
     assert!(add_text.contains("a.x"), "Point a field:\n{}", add_text);
     assert!(add_text.contains("b.y"), "Point b field:\n{}", add_text);
+    assert!(
+        text.contains("add_points(n->pos, rax)"),
+        "two SysV call arguments:\n{}",
+        text
+    );
 
     let main = result
         .functions
@@ -1677,6 +1710,86 @@ fn dwarf_debug_types_reach_eager_decompilation() {
     assert!(main_text.contains("Color c;"), "Color local:\n{}", main_text);
     assert!(main_text.contains("n.pos.x = 1"), "nested field x:\n{}", main_text);
     assert!(main_text.contains("n.pos.y = 2"), "nested field y:\n{}", main_text);
+    assert!(
+        main_text.contains("compute((rbp - 0x20))"),
+        "SysV call argument:\n{}",
+        main_text
+    );
+}
+
+#[test]
+fn pdb_regrel_types_and_locals_are_extracted() {
+    if !fixture("pdb_locals_sample.exe").exists()
+        || !fixture("pdb_locals_sample.pdb").exists()
+    {
+        eprintln!("skipped: pdb_locals_sample fixtures not present");
+        return;
+    }
+    let bin = crate::parser::parse_file(&fixture("pdb_locals_sample.exe")).expect("parse exe");
+    let path = fixture("pdb_locals_sample.exe");
+    let types = crate::analysis::symbols::debug_types::DebugTypes::load(&bin, path.to_str())
+        .expect("PDB debug types");
+
+    let add = types
+        .functions
+        .values()
+        .find(|f| f.name == "add_points")
+        .expect("add_points signature");
+    assert_eq!(add.params[0].name, "a");
+    assert_eq!(add.params[1].name, "b");
+    assert!(add.locals.iter().any(|l| l.name == "sum" && l.type_name == "int32_t"));
+
+    let main = types
+        .functions
+        .values()
+        .find(|f| f.name == "main")
+        .expect("main signature");
+    assert!(main.locals.iter().any(|l| l.name == "n" && l.struct_name.as_deref() == Some("Node")));
+    assert!(main.locals.iter().any(|l| l.name == "p" && l.struct_name.as_deref() == Some("Point")));
+    assert!(main.locals.iter().any(|l| l.name == "result"));
+}
+
+#[test]
+fn pdb_regrel_locals_reach_eager_decompilation() {
+    if !fixture("pdb_locals_sample.exe").exists()
+        || !fixture("pdb_locals_sample.pdb").exists()
+    {
+        eprintln!("skipped: pdb_locals_sample fixtures not present");
+        return;
+    }
+    let path = fixture("pdb_locals_sample.exe");
+    let bin = crate::parser::parse_file(&path).expect("parse exe");
+    let disasm = crate::disasm::disassemble_binary(&bin).expect("disasm");
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let fid = crate::analysis::function_id::FunctionIDMatcher::new();
+    let result = crate::analysis::auto_analyze_with_source(
+        &disasm,
+        &bin,
+        path.to_str(),
+        &rustc_hash::FxHashMap::default(),
+        &fid,
+        &never,
+        &|_, _, _, _| {},
+    );
+    let main = result
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function");
+    let text = result
+        .pseudocode
+        .get(&main.entry)
+        .expect("main was eagerly decompiled")
+        .lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Node n;"), "Node local:\n{}", text);
+    assert!(text.contains("Point p;"), "Point local:\n{}", text);
+    assert!(text.contains("int32_t result;"), "result local:\n{}", text);
+    assert!(text.contains("n.id = 5"), "Node field write:\n{}", text);
+    assert!(text.contains("add_points(p, p)"), "two arguments:\n{}", text);
 }
 
 #[test]

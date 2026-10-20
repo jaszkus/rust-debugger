@@ -45,6 +45,7 @@ pub struct AnalysisResult {
     pub function_signatures: HashMap<u64, function_id::FunctionSignature>,
     pub reconstructed_types: HashMap<u64, type_reconstruction::ReconstructedType>,
     pub debug_types: Option<Arc<DebugTypes>>,
+    pub is_win64: bool,
 }
 
 pub type ProgressFn<'a> = &'a (dyn Fn(&str, &str, usize, usize) + Send + Sync);
@@ -247,6 +248,7 @@ fn auto_analyze_inner(
     debug_types: Option<DebugTypes>,
 ) -> AnalysisResult {
     let debug_types = debug_types.map(Arc::new);
+    let is_win64 = binary.format.starts_with("PE") || binary.format == "COFF";
     let total_phases = TOTAL_PHASES;
     let stopped = || cancel.load(Ordering::Relaxed);
 
@@ -759,10 +761,19 @@ fn auto_analyze_inner(
         return AnalysisResult::default();
     }
 
-    let func_lookup: HashMap<u64, String> = functions
+    let mut func_lookup: HashMap<u64, String> = functions
         .iter()
         .map(|f| (f.entry, f.name.clone()))
         .collect();
+    let thunk_targets: HashMap<u64, u64> = functions
+        .iter()
+        .filter_map(|f| f.thunk_target.map(|t| (f.entry, t)))
+        .collect();
+    for (&from, &to) in &thunk_targets {
+        if let Some(name) = func_lookup.get(&to).cloned() {
+            func_lookup.insert(from, name);
+        }
+    }
 
     let import_lookup: HashMap<u64, String> = binary
         .all_imports()
@@ -800,7 +811,9 @@ fn auto_analyze_inner(
         import_lookup: &import_lookup,
         cancel,
         is64: disasm.arch.contains("64"),
+        is_win64,
         debug_types: debug_types.as_ref(),
+        thunk_targets: &thunk_targets,
         progress_fn: &|name, i| {
             if i % 8 == 0 {
                 progress(
@@ -1052,6 +1065,7 @@ fn auto_analyze_inner(
         function_signatures,
         reconstructed_types,
         debug_types,
+        is_win64,
     }
 }
 

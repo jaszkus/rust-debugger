@@ -6,6 +6,7 @@ use super::structure::{
 use super::*;
 use super::alias;
 use crate::analysis::flow::cfg::CFG;
+use crate::analysis::operands::canonical_reg;
 use crate::analysis::symbols::debug_types::{DebugBase, DebugStruct, DebugTypes};
 use super::pcode::StackBase;
 use crate::analysis::flow::stack::StackFrame;
@@ -30,6 +31,8 @@ pub struct LiftInput<'a> {
     pub func_name: &'a str,
     pub func_lookup: &'a HashMap<u64, String>,
     pub is64: bool,
+    pub is_win64: bool,
+    pub thunk_targets: &'a HashMap<u64, u64>,
     pub imports: &'a HashMap<u64, String>,
     pub debug_types: Option<&'a std::sync::Arc<DebugTypes>>,
     pub cancel: Option<&'a AtomicBool>,
@@ -369,6 +372,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         func_name,
         func_lookup,
         is64,
+        is_win64,
+        thunk_targets,
         imports,
         debug_types,
         cancel,
@@ -410,19 +415,22 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut recovery = recovery;
     let debug = debug_types.map(|a| a.as_ref());
     let debug_sig = debug.and_then(|d| d.function(cfg.func_entry));
-    if std::env::var("RD_DEBUG_STACK").is_ok()
-        && let Some(rv) = recovery.as_ref()
-    {
-        for v in &rv.vars {
-            if let variables::Loc::Stack { base, off } = v.storage {
-                eprintln!(
-                    "[stack] {} base={} off={:#x} size={} kind={:?}",
-                    v.name, base, off, v.size, v.kind
-                );
-            }
+    let mut callee_params: HashMap<u64, usize> = debug
+        .map(|d| {
+            d.functions
+                .iter()
+                .map(|(&addr, f)| (addr, f.params.len()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (&from, &to) in thunk_targets {
+        if let Some(&n) = callee_params.get(&to) {
+            callee_params.insert(from, n);
         }
     }
-
+    let param_names: HashSet<String> = debug_sig
+        .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
+        .unwrap_or_default();
     
     
     
@@ -609,9 +617,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         let mut seen: HashSet<(u8, i64)> = HashSet::default();
         for (base, off, shape) in &direct_stack_params {
             if seen.insert((*base, *off)) {
+                let base_norm = if *base == 0 {
+                    *off + rv.rbp_delta
+                } else {
+                    *off
+                };
                 stack_structs.push(StackStructHint {
                     base_reg: *base,
                     base: *off,
+                    base_norm,
+                    base_display: None,
                     size: shape.size,
                     is_union: shape.is_union,
                     fields: shape.fields.clone(),
@@ -636,9 +651,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     if let Some(shape) = by_value_by_reg.get(*reg)
                         && seen.insert((b, *off))
                     {
+                        let base_norm = if b == 0 {
+                            *off + rv.rbp_delta
+                        } else {
+                            *off + rv.rsp_at.get(&pi.address).copied().unwrap_or(0)
+                        };
                         stack_structs.push(StackStructHint {
                             base_reg: b,
                             base: *off,
+                            base_norm,
+                            base_display: None,
                             size: shape.size,
                             is_union: shape.is_union,
                             fields: shape.fields.clone(),
@@ -662,29 +684,61 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .vars
             .iter()
             .any(|v| matches!(v.storage, variables::Loc::Stack { base: 0, .. }));
-        let cfa_to_rbp = if is64 { 16 } else { 8 };
-        let cfa_to_rsp = stack.frame_size.max(0) + if is64 { 8 } else { 4 };
+        let ptr = if is64 { 8 } else { 4 };
+        
+        
+        let rsp_body = rv.rsp_at.values().copied().min().unwrap_or(0);
         for local in &sig.locals {
-            let (b, raw_off) = match local.base {
+            let target_norm = match local.base {
                 DebugBase::Cfa => {
                     if uses_rbp {
-                        (0u8, local.offset + cfa_to_rbp)
+                        rv.rbp_delta + 2 * ptr + local.offset
                     } else {
-                        (1u8, local.offset + cfa_to_rsp)
+                        ptr + local.offset
                     }
                 }
-                DebugBase::Rbp => (0u8, local.offset),
-                DebugBase::Rsp => (1u8, local.offset),
+                DebugBase::Rbp => rv.rbp_delta + local.offset,
+                DebugBase::Rsp => rsp_body + local.offset,
             };
             let Some(v) = rv.vars.iter().find(|v| {
-                matches!(
-                    v.storage,
-                    variables::Loc::Stack { base, off } if base == b && off == raw_off
-                )
+                matches!(v.storage, variables::Loc::Stack { .. }) && v.norm_off == target_norm
             }) else {
                 continue;
             };
+            let (b, raw_off) = match v.storage {
+                variables::Loc::Stack { base, off } => (base, off),
+                _ => continue,
+            };
             let old_name = v.name.clone();
+            let is_param_spill = sig.params.iter().any(|p| p.name == local.name);
+            if is_param_spill {
+                hidden_locals.insert(old_name.clone());
+                if let Some(sname) = local.struct_name.as_deref()
+                    && let Some(ds) = dbg.struct_named(sname)
+                {
+                    let flat = flattened_struct_fields(dbg, ds);
+                    if local.type_name.trim_end().ends_with('*') {
+                        value_structs.insert(
+                            old_name.clone(),
+                            StructHint {
+                                fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
+                                owner: Some(local.name.clone()),
+                            },
+                        );
+                    } else {
+                        stack_structs.push(StackStructHint {
+                            base_reg: b,
+                            base: raw_off,
+                            base_norm: target_norm,
+                            base_display: Some(local.name.clone()),
+                            size: local.size,
+                            is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
+                            fields: flat,
+                        });
+                    }
+                }
+                continue;
+            }
             let mut new_name = sanitize_param_name(&local.name, &old_name);
             if new_name != old_name {
                 let base = new_name.clone();
@@ -713,16 +767,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     stack_structs.push(StackStructHint {
                         base_reg: b,
                         base: raw_off,
+                        base_norm: target_norm,
+                        base_display: None,
                         size: local.size,
                         is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
                         fields: flat,
                     });
                     for other in &rv.vars {
                         if other.name != old_name
-                            && let variables::Loc::Stack { base: ob, off: oo } = other.storage
-                            && ob == b
-                            && oo >= raw_off
-                            && oo < raw_off.saturating_add(local.size as i64)
+                            && other.norm_off >= target_norm
+                            && other.norm_off < target_norm.saturating_add(local.size as i64)
                         {
                             hidden_locals.insert(other.name.clone());
                         }
@@ -748,10 +802,15 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .map(|r| r.param_slots.iter().map(|(_, off)| *off).collect())
             .unwrap_or_default(),
         imports: imports.clone(),
+        is_win64,
+        thunk_targets: thunk_targets.clone(),
+        callee_params,
         structs,
         value_structs,
         stack_structs,
         local_types,
+        rbp_delta: recovery.as_ref().map(|r| r.rbp_delta).unwrap_or(0),
+        rsp_at: recovery.as_ref().map(|r| r.rsp_at.clone()).unwrap_or_default(),
         hidden_locals,
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
@@ -1074,6 +1133,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     alias::inline_single_use_temps(&mut lines);
     alias::propagate_aliases(&mut lines);
     squash_empty_branches(&mut lines);
+    drop_call_arg_setups(&mut lines);
+    drop_hidden_local_spills(&mut lines, &hints.hidden_locals, &param_names);
 
     if hints.out_truncated.get() {
         stats.truncated = true;
@@ -1225,6 +1286,58 @@ fn rename_identifiers(text: &str, map: &HashMap<String, String>) -> String {
         }
     }
     out
+}
+
+fn drop_hidden_local_spills(
+    lines: &mut Vec<PseudoLine>,
+    hidden: &HashSet<String>,
+    params: &HashSet<String>,
+) {
+    if hidden.is_empty() || params.is_empty() {
+        return;
+    }
+    lines.retain(|line| {
+        let t = line.text.split("//").next().unwrap_or("").trim();
+        let Some((lhs, rhs)) = t.split_once(" = ") else {
+            return true;
+        };
+        if !hidden.contains(lhs.trim()) {
+            return true;
+        }
+        !params.contains(rhs.trim())
+    });
+}
+
+fn drop_call_arg_setups(lines: &mut Vec<PseudoLine>) {
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].kind != LineKind::Call {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j > 0 {
+            j -= 1;
+            let t = lines[j].text.trim();
+            if t.is_empty() || t.starts_with("//") {
+                continue;
+            }
+            let Some((lhs, _)) = t
+                .split_once(" = ")
+                .map(|(l, r)| (l.trim(), r.trim()))
+            else {
+                break;
+            };
+            let reg = canonical_reg(lhs);
+            if ABI_ARG_REGS.contains(&reg) || WIN64_ARG_REGS.contains(&reg) {
+                lines.remove(j);
+                i = i.saturating_sub(1);
+                continue;
+            }
+            break;
+        }
+        i += 1;
+    }
 }
 
 fn entry_block(cfg: &CFG) -> usize {

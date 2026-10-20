@@ -652,8 +652,12 @@ fn walk_region(
             && let POp::Branch { target } = &**last_op
         {
             let target = *target;
-            let args = take_call_args(&reg_values, is64, &mut push_args);
-            let (text, kind) = match func_lookup.get(&target) {
+            let real_target = hints.thunk_targets.get(&target).copied().unwrap_or(target);
+            let mut args = take_call_args(&reg_values, is64, hints.is_win64, &mut push_args);
+            if let Some(&n) = hints.callee_params.get(&real_target) {
+                args.truncate(n);
+            }
+            let (text, kind) = match func_lookup.get(&real_target) {
                 Some(name) if args.is_empty() => (
                     format!("return {}();  // tail call", name),
                     LineKind::Return,
@@ -1274,8 +1278,6 @@ pub(crate) fn retarget_goto_chains(lines: &mut [PseudoLine]) {
         line.text = format!("goto {};", target);
     }
 }
-
-
 
 fn terminal_return_body(
     lines: &[PseudoLine],

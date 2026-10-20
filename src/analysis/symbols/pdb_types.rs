@@ -449,6 +449,7 @@ fn load_pdb_debug_types(
                             let va = symbols[i].0;
                             let name = reg_rel.name.to_string().into_owned();
                             if !name.is_empty() {
+                                symbols[i].3.push(name.clone());
                                 local_specs.push((
                                     va,
                                     name,
@@ -785,8 +786,8 @@ fn resolve_c(
 
 fn pdb_register_base(register: u16) -> Option<DebugBase> {
     match register {
-        0x16 | 0x116 => Some(DebugBase::Rbp),
-        0x15 | 0x115 => Some(DebugBase::Rsp),
+        0x16 | 0x116 | 334 => Some(DebugBase::Rbp),
+        0x15 | 0x115 | 335 => Some(DebugBase::Rsp),
         _ => None,
     }
 }
