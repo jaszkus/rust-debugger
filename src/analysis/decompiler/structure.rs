@@ -66,6 +66,24 @@ impl Postdom {
         let j = *self.ipdom.get(block)?;
         (j < self.exit).then_some(j)
     }
+
+    
+    pub(crate) fn reaches_exit(&self, block: usize) -> bool {
+        let mut cur = block;
+        for _ in 0..=self.ipdom.len() {
+            if cur == self.exit {
+                return true;
+            }
+            let Some(&next) = self.ipdom.get(cur) else {
+                return false;
+            };
+            if next == cur {
+                return next == self.exit;
+            }
+            cur = next;
+        }
+        false
+    }
 }
 
 
@@ -353,6 +371,97 @@ pub(crate) struct WalkCtx<'a> {
     pub(crate) loops: &'a Loops,
     pub(crate) is64: bool,
     pub(crate) hints: &'a TypeHints,
+    
+    
+    pub(crate) clone: bool,
+    
+    pub(crate) clone_depth: u8,
+}
+
+
+
+
+
+
+
+fn clone_terminal_region(
+    ctx: &WalkCtx<'_>,
+    target: usize,
+    visited: &HashSet<usize>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) -> Option<Vec<PseudoLine>> {
+    if ctx.clone_depth >= 2
+        || target >= ctx.cfg.blocks.len()
+        || !ctx.postdom.reaches_exit(target)
+        || ctx.loops.get(target).is_some()
+        || !ctx.loops.enclosing(target).is_empty()
+    {
+        return None;
+    }
+    let mut region: HashSet<usize> = HashSet::default();
+    let mut queue = vec![target];
+    while let Some(b) = queue.pop() {
+        if !region.insert(b) {
+            continue;
+        }
+        if region.len() > 8 {
+            return None;
+        }
+        for edge in &ctx.cfg.blocks[b].successors {
+            let t = edge.target;
+            if t >= ctx.cfg.blocks.len()
+                || ctx.loops.get(t).is_some()
+                || !ctx.loops.enclosing(t).is_empty()
+            {
+                return None;
+            }
+            if t <= b {
+                return None;
+            }
+            queue.push(t);
+        }
+    }
+    let mut cv = visited.clone();
+    for b in &region {
+        cv.remove(b);
+    }
+    let bytes_before = ctx.hints.out_bytes.get();
+    let clone_ctx = WalkCtx {
+        clone: true,
+        clone_depth: ctx.clone_depth + 1,
+        ..*ctx
+    };
+    let mut out = Vec::new();
+    walk_region(&clone_ctx, target, &mut cv, &mut out, indent, depth + 1, stops);
+    let text = out.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+    let mut balance = 0i32;
+    for ch in text.chars() {
+        match ch {
+            '{' => balance += 1,
+            '}' => balance -= 1,
+            _ => {}
+        }
+        if balance < 0 {
+            ctx.hints.out_bytes.set(bytes_before);
+            return None;
+        }
+    }
+    if out.is_empty()
+        || out.len() > 60
+        || balance != 0
+        || text.contains("LAB_")
+        || text.contains("goto ")
+        || text.contains("break;")
+        || text.contains("continue;")
+        || text.contains("WARNING")
+        || text.contains("truncated")
+    {
+        ctx.hints.out_bytes.set(bytes_before);
+        return None;
+    }
+    Some(out)
 }
 
 pub(crate) fn walk_block(
@@ -392,6 +501,7 @@ fn walk_region(
         loops,
         is64,
         hints,
+        ..
     } = *ctx;
     if depth > 5_000 {
         return;
@@ -456,7 +566,9 @@ fn walk_region(
             });
             loop_body_entry = info.body_entry(cfg);
         }
-    } else if block.predecessors.len() > 1 || (block_id != 0 && block.predecessors.is_empty()) {
+    } else if !ctx.clone
+        && (block.predecessors.len() > 1 || (block_id != 0 && block.predecessors.is_empty()))
+    {
         lines.push(PseudoLine {
             indent: 0,
             text: format!("LAB_{:X}:", block.start),
@@ -704,6 +816,10 @@ fn walk_region(
                             depth + 1,
                             stops,
                         );
+                    } else if let Some(cloned) =
+                        clone_terminal_region(ctx, edge.target, visited, indent, depth, stops)
+                    {
+                        lines.extend(cloned);
                     } else {
                         lines.push(PseudoLine {
                             indent,
@@ -832,6 +948,10 @@ fn walk_region(
                     });
                     if !visited.contains(&t.target) {
                         walk_region(ctx, t.target, visited, lines, indent + 1, depth + 1, stops);
+                    } else if let Some(cloned) =
+                        clone_terminal_region(ctx, t.target, visited, indent + 1, depth, stops)
+                    {
+                        lines.extend(cloned);
                     } else {
                         lines.push(PseudoLine {
                             indent: indent + 1,
@@ -858,6 +978,10 @@ fn walk_region(
                     });
                     if !visited.contains(&f.target) {
                         walk_region(ctx, f.target, visited, lines, indent + 1, depth + 1, stops);
+                    } else if let Some(cloned) =
+                        clone_terminal_region(ctx, f.target, visited, indent + 1, depth, stops)
+                    {
+                        lines.extend(cloned);
                     } else {
                         lines.push(PseudoLine {
                             indent: indent + 1,
@@ -983,6 +1107,10 @@ fn walk_region(
             });
             if !visited.contains(&t.target) {
                 walk_region(ctx, t.target, visited, lines, indent + 1, depth + 1, stops);
+            } else if let Some(cloned) =
+                clone_terminal_region(ctx, t.target, visited, indent + 1, depth, stops)
+            {
+                lines.extend(cloned);
             } else {
                 lines.push(PseudoLine {
                     indent: indent + 1,
@@ -999,6 +1127,10 @@ fn walk_region(
             });
             if !visited.contains(&f.target) {
                 walk_region(ctx, f.target, visited, lines, indent + 1, depth + 1, stops);
+            } else if let Some(cloned) =
+                clone_terminal_region(ctx, f.target, visited, indent + 1, depth, stops)
+            {
+                lines.extend(cloned);
             } else {
                 lines.push(PseudoLine {
                     indent: indent + 1,
@@ -1768,5 +1900,36 @@ mod cleanup_tests {
             lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
             vec!["// WARNING: missing branch", "y = 2;"]
         );
+    }
+
+    #[test]
+    fn postdom_reaches_exit_for_terminal_regions() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        let blk = |id: usize, succ: Vec<usize>| BasicBlock {
+            id,
+            start: 0x1000 + id as u64 * 0x10,
+            end: 0x1000 + id as u64 * 0x10 + 0x10,
+            instr_indices: id..id + 1,
+            successors: succ
+                .into_iter()
+                .map(|target| Edge { target, kind: EdgeKind::Jump })
+                .collect(),
+            predecessors: vec![],
+        };
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks: vec![
+                blk(0, vec![1, 2]),
+                blk(1, vec![3]),
+                blk(2, vec![3]),
+                blk(3, vec![]),
+            ],
+            block_at: Default::default(),
+        };
+        let pd = Postdom::compute(&cfg);
+        assert!(pd.reaches_exit(0));
+        assert!(pd.reaches_exit(1));
+        assert!(pd.reaches_exit(3));
+        assert_eq!(pd.join_of(0), Some(3));
     }
 }

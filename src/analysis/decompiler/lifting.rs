@@ -1093,6 +1093,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         loops: &loops,
         is64,
         hints: &hints,
+        clone: false,
+        clone_depth: 0,
     };
     walk_block(&ctx, entry_id, &mut visited, &mut lines, 1, 0);
     stats.t_structure = t_phase.elapsed();
