@@ -1282,4 +1282,31 @@ mod tests {
         assert!(noreturn.contains(&1) && noreturn.contains(&2));
         assert!(!propagate_noreturn(&edges, &mut noreturn), "second run is a no-op");
     }
+
+    #[test]
+    fn noreturn_requires_every_distinct_tail_target_to_be_noreturn() {
+        let mut noreturn: HashSet<u64> = HashSet::default();
+        noreturn.insert(10);
+        noreturn.insert(20);
+        
+        
+        let edges = [(1, 10), (1, 20), (1, 20), (2, 10), (2, 99), (3, 10)];
+        assert!(propagate_noreturn(&edges, &mut noreturn));
+        assert!(noreturn.contains(&1));
+        assert!(noreturn.contains(&3));
+        assert!(!noreturn.contains(&2));
+    }
+
+    #[test]
+    fn noreturn_is_not_inferred_from_a_returning_or_empty_target_set() {
+        let mut noreturn: HashSet<u64> = HashSet::default();
+        noreturn.insert(10);
+        let edges = [(1, 10), (1, 11)];
+        assert!(!propagate_noreturn(&edges, &mut noreturn));
+        assert!(!noreturn.contains(&1));
+
+        let mut empty_targets: HashSet<u64> = HashSet::default();
+        assert!(!propagate_noreturn(&[], &mut empty_targets));
+        assert!(empty_targets.is_empty());
+    }
 }
