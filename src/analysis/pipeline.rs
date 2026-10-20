@@ -27,6 +27,7 @@ const TOTAL_PHASES: usize = 13;
 const MAX_EAGER_BLOCKS: usize = 200;
 const DEFAULT_EAGER_DECOMPILE_CAP: usize = 1_500;
 const ALIGNED_START_ALIGNMENT: u64 = 16;
+const MAX_DATA_POINTER_CANDIDATES: usize = 8192;
 
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisResult {
@@ -70,10 +71,22 @@ impl FuncRanges {
         Self { ranges, max_end }
     }
 
+    
+    
+    
     fn find(&self, addr: u64) -> Option<(u64, u64)> {
-        let idx = self.ranges.partition_point(|&(start, _)| start <= addr);
-        let (start, end) = *self.ranges.get(idx.checked_sub(1)?)?;
-        (addr < end).then_some((start, end))
+        let mut i = self.ranges.partition_point(|&(start, _)| start <= addr);
+        while i > 0 {
+            i -= 1;
+            if self.max_end[i] <= addr {
+                return None;
+            }
+            let (start, end) = self.ranges[i];
+            if addr < end {
+                return Some((start, end));
+            }
+        }
+        None
     }
 
     fn strictly_inside_any(&self, addr: u64) -> bool {
@@ -95,20 +108,75 @@ fn new_discovered_function(entry: u64, end: u64, name: String) -> DetectedFuncti
     }
 }
 
+
+fn exec_section_end(binary: &ParsedBinary, addr: u64) -> Option<u64> {
+    binary
+        .sections
+        .iter()
+        .filter(|s| s.is_executable && s.size > 0)
+        .find(|s| addr >= s.vaddr && addr - s.vaddr < s.size)
+        .map(|s| s.vaddr.saturating_add(s.size))
+}
+
+
+
+
+fn function_end(binary: &ParsedBinary, sorted_starts: &[u64], addr: u64, min_end: u64) -> u64 {
+    let next = sorted_starts
+        .get(sorted_starts.partition_point(|&s| s <= addr))
+        .copied();
+    let end = match (next, exec_section_end(binary, addr)) {
+        (Some(n), Some(s)) => n.min(s),
+        (Some(n), None) => n,
+        (None, Some(s)) => s,
+        (None, None) => min_end,
+    };
+    end.max(min_end)
+}
+
+
+
+
+
 fn propagate_noreturn(edges: &[(u64, u64)], noreturn: &mut HashSet<u64>) -> bool {
+    if edges.is_empty() || noreturn.is_empty() {
+        return false;
+    }
+    let mut uniq: Vec<(u64, u64)> = edges.to_vec();
+    uniq.sort_unstable();
+    uniq.dedup();
+    let mut remaining: HashMap<u64, usize> = HashMap::default();
+    let mut preds: HashMap<u64, Vec<u64>> = HashMap::default();
+    for &(src, dst) in &uniq {
+        *remaining.entry(src).or_insert(0) += 1;
+        preds.entry(dst).or_default().push(src);
+    }
+    let mut work: Vec<u64> = noreturn
+        .iter()
+        .copied()
+        .filter(|n| preds.contains_key(n))
+        .collect();
     let mut changed = false;
-    loop {
-        let mut grew = false;
-        for &(src, dst) in edges {
-            if noreturn.contains(&dst) && noreturn.insert(src) {
-                grew = true;
+    while let Some(dst) = work.pop() {
+        let Some(srcs) = preds.get(&dst) else {
+            continue;
+        };
+        for &src in srcs {
+            if noreturn.contains(&src) {
+                continue;
+            }
+            let Some(left) = remaining.get_mut(&src) else {
+                continue;
+            };
+            *left -= 1;
+            if *left == 0 {
+                noreturn.insert(src);
+                changed = true;
+                work.push(src);
             }
         }
-        if !grew {
-            return changed;
-        }
-        changed = true;
     }
+    changed
 }
 
 fn add_missed_import_thunks(
@@ -155,7 +223,11 @@ fn add_missed_import_thunks(
     }));
 }
 
-fn add_aligned_function_starts(functions: &mut Vec<DetectedFunction>, disasm: &DisasmResult) {
+fn add_aligned_function_starts(
+    functions: &mut Vec<DetectedFunction>,
+    disasm: &DisasmResult,
+    binary: &ParsedBinary,
+) {
     let existing: HashSet<u64> = functions.iter().map(|f| f.entry).collect();
     let covered = FuncRanges::new(functions);
     let new_entries: Vec<(u64, u64)> = disasm
@@ -168,10 +240,20 @@ fn add_aligned_function_starts(functions: &mut Vec<DetectedFunction>, disasm: &D
         })
         .map(|ins| (ins.address, ins.bytes.len() as u64))
         .collect();
+    if new_entries.is_empty() {
+        return;
+    }
+    
+    
+    let mut starts: Vec<u64> = existing.into_iter().collect();
+    starts.extend(new_entries.iter().map(|&(addr, _)| addr));
+    starts.sort_unstable();
+    starts.dedup();
     functions.extend(new_entries.into_iter().map(|(addr, size)| {
+        let min_end = addr.saturating_add(size.max(1));
         new_discovered_function(
             addr,
-            addr.saturating_add(size.max(1)),
+            function_end(binary, &starts, addr, min_end),
             format!("sub_{:X}", addr),
         )
     }));
@@ -288,26 +370,23 @@ fn auto_analyze_inner(
     );
 
     add_missed_import_thunks(&mut functions, disasm, binary);
-    add_aligned_function_starts(&mut functions, disasm);
+    add_aligned_function_starts(&mut functions, disasm, binary);
 
     
     
     
     
     {
-        let candidates =
-            function::scan_data_pointer_candidates(binary, &disasm.instructions, 8192);
+        let candidates = function::scan_data_pointer_candidates(
+            binary,
+            &disasm.instructions,
+            MAX_DATA_POINTER_CANDIDATES,
+        );
         if !candidates.is_empty() {
-            let mut ranges: Vec<(u64, u64)> =
-                functions.iter().map(|f| (f.entry, f.end)).collect();
-            ranges.sort_unstable();
-            let covered = |a: u64| -> bool {
-                let i = ranges.partition_point(|&(s, _)| s <= a);
-                i > 0 && a < ranges[i - 1].1
-            };
+            let covered = FuncRanges::new(&functions);
             let extra: Vec<(u64, FuncSource)> = candidates
                 .into_iter()
-                .filter(|a| !covered(*a))
+                .filter(|a| covered.find(*a).is_none())
                 .map(|a| (a, FuncSource::DataPointer))
                 .collect();
             if !extra.is_empty() {
@@ -321,7 +400,7 @@ fn auto_analyze_inner(
                     Some(cancel),
                 );
                 add_missed_import_thunks(&mut functions, disasm, binary);
-                add_aligned_function_starts(&mut functions, disasm);
+                add_aligned_function_starts(&mut functions, disasm, binary);
             }
         }
     }
