@@ -468,6 +468,114 @@ fn clone_terminal_region(
     Some(out)
 }
 
+
+
+
+
+fn clone_arm_region(
+    ctx: &WalkCtx<'_>,
+    target: usize,
+    stop: usize,
+    visited: &HashSet<usize>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) -> Option<Vec<PseudoLine>> {
+    if ctx.clone_depth >= 2
+        || target >= ctx.cfg.blocks.len()
+        || target == stop
+        || stops.contains(&target)
+        || ctx.loops.get(target).is_some()
+        || !ctx.loops.enclosing(target).is_empty()
+    {
+        return None;
+    }
+    let mut region: HashSet<usize> = HashSet::default();
+    let mut queue = vec![target];
+    let mut reaches_stop = false;
+    while let Some(b) = queue.pop() {
+        if b == stop {
+            reaches_stop = true;
+            continue;
+        }
+        if stops.contains(&b) {
+            return None;
+        }
+        if !region.insert(b) {
+            continue;
+        }
+        if region.len() > MAX_CLONE_BLOCKS {
+            return None;
+        }
+        for edge in &ctx.cfg.blocks[b].successors {
+            let t = edge.target;
+            if t == stop {
+                reaches_stop = true;
+                continue;
+            }
+            if stops.contains(&t)
+                || t >= ctx.cfg.blocks.len()
+                || ctx.loops.get(t).is_some()
+                || !ctx.loops.enclosing(t).is_empty()
+                || t <= b
+            {
+                return None;
+            }
+            queue.push(t);
+        }
+    }
+    if !reaches_stop {
+        return None;
+    }
+    let mut cv = visited.clone();
+    for b in &region {
+        cv.remove(b);
+    }
+    let bytes_before = ctx.hints.out_bytes.get();
+    let clone_ctx = WalkCtx {
+        clone: true,
+        clone_depth: ctx.clone_depth + 1,
+        ..*ctx
+    };
+    let mut out = Vec::new();
+    walk_region(
+        &clone_ctx,
+        target,
+        &mut cv,
+        &mut out,
+        indent,
+        depth + 1,
+        &[stop],
+    );
+    let text = out.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+    let mut balance = 0i32;
+    for ch in text.chars() {
+        match ch {
+            '{' => balance += 1,
+            '}' => balance -= 1,
+            _ => {}
+        }
+        if balance < 0 {
+            ctx.hints.out_bytes.set(bytes_before);
+            return None;
+        }
+    }
+    if out.is_empty()
+        || out.len() > MAX_CLONE_LINES
+        || balance != 0
+        || text.contains("LAB_")
+        || text.contains("goto ")
+        || text.contains("break;")
+        || text.contains("continue;")
+        || text.contains("WARNING")
+        || text.contains("truncated")
+    {
+        ctx.hints.out_bytes.set(bytes_before);
+        return None;
+    }
+    Some(out)
+}
+
 pub(crate) fn walk_block(
     ctx: &WalkCtx<'_>,
     block_id: usize,
@@ -1044,16 +1152,43 @@ fn walk_region(
                     source_addr: None,
                 });
                 if let Some(arm) = single_arm {
-                    walk_arm(ctx, arm, visited, lines, indent + 1, depth, &arm_stops);
+                    walk_arm(
+                        ctx,
+                        arm,
+                        visited,
+                        lines,
+                        indent + 1,
+                        depth,
+                        &arm_stops,
+                        Some(join),
+                    );
                 } else {
-                    walk_arm(ctx, t.target, visited, lines, indent + 1, depth, &arm_stops);
+                    walk_arm(
+                        ctx,
+                        t.target,
+                        visited,
+                        lines,
+                        indent + 1,
+                        depth,
+                        &arm_stops,
+                        Some(join),
+                    );
                     lines.push(PseudoLine {
                         indent,
                         text: "} else {".into(),
                         kind: LineKind::Branch,
                         source_addr: None,
                     });
-                    walk_arm(ctx, f.target, visited, lines, indent + 1, depth, &arm_stops);
+                    walk_arm(
+                        ctx,
+                        f.target,
+                        visited,
+                        lines,
+                        indent + 1,
+                        depth,
+                        &arm_stops,
+                        Some(join),
+                    );
                 }
                 lines.push(PseudoLine {
                     indent,
@@ -1088,7 +1223,7 @@ fn walk_region(
                     kind: LineKind::Branch,
                     source_addr: None,
                 });
-                walk_arm(ctx, arm, visited, lines, indent + 1, depth, stops);
+                walk_arm(ctx, arm, visited, lines, indent + 1, depth, stops, None);
                 lines.push(PseudoLine {
                     indent,
                     text: "}".into(),
@@ -1218,6 +1353,7 @@ fn close_dowhile(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_arm(
     ctx: &WalkCtx<'_>,
     block: usize,
@@ -1226,6 +1362,7 @@ fn walk_arm(
     indent: u32,
     depth: usize,
     stops: &[usize],
+    clone_stop: Option<usize>,
 ) {
     if block >= ctx.cfg.blocks.len() {
         return;
@@ -1234,7 +1371,11 @@ fn walk_arm(
         
         
         
-        if let Some(cloned) = clone_terminal_region(ctx, block, visited, indent, depth, stops) {
+        let cloned = clone_terminal_region(ctx, block, visited, indent, depth, stops).or_else(|| {
+            let stop = clone_stop?;
+            clone_arm_region(ctx, block, stop, visited, indent, depth, stops)
+        });
+        if let Some(cloned) = cloned {
             lines.extend(cloned);
         } else {
             lines.push(PseudoLine {
@@ -1966,7 +2107,7 @@ mod cleanup_tests {
         let mut visited: HashSet<usize> = HashSet::default();
         visited.insert(1);
         let mut lines = Vec::new();
-        walk_arm(&ctx, 1, &mut visited, &mut lines, 1, 0, &[]);
+        walk_arm(&ctx, 1, &mut visited, &mut lines, 1, 0, &[], None);
         assert!(
             lines.iter().any(|l| l.text.starts_with("return")),
             "terminal arm should be cloned: {:?}",
@@ -1975,6 +2116,82 @@ mod cleanup_tests {
         assert!(
             !lines.iter().any(|l| l.text.contains("goto LAB_")),
             "visited terminal arm must not fall back to a goto"
+        );
+    }
+
+    #[test]
+    fn visited_arm_target_can_clone_until_the_if_join() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        let blk = |id: usize, succ: Vec<usize>| BasicBlock {
+            id,
+            start: 0x1000 + id as u64 * 0x10,
+            end: 0x1000 + id as u64 * 0x10 + 0x10,
+            instr_indices: id..id + 1,
+            successors: succ
+                .into_iter()
+                .map(|target| Edge {
+                    target,
+                    kind: EdgeKind::Jump,
+                })
+                .collect(),
+            predecessors: vec![],
+        };
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks: vec![blk(0, vec![1]), blk(1, vec![2]), blk(2, vec![0])],
+            block_at: Default::default(),
+        };
+        let call = POp::Call { target: 0x2000 };
+        
+        
+        
+        let branch = POp::Branch { target: 0x1000 };
+        let bops: Vec<Vec<(u64, &POp)>> = vec![
+            vec![],
+            vec![(0x1010, &call)],
+            vec![(0x1020, &branch)],
+        ];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> = vec![
+            HashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
+        ];
+        let func_lookup = HashMap::default();
+        let back_edges = HashMap::default();
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &[],
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            clone: false,
+            clone_depth: 0,
+        };
+        let mut visited: HashSet<usize> = HashSet::default();
+        visited.insert(1);
+        let mut lines = Vec::new();
+        walk_arm(&ctx, 1, &mut visited, &mut lines, 1, 0, &[2], Some(2));
+        assert!(
+            lines.iter().any(|l| l.text.contains("FUN_2000")),
+            "arm body should be cloned: {:?}",
+            lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            !lines.iter().any(|l| l.text.contains("goto")),
+            "join clone must not emit a goto"
         );
     }
 
