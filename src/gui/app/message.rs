@@ -140,13 +140,10 @@ pub enum Message {
 
     RecentStartupToggled,
     RestoreLastToggled,
-    ConfirmCloseToggled,
     AnalyzeOnOpenToggled,
-    RecoverStringsToggled,
     UiScalePicked(usize),
     DebugAttach(u32),
     ToggleBreakpointDebug,
-    MaxFuncSizeCommitted(String),
     AllowChangesToggled,
     AllowExecutionToggled,
 }

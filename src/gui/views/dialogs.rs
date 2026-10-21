@@ -513,12 +513,6 @@ fn settings_content(shell: &Shell, tab: usize) -> Element<'_, Message> {
                     shell.switch_value(4, shell.restore_last),
                     Message::RestoreLastToggled
                 ),
-                false
-            ),
-            ui::setting_row(
-                "Confirm before closing",
-                Some("A failed save keeps the window open; no unsafe exit."),
-                ui::value_text("Always on"),
                 true
             ),
         ],
@@ -560,18 +554,6 @@ fn settings_content(shell: &Shell, tab: usize) -> Element<'_, Message> {
                     shell.switch_value(5, shell.analyze_on_open),
                     Message::AnalyzeOnOpenToggled
                 ),
-                false
-            ),
-            ui::setting_row(
-                "Recover strings",
-                Some("Find ASCII and UTF-16 strings."),
-                ui::value_text("Automatic"),
-                false
-            ),
-            ui::setting_row(
-                "Max function size",
-                Some("Skip functions larger than this (KB)."),
-                ui::value_text(format!("{} KB", shell.max_func_size_kb)),
                 true
             ),
         ],

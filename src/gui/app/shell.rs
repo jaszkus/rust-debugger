@@ -23,19 +23,19 @@ pub(crate) struct UiSettings {
     #[serde(default)]
     pub(crate) restore_last: bool,
     #[serde(default = "default_true")]
-    pub(crate) confirm_close: bool,
-    #[serde(default = "default_true")]
     pub(crate) analyze_on_open: bool,
-    #[serde(default = "default_true")]
-    pub(crate) recover_strings: bool,
-    #[serde(default = "default_max_func_kb")]
-    pub(crate) max_func_size_kb: u32,
     #[serde(default = "default_true")]
     pub(crate) allow_changes: bool,
     #[serde(default)]
     pub(crate) allow_execution: bool,
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
+    #[serde(default = "default_mcp_port")]
+    pub(crate) mcp_port: u16,
+    #[serde(default)]
+    pub(crate) mcp_enabled: bool,
+    #[serde(default = "default_hex_bpr")]
+    pub(crate) hex_bytes_per_row: usize,
 }
 fn default_true() -> bool {
     true
@@ -43,8 +43,26 @@ fn default_true() -> bool {
 fn default_ui_scale() -> f32 {
     1.0
 }
-pub(crate) fn default_max_func_kb() -> u32 {
-    64
+fn default_mcp_port() -> u16 {
+    8765
+}
+fn default_hex_bpr() -> usize {
+    16
+}
+fn user_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+}
+fn legacy_settings_path() -> Option<std::path::PathBuf> {
+    if std::env::var_os("RD_SETTINGS_PATH").is_some() || cfg!(test) {
+        return None;
+    }
+    let root = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from))
+        .or_else(|| user_home().map(|p| p.join(".config")))?;
+    Some(root.join("rust-debugger").join("ui-settings.json"))
 }
 pub(crate) fn settings_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("RD_SETTINGS_PATH") {
@@ -53,14 +71,12 @@ pub(crate) fn settings_path() -> std::path::PathBuf {
     if cfg!(test) {
         return std::env::temp_dir()
             .join(format!("rd-ui-tests-{}", std::process::id()))
-            .join("settings.json");
+            .join("config.json");
     }
-    let root = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|p| std::path::PathBuf::from(p).join(".config")))
-        .unwrap_or_else(std::env::temp_dir);
-    root.join("rust-debugger").join("ui-settings.json")
+    user_home()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".rust-debugger")
+        .join("config.json")
 }
 
 pub(crate) type CfgInsnsCache = std::cell::RefCell<Option<(u64, u64, Arc<Vec<Vec<String>>>)>>;
@@ -160,10 +176,7 @@ pub struct Shell {
     pub follow_ai: bool,
     pub recent_on_startup: bool,
     pub restore_last: bool,
-    pub confirm_close: bool,
     pub analyze_on_open: bool,
-    pub recover_strings: bool,
-    pub max_func_size_kb: u32,
     pub allow_changes: bool,
     pub allow_execution: bool,
     pub ui_scale: f32,
@@ -311,39 +324,61 @@ impl Shell {
         if cfg!(test) {
             return;
         }
-        let Ok(bytes) = std::fs::read(settings_path()) else {
-            return;
+        let path = settings_path();
+        let mut from_legacy = false;
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let Some(legacy) = legacy_settings_path() else {
+                    return;
+                };
+                let Ok(bytes) = std::fs::read(legacy) else {
+                    return;
+                };
+                from_legacy = true;
+                bytes
+            }
         };
         let Ok(settings) = serde_json::from_slice::<UiSettings>(&bytes) else {
             return;
         };
-        if !settings.side_ratio.is_finite() || !settings.bottom_ratio.is_finite() {
-            return;
-        }
         self.theme_mode = theme::AppThemeMode::from_idx(settings.theme);
-        self.compact_rows = false;
+        self.compact_rows = settings.compact;
+        self.sidebar_collapsed = settings.collapsed;
         self.ui_scale = [0.9f32, 1.0, 1.1]
             .into_iter()
             .find(|s| (s - settings.ui_scale).abs() < 0.01)
             .unwrap_or(1.0);
-        self.sidebar_collapsed = false;
-        self.side_ratio = settings.side_ratio.clamp(0.15, 0.5);
-        self.bottom_ratio = settings.bottom_ratio.clamp(0.15, 0.6);
+        if settings.side_ratio.is_finite() {
+            self.side_ratio = settings.side_ratio.clamp(0.15, 0.5);
+        }
+        if settings.bottom_ratio.is_finite() {
+            self.bottom_ratio = settings.bottom_ratio.clamp(0.15, 0.6);
+        }
         self.bottom_tab = settings.bottom_tab.min(BOTTOM_TABS.len() - 1);
         self.side_tab = settings.side_tab.min(SIDE_TABS.len() - 1);
-        if self.startup_opened_by_user {
-            sync_window(self, self.win_size);
-            return;
-        }
         self.recent_on_startup = settings.show_recent_startup;
         self.show_startup = self.recent_on_startup && self.show_startup;
         self.restore_last = settings.restore_last;
-        self.confirm_close = settings.confirm_close;
         self.analyze_on_open = settings.analyze_on_open;
-        self.recover_strings = settings.recover_strings;
-        self.max_func_size_kb = settings.max_func_size_kb.clamp(1, 65536);
         self.allow_changes = settings.allow_changes;
         self.allow_execution = settings.allow_execution;
+        let mcp_port = settings.mcp_port.clamp(1, u16::MAX);
+        let hex_bytes_per_row = settings.hex_bytes_per_row.clamp(4, 64);
+        let mcp_enabled = settings.mcp_enabled;
+        self.with(|s| {
+            s.allow_changes = settings.allow_changes;
+            s.allow_execution = settings.allow_execution;
+            s.mcp_port = mcp_port;
+            s.mcp_port_buf = mcp_port.to_string();
+            s.hex_bytes_per_row = hex_bytes_per_row;
+        });
+        if mcp_enabled {
+            self.with(actions::toggle_mcp);
+        }
+        if from_legacy {
+            let _ = self.save_settings();
+        }
         if self.restore_last && !self.show_startup
             && let Some(path) = self
                 .app
@@ -359,6 +394,14 @@ impl Shell {
     }
 
     pub(super) fn save_settings(&self) -> Result<(), String> {
+        let (mcp_port, hex_bytes_per_row, mcp_enabled) = {
+            let app = self.app.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                app.mcp_port,
+                app.hex_bytes_per_row,
+                app.mcp_server.is_some(),
+            )
+        };
         let settings = UiSettings {
             theme: self.theme_mode.idx(),
             compact: self.compact_rows,
@@ -369,13 +412,13 @@ impl Shell {
             side_tab: self.side_tab,
             show_recent_startup: self.recent_on_startup,
             restore_last: self.restore_last,
-            confirm_close: self.confirm_close,
             analyze_on_open: self.analyze_on_open,
-            recover_strings: self.recover_strings,
-            max_func_size_kb: self.max_func_size_kb,
             allow_changes: self.allow_changes,
             allow_execution: self.allow_execution,
             ui_scale: self.ui_scale,
+            mcp_port,
+            mcp_enabled,
+            hex_bytes_per_row,
         };
         let path = settings_path();
         if let Some(parent) = path.parent() {
@@ -518,10 +561,7 @@ impl Shell {
             ai_cursor_seen: None,
             follow_ai: false,
             restore_last: false,
-            confirm_close: true,
             analyze_on_open: true,
-            recover_strings: true,
-            max_func_size_kb: 64,
             allow_changes: true,
             allow_execution: false,
             ui_scale: 1.0,

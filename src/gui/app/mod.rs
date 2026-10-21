@@ -147,13 +147,13 @@ fn update_inner(shell: &mut Shell, message: Message) -> Task<Message> {
             | Message::CompactToggled
             | Message::RecentStartupToggled
             | Message::RestoreLastToggled
-            | Message::ConfirmCloseToggled
             | Message::AnalyzeOnOpenToggled
-            | Message::RecoverStringsToggled
             | Message::UiScalePicked(_)
-            | Message::MaxFuncSizeCommitted(_)
             | Message::AllowChangesToggled
             | Message::AllowExecutionToggled
+            | Message::McpToggle
+            | Message::McpPortEdited(_)
+            | Message::HexBprEdited(_)
             | Message::SidebarToggle
             | Message::BottomTabPicked(_)
             | Message::SideTabPicked(_)
@@ -241,11 +241,8 @@ fn update_inner(shell: &mut Shell, message: Message) -> Task<Message> {
         | Message::CompactToggled
         | Message::RecentStartupToggled
         | Message::RestoreLastToggled
-        | Message::ConfirmCloseToggled
         | Message::AnalyzeOnOpenToggled
-        | Message::RecoverStringsToggled
         | Message::UiScalePicked(..)
-        | Message::MaxFuncSizeCommitted(..)
         | Message::AllowChangesToggled
         | Message::AllowExecutionToggled
         | Message::RenameSelected

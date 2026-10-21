@@ -719,7 +719,14 @@ pub(crate) fn update(shell: &mut Shell, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::McpPortEdited(p) => {
-            shell.with(|s| s.mcp_port_buf = p);
+            shell.with(|s| {
+                s.mcp_port_buf = p;
+                if let Ok(port) = s.mcp_port_buf.trim().parse::<u16>()
+                    && port > 0
+                {
+                    s.mcp_port = port;
+                }
+            });
             Task::none()
         }
 

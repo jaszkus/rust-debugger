@@ -576,6 +576,7 @@ pub(crate) fn update(shell: &mut Shell, message: Message) -> Task<Message> {
         }
 
         Message::CloseRequested | Message::Exit => {
+            let _ = shell.save_settings();
             shell.closing = true;
             shell.with(|s| s.status_msg = "Saving project…".into());
             let app = shell.app.clone();
@@ -641,38 +642,24 @@ pub(crate) fn update(shell: &mut Shell, message: Message) -> Task<Message> {
             shell.restore_last = !shell.restore_last;
             Task::none()
         }
-        Message::ConfirmCloseToggled => {
-            shell.confirm_close = !shell.confirm_close;
-            Task::none()
-        }
         Message::AnalyzeOnOpenToggled => {
             shell.analyze_on_open = !shell.analyze_on_open;
-            Task::none()
-        }
-        Message::RecoverStringsToggled => {
-            shell.recover_strings = !shell.recover_strings;
             Task::none()
         }
         Message::UiScalePicked(i) => {
             shell.ui_scale = [0.9f32, 1.0, 1.1][i.min(2)];
             Task::none()
         }
-        Message::MaxFuncSizeCommitted(text) => {
-            let kb: u32 = text
-                .trim()
-                .trim_end_matches(" KB")
-                .trim()
-                .parse()
-                .unwrap_or(64);
-            shell.max_func_size_kb = kb.clamp(1, 65536);
-            Task::none()
-        }
         Message::AllowChangesToggled => {
             shell.allow_changes = !shell.allow_changes;
+            let value = shell.allow_changes;
+            shell.with(|s| s.allow_changes = value);
             Task::none()
         }
         Message::AllowExecutionToggled => {
             shell.allow_execution = !shell.allow_execution;
+            let value = shell.allow_execution;
+            shell.with(|s| s.allow_execution = value);
             Task::none()
         }
 

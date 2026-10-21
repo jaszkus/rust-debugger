@@ -592,19 +592,36 @@ mod stage1_tests {
             side_tab: 4,
             show_recent_startup: true,
             restore_last: false,
-            confirm_close: true,
             analyze_on_open: true,
-            recover_strings: true,
-            max_func_size_kb: 64,
             allow_changes: true,
             allow_execution: false,
             ui_scale: 1.1,
+            mcp_port: 8765,
+            mcp_enabled: true,
+            hex_bytes_per_row: 32,
         })
         .unwrap();
         let settings: UiSettings = serde_json::from_slice(&json).unwrap();
         assert_eq!(settings.bottom_tab, 9);
         assert!(settings.compact && settings.collapsed);
         assert!((settings.ui_scale - 1.1).abs() < 1e-6);
+        assert_eq!(settings.mcp_port, 8765);
+        assert!(settings.mcp_enabled);
+        assert_eq!(settings.hex_bytes_per_row, 32);
+    }
+
+    #[test]
+    fn workbench_old_config_defaults_new_fields() {
+        let json = br#"{"theme":1,"compact":true,"collapsed":false,"side_ratio":0.2,"bottom_ratio":0.3,"bottom_tab":1,"side_tab":2}"#;
+        let settings: UiSettings = serde_json::from_slice(json).unwrap();
+        assert_eq!(settings.theme, 1);
+        assert!(settings.compact);
+        assert_eq!(settings.mcp_port, 8765);
+        assert_eq!(settings.hex_bytes_per_row, 16);
+        assert!(!settings.mcp_enabled);
+        assert!(settings.analyze_on_open);
+        assert!(settings.allow_changes);
+        assert!(!settings.allow_execution);
     }
 
     #[test]
