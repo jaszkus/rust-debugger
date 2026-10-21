@@ -375,6 +375,7 @@ fn decompiler_folds_constants_and_dce() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -697,6 +698,7 @@ fn decompiler_x86_renders_32bit_names_and_absolute_mem() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -758,6 +760,7 @@ fn sse_instructions_lift_without_unimplemented() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -1005,6 +1008,7 @@ fn decompiler_renders_iat_calls_with_import_names() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &imports,
+        switches: &[],
         cancel: None,
         debug_types: None,
     });

@@ -1191,6 +1191,7 @@ fn decompile_text_imap(cfg: &CFG, pinstrs: &[PInstr], imap: &[DisasmInstruction]
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &HashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -1484,6 +1485,7 @@ fn decompiler_bottom_tested_loop_is_dowhile() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &HashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -1581,6 +1583,7 @@ fn decompiler_top_tested_loop_stays_while() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &HashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -2211,6 +2214,7 @@ fn cancel_decompile_renders_no_assignments() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &HashMap::default(),
+        switches: &[],
         cancel: Some(&c),
         debug_types: None,
     });
@@ -2229,6 +2233,7 @@ fn cancel_decompile_renders_no_assignments() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &HashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });

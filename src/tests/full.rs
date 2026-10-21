@@ -30,6 +30,7 @@ fn render(code: &[u8], base: u64, is64: bool) -> String {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -819,6 +820,7 @@ fn decompile_call_renders_known_name_and_args_x64() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -1192,6 +1194,7 @@ fn regression_low_call_args_survive_into_pseudocode() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });
@@ -1234,6 +1237,7 @@ fn regression_x86_thiscall_arg_probe_renders_args() {
         is_win64: false,
         thunk_targets: &rustc_hash::FxHashMap::default(),
         imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
         cancel: None,
         debug_types: None,
     });

@@ -705,6 +705,35 @@ fn auto_analyze_inner(
         }
     }
 
+    
+    
+    
+    let switches = advanced::detect_switch_tables(&disasm.instructions, binary, Some(cancel));
+    if stopped() {
+        return AnalysisResult::default();
+    }
+    let mut switch_targets: HashMap<u64, Vec<u64>> = HashMap::default();
+    let mut switch_tables_by_func: HashMap<u64, Vec<usize>> = HashMap::default();
+    {
+        let ranges = FuncRanges::new(&functions);
+        for (index, table) in switches.iter().enumerate() {
+            if let Some((entry, _)) = ranges.find(table.jump_addr) {
+                switch_targets
+                    .entry(entry)
+                    .or_default()
+                    .extend(table.case_targets.iter().copied());
+                switch_tables_by_func
+                    .entry(entry)
+                    .or_default()
+                    .push(index);
+            }
+        }
+        for targets in switch_targets.values_mut() {
+            targets.sort_unstable();
+            targets.dedup();
+        }
+    }
+
     let func_count = functions.len();
     let mut cfgs: HashMap<u64, CFG> =
         HashMap::with_capacity_and_hasher(func_count, Default::default());
@@ -721,7 +750,17 @@ fn auto_analyze_inner(
             if stopped() {
                 break;
             }
-            let c = cfg::build_cfg(&disasm.instructions, func.entry, func.end);
+            let extra = switch_targets
+                .get(&func.entry)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut c = cfg::build_cfg_with_targets(&disasm.instructions, func.entry, func.end, extra);
+            let tables = switch_tables_by_func
+                .get(&func.entry)
+                .into_iter()
+                .flatten()
+                .map(|&index| &switches[index]);
+            cfg::attach_switch_edges(&mut c, tables);
             if !c.blocks.is_empty() {
                 cfgs.insert(func.entry, c);
             }
@@ -738,7 +777,18 @@ fn auto_analyze_inner(
                     if cancel.load(Ordering::Relaxed) {
                         return None;
                     }
-                    let c = cfg::build_cfg(insns_ref, func.entry, func.end);
+                    let extra = switch_targets
+                        .get(&func.entry)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    let mut c =
+                        cfg::build_cfg_with_targets(insns_ref, func.entry, func.end, extra);
+                    let tables = switch_tables_by_func
+                        .get(&func.entry)
+                        .into_iter()
+                        .flatten()
+                        .map(|&index| &switches[index]);
+                    cfg::attach_switch_edges(&mut c, tables);
                     let d = done.fetch_add(1, Ordering::Relaxed) + 1;
                     if d.is_multiple_of(32) {
                         progress(
@@ -889,6 +939,7 @@ fn auto_analyze_inner(
         all_insns: &disasm.instructions,
         func_lookup: &func_lookup,
         import_lookup: &import_lookup,
+        switches: &switches,
         cancel,
         is64: disasm.arch.contains("64"),
         is_win64,
@@ -909,8 +960,7 @@ fn auto_analyze_inner(
         return AnalysisResult::default();
     }
 
-    progress("Switch Recovery", "Detecting jump tables", 9, total_phases);
-    let switches = advanced::detect_switch_tables(&disasm.instructions, binary, Some(cancel));
+    progress("Switch Recovery", "Using recovered jump tables", 9, total_phases);
 
     progress(
         "Call Graph",

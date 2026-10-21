@@ -34,6 +34,7 @@ pub struct LiftInput<'a> {
     pub is_win64: bool,
     pub thunk_targets: &'a HashMap<u64, u64>,
     pub imports: &'a HashMap<u64, String>,
+    pub switches: &'a [crate::analysis::advanced::SwitchTable],
     pub debug_types: Option<&'a std::sync::Arc<DebugTypes>>,
     pub cancel: Option<&'a AtomicBool>,
 }
@@ -375,6 +376,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         is_win64,
         thunk_targets,
         imports,
+        switches,
         debug_types,
         cancel,
     } = input;
@@ -1093,6 +1095,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         loops: &loops,
         is64,
         hints: &hints,
+        switches,
         clone: false,
         clone_depth: 0,
     };

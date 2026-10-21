@@ -3,6 +3,7 @@ use super::super::flow::cfg::{self, CFG};
 use super::super::flow::function::DetectedFunction;
 use super::super::flow::stack::{self, StackFrame};
 use super::AnalysisResult;
+use crate::analysis::advanced::SwitchTable;
 use crate::analysis::symbols::debug_types::DebugTypes;
 use crate::disasm::DisasmResult;
 use rustc_hash::FxHashMap as HashMap;
@@ -16,6 +17,7 @@ pub(crate) struct DecompileJob<'a> {
     pub all_insns: &'a [crate::disasm::DisasmInstruction],
     pub func_lookup: &'a HashMap<u64, String>,
     pub import_lookup: &'a HashMap<u64, String>,
+    pub switches: &'a [SwitchTable],
     pub debug_types: Option<&'a Arc<DebugTypes>>,
     pub is_win64: bool,
     pub thunk_targets: &'a HashMap<u64, u64>,
@@ -32,6 +34,7 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
         all_insns,
         func_lookup,
         import_lookup,
+        switches,
         debug_types,
         is_win64,
         thunk_targets,
@@ -72,6 +75,7 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
                         func_lookup,
                         is64,
                         imports: import_lookup,
+                        switches,
                         debug_types,
                         is_win64,
                         thunk_targets,
@@ -133,7 +137,18 @@ pub fn decompile_snapshot(
     let c = if let Some(c) = analysis.cfgs.get(&f.entry) {
         c.clone()
     } else {
-        let c = cfg::build_cfg(&disasm.instructions, f.entry, f.end);
+        let relevant: Vec<&SwitchTable> = analysis
+            .switches
+            .iter()
+            .filter(|s| s.jump_addr >= f.entry && s.jump_addr < f.end)
+            .collect();
+        let extra_targets: Vec<u64> = relevant
+            .iter()
+            .flat_map(|s| s.case_targets.iter().copied())
+            .collect();
+        let mut c =
+            cfg::build_cfg_with_targets(&disasm.instructions, f.entry, f.end, &extra_targets);
+        cfg::attach_switch_edges(&mut c, relevant);
         if c.blocks.is_empty() {
             return Err("CFG is empty (no instructions in range)".into());
         }
@@ -181,6 +196,7 @@ pub fn decompile_snapshot(
     let is_win64 = analysis.is_win64;
     let pc = if c.blocks.len() > decompiler::BIG_STACK_BLOCKS {
         let imap_arc = disasm.instructions.clone();
+        let switches = analysis.switches.clone();
         let debug_types = analysis.debug_types.clone();
         std::thread::Builder::new()
             .name("decompile-big".into())
@@ -195,6 +211,7 @@ pub fn decompile_snapshot(
                     func_lookup: &func_lookup,
                     is64,
                     imports: &import_lookup,
+                    switches: &switches,
                     debug_types: debug_types.as_ref(),
                     is_win64,
                     thunk_targets: &thunk_targets,
@@ -220,6 +237,7 @@ pub fn decompile_snapshot(
             func_lookup: &func_lookup,
             is64,
             imports: &import_lookup,
+            switches: &analysis.switches,
             debug_types: analysis.debug_types.as_ref(),
             is_win64,
             thunk_targets: &thunk_targets,

@@ -375,6 +375,7 @@ pub(crate) struct WalkCtx<'a> {
     pub(crate) loops: &'a Loops,
     pub(crate) is64: bool,
     pub(crate) hints: &'a TypeHints,
+    pub(crate) switches: &'a [crate::analysis::advanced::SwitchTable],
     
     
     pub(crate) clone: bool,
@@ -587,6 +588,43 @@ pub(crate) fn walk_block(
     walk_region(ctx, block_id, visited, lines, indent, depth, &[]);
 }
 
+fn indirect_index(var: &PVar) -> String {
+    match var {
+        PVar::Scaled { index, .. } => fmt_var(index),
+        PVar::Mem(base, _) => indirect_index(base),
+        _ => fmt_var(var),
+    }
+}
+
+fn switch_expression(bops: &[Vec<(u64, &POp)>], block_id: usize) -> String {
+    bops.get(block_id)
+        .and_then(|ops| {
+            ops.iter().rev().find_map(|(_, op)| match op {
+                POp::BranchInd { target } => Some(indirect_index(target)),
+                _ => None,
+            })
+        })
+        .unwrap_or_else(|| "index".to_string())
+}
+
+fn switch_groups(
+    cfg: &CFG,
+    table: &crate::analysis::advanced::SwitchTable,
+) -> Option<Vec<(u64, Vec<usize>)>> {
+    let mut groups: Vec<(u64, Vec<usize>)> = Vec::new();
+    for (index, &target) in table.case_targets.iter().enumerate() {
+        if !cfg.block_at.contains_key(&target) {
+            return None;
+        }
+        if let Some((_, cases)) = groups.iter_mut().find(|(t, _)| *t == target) {
+            cases.push(index);
+        } else {
+            groups.push((target, vec![index]));
+        }
+    }
+    (groups.len() >= 2).then_some(groups)
+}
+
 fn walk_region(
     ctx: &WalkCtx<'_>,
     block_id: usize,
@@ -613,6 +651,7 @@ fn walk_region(
         loops,
         is64,
         hints,
+        switches,
         ..
     } = *ctx;
     if depth > 5_000 {
@@ -634,6 +673,14 @@ fn walk_region(
         return;
     }
     let block = &cfg.blocks[block_id];
+    let switch_table = switches
+        .iter()
+        .find(|s| s.jump_addr >= block.start && s.jump_addr < block.end);
+    let switch_groups = switch_table.and_then(|table| switch_groups(cfg, table));
+    let switch_join = postdom.join_of(block_id);
+    let switch_active = switch_table.is_some()
+        && switch_groups.is_some()
+        && switch_join.is_none_or(|join| !visited.contains(&join));
 
     let loop_info = loops.get(block_id);
     let is_loop_header = loop_info.is_some();
@@ -745,6 +792,11 @@ fn walk_region(
     let mut push_args: Vec<PVal> = Vec::new();
 
     for (i, (addr, op)) in ops.iter().enumerate() {
+        
+        
+        if switch_active && matches!(op, POp::BranchInd { .. }) {
+            continue;
+        }
         if dead_safe(op)
             && let Some(dst_reg) = written_reg(op)
         {
@@ -835,6 +887,135 @@ fn walk_region(
             && !stops.contains(&exit)
         {
             walk_region(ctx, exit, visited, lines, indent, depth + 1, stops);
+        }
+        return;
+    }
+    if switch_active {
+        let table = switch_table.expect("switch_active requires a table");
+        let groups = switch_groups.as_ref().expect("switch_active requires groups");
+        let saved_visited = visited.clone();
+        let saved_bytes = hints.out_bytes.get();
+        let switch_start = lines.len();
+        let mut case_stops = stops.to_vec();
+        if let Some(join) = switch_join
+            && !case_stops.contains(&join)
+        {
+            case_stops.push(join);
+        }
+        let case_ctx = WalkCtx {
+            clone: true,
+            clone_depth: ctx.clone_depth + 1,
+            ..*ctx
+        };
+        lines.push(PseudoLine {
+            indent,
+            text: format!("switch ({}) {{", switch_expression(bops, block_id)),
+            kind: LineKind::Branch,
+            source_addr: Some(table.jump_addr),
+        });
+        for (target, cases) in groups {
+            for &case in cases {
+                lines.push(PseudoLine {
+                    indent: indent + 1,
+                    text: format!("case {case}:"),
+                    
+                    
+                    
+                    kind: LineKind::Branch,
+                    source_addr: Some(*target),
+                });
+            }
+            let Some(&case_block) = cfg.block_at.get(target) else {
+                continue;
+            };
+            let body_start = lines.len();
+            if case_block != block_id {
+                if visited.contains(&case_block) {
+                    walk_arm(
+                        &case_ctx,
+                        case_block,
+                        visited,
+                        lines,
+                        indent + 1,
+                        depth,
+                        &case_stops,
+                        switch_join,
+                    );
+                } else {
+                    walk_region(
+                        &case_ctx,
+                        case_block,
+                        visited,
+                        lines,
+                        indent + 1,
+                        depth + 1,
+                        &case_stops,
+                    );
+                }
+            }
+            let last = lines[body_start..]
+                .iter()
+                .rev()
+                .find(|l| l.kind != LineKind::Comment && !l.text.trim().is_empty());
+            if !last.is_some_and(|l| {
+                let t = l.text.trim();
+                t.starts_with("return")
+                    || t.starts_with("goto ")
+                    || t == "break;"
+                    || t == "continue;"
+            }) {
+                lines.push(PseudoLine {
+                    indent: indent + 1,
+                    text: "break;".into(),
+                    kind: LineKind::Branch,
+                    source_addr: None,
+                });
+            }
+        }
+        lines.push(PseudoLine {
+            indent,
+            text: "}".into(),
+            kind: LineKind::Branch,
+            source_addr: None,
+        });
+        if let Some(join) = switch_join
+            && !visited.contains(&join)
+            && !stops.contains(&join)
+        {
+            walk_region(ctx, join, visited, lines, indent, depth + 1, stops);
+        }
+        let rendered = lines[switch_start..]
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if rendered.contains("goto ") || rendered.contains("LAB_") || rendered.contains("WARNING") {
+            
+            
+            lines.truncate(switch_start);
+            hints.out_bytes.set(saved_bytes);
+            *visited = saved_visited;
+            let fallback = ops.iter().rev().find_map(|(addr, op)| match op {
+                POp::BranchInd { .. } => render_op(
+                    op,
+                    *addr,
+                    func_lookup,
+                    &mut reg_values,
+                    is64,
+                    hints,
+                    &mut push_args,
+                )
+                .map(|(text, kind)| (text, kind, *addr)),
+                _ => None,
+            });
+            if let Some((text, kind, addr)) = fallback {
+                lines.push(PseudoLine {
+                    indent,
+                    text,
+                    kind,
+                    source_addr: Some(addr),
+                });
+            }
         }
         return;
     }
@@ -2101,6 +2282,7 @@ mod cleanup_tests {
             loops: &loops,
             is64: true,
             hints: &hints,
+            switches: &[],
             clone: false,
             clone_depth: 0,
         };
@@ -2117,6 +2299,96 @@ mod cleanup_tests {
             !lines.iter().any(|l| l.text.contains("goto LAB_")),
             "visited terminal arm must not fall back to a goto"
         );
+    }
+
+    #[test]
+    fn renders_jump_table_as_switch_cases() {
+        use crate::analysis::advanced::SwitchTable;
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        let blk = |id: usize, succ: Vec<usize>| BasicBlock {
+            id,
+            start: 0x1000 + id as u64 * 0x10,
+            end: 0x1000 + id as u64 * 0x10 + 0x10,
+            instr_indices: id..id + 1,
+            successors: succ
+                .into_iter()
+                .map(|target| Edge {
+                    target,
+                    kind: EdgeKind::Jump,
+                })
+                .collect(),
+            predecessors: vec![],
+        };
+        let mut block_at = HashMap::default();
+        for id in 0..3 {
+            block_at.insert(0x1000 + id as u64 * 0x10, id);
+        }
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks: vec![blk(0, vec![1, 2]), blk(1, vec![]), blk(2, vec![])],
+            block_at,
+        };
+        let target = PVar::Scaled {
+            base: Box::new(PVar::Reg("table")),
+            index: Box::new(PVar::Reg("rax")),
+            scale: 4,
+            disp: 0,
+        };
+        let indirect = POp::BranchInd { target };
+        let ret = POp::Return;
+        let bops: Vec<Vec<(u64, &POp)>> = vec![
+            vec![(0x1000, &indirect)],
+            vec![(0x1010, &ret)],
+            vec![(0x1020, &ret)],
+        ];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> = vec![
+            HashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
+        ];
+        let switches = [SwitchTable {
+            jump_addr: 0x1000,
+            table_addr: 0x2000,
+            case_count: 2,
+            case_targets: vec![0x1010, 0x1020],
+        }];
+        let func_lookup = HashMap::default();
+        let back_edges = HashMap::default();
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &[],
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            switches: &switches,
+            clone: false,
+            clone_depth: 0,
+        };
+        let mut visited = HashSet::default();
+        let mut lines = Vec::new();
+        walk_region(&ctx, 0, &mut visited, &mut lines, 1, 0, &[]);
+        let text = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("switch (rax)"), "{}", text);
+        assert!(text.contains("case 0:"), "{}", text);
+        assert!(text.contains("case 1:"), "{}", text);
+        assert!(!text.contains("goto *"), "{}", text);
     }
 
     #[test]
@@ -2177,6 +2449,7 @@ mod cleanup_tests {
             loops: &loops,
             is64: true,
             hints: &hints,
+            switches: &[],
             clone: false,
             clone_depth: 0,
         };

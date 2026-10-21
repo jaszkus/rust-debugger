@@ -1,3 +1,4 @@
+use crate::analysis::advanced::SwitchTable;
 use crate::disasm::DisasmInstruction;
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::BTreeSet;
@@ -37,6 +38,18 @@ pub struct CFG {
 }
 
 pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) -> CFG {
+    build_cfg_with_targets(insns, func_entry, func_end, &[])
+}
+
+
+
+
+pub fn build_cfg_with_targets(
+    insns: &[DisasmInstruction],
+    func_entry: u64,
+    func_end: u64,
+    extra_targets: &[u64],
+) -> CFG {
     let start = insns.partition_point(|i| i.address < func_entry);
     let end = insns.partition_point(|i| i.address < func_end);
     let func_insns: Vec<usize> = (start..end).collect();
@@ -68,6 +81,16 @@ pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) ->
             if i + 1 < end {
                 leaders.insert(insns[i + 1].address);
             }
+        }
+    }
+
+    for &target in extra_targets {
+        if target <= func_entry || target >= func_end {
+            continue;
+        }
+        let idx = insns.partition_point(|i| i.address < target);
+        if idx < insns.len() && insns[idx].address == target {
+            leaders.insert(target);
         }
     }
 
@@ -197,6 +220,14 @@ pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) ->
                 reachable[i] = true;
             }
         }
+        
+        
+        
+        for (i, block) in blocks.iter().enumerate() {
+            if extra_targets.contains(&block.start) {
+                reachable[i] = true;
+            }
+        }
         if reachable.iter().any(|r| !r) {
             let mut remap = vec![usize::MAX; blocks.len()];
             let mut new_blocks = Vec::new();
@@ -232,6 +263,46 @@ pub fn build_cfg(insns: &[DisasmInstruction], func_entry: u64, func_end: u64) ->
         func_entry,
         blocks,
         block_at,
+    }
+}
+
+
+
+
+
+
+pub fn attach_switch_edges<'a>(
+    cfg: &mut CFG,
+    switches: impl IntoIterator<Item = &'a SwitchTable>,
+) {
+    for table in switches {
+        let Some(jump_block) = cfg
+            .blocks
+            .iter()
+            .position(|b| table.jump_addr >= b.start && table.jump_addr < b.end)
+        else {
+            continue;
+        };
+        for &target in &table.case_targets {
+            let Some(&case_block) = cfg.block_at.get(&target) else {
+                continue;
+            };
+            if case_block == jump_block
+                || cfg.blocks[jump_block]
+                    .successors
+                    .iter()
+                    .any(|e| e.target == case_block)
+            {
+                continue;
+            }
+            cfg.blocks[jump_block].successors.push(Edge {
+                target: case_block,
+                kind: EdgeKind::Jump,
+            });
+            if !cfg.blocks[case_block].predecessors.contains(&jump_block) {
+                cfg.blocks[case_block].predecessors.push(jump_block);
+            }
+        }
     }
 }
 
