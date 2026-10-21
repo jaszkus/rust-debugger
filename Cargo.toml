@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 authors = ["jaszkus"]
 publish = false
-description = "Ghidra/IDA-style binary analysis, decompilation and live-debugging workbench with a GPU GUI and an MCP server for AI agents"
+description = "Binary analysis, decompilation and live-debugging workbench with a GPU GUI and an MCP server for AI agents"
 license = "Apache-2.0"
 
 [dependencies]

@@ -1,0 +1,5 @@
+﻿Material Symbols Rounded
+Copyright 2020-2025 Google LLC
+Source: https://github.com/google/material-design-icons
+Licensed under the Apache License, Version 2.0. See the repository LICENSE
+and https://www.apache.org/licenses/LICENSE-2.0.

@@ -7,7 +7,7 @@
 
 # Rust Debugger
 
-### Ghidra / IDA-style reverse engineering, written in Rust
+### Binary analysis and reverse engineering, written in Rust
 
 Static analysis, pcode decompilation, live debugging and an x86-64 emulator<br/>
 in one fast, self-contained workbench, with a GPU-accelerated GUI<br/>
@@ -734,8 +734,10 @@ Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
   (`Ghidra/Features/Base/data/stringngrams/StringModel.sng`, © National Security Agency, Apache-2.0).
   `data/StringModelLLR.bin` is a precomputed table derived from it.
   See [NOTICE](NOTICE) and [data/README.md](data/README.md).
-- Third-party Rust crates keep their own licenses.
-- Bundled fonts are listed with their licenses in [assets/README.md](assets/README.md).
+- Third-party Rust crates and their license expressions are listed in
+  [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+- Bundled fonts and their full licenses are listed in
+  [assets/README.md](assets/README.md).
 
 > [!IMPORTANT]
 > Rust Debugger is intended for **security research, malware analysis, interoperability and education**.
