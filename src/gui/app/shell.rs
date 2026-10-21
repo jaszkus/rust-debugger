@@ -54,6 +54,9 @@ fn user_home() -> Option<std::path::PathBuf> {
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from)
 }
+pub(crate) fn config_path_for(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".rust-debugger").join("config.json")
+}
 fn legacy_settings_path() -> Option<std::path::PathBuf> {
     if std::env::var_os("RD_SETTINGS_PATH").is_some() || cfg!(test) {
         return None;
@@ -73,10 +76,7 @@ pub(crate) fn settings_path() -> std::path::PathBuf {
             .join(format!("rd-ui-tests-{}", std::process::id()))
             .join("config.json");
     }
-    user_home()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".rust-debugger")
-        .join("config.json")
+    config_path_for(&user_home().unwrap_or_else(std::env::temp_dir))
 }
 
 pub(crate) type CfgInsnsCache = std::cell::RefCell<Option<(u64, u64, Arc<Vec<Vec<String>>>)>>;

@@ -602,12 +602,36 @@ mod stage1_tests {
         })
         .unwrap();
         let settings: UiSettings = serde_json::from_slice(&json).unwrap();
+        assert_eq!(settings.theme, 2);
         assert_eq!(settings.bottom_tab, 9);
+        assert_eq!(settings.side_tab, 4);
+        assert!((settings.side_ratio - 0.25).abs() < 1e-6);
+        assert!((settings.bottom_ratio - 0.35).abs() < 1e-6);
         assert!(settings.compact && settings.collapsed);
+        assert!(settings.show_recent_startup);
+        assert!(!settings.restore_last);
+        assert!(settings.analyze_on_open);
+        assert!(settings.allow_changes);
+        assert!(!settings.allow_execution);
         assert!((settings.ui_scale - 1.1).abs() < 1e-6);
         assert_eq!(settings.mcp_port, 8765);
         assert!(settings.mcp_enabled);
         assert_eq!(settings.hex_bytes_per_row, 32);
+    }
+
+    #[test]
+    fn config_path_uses_rust_debugger_directory() {
+        let path = crate::gui::app::shell::config_path_for(std::path::Path::new("home"));
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("config.json")
+        );
+        assert_eq!(
+            path.parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str()),
+            Some(".rust-debugger")
+        );
     }
 
     #[test]
