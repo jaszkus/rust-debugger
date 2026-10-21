@@ -625,6 +625,489 @@ fn switch_groups(
     (groups.len() >= 2).then_some(groups)
 }
 
+struct CompareCase {
+    value: String,
+    target: usize,
+}
+
+struct CompareChain {
+    expr: String,
+    cases: Vec<CompareCase>,
+    checks: Vec<usize>,
+    default: Option<usize>,
+    join: usize,
+}
+
+type SwitchGroup = (u64, Vec<usize>, Option<u64>);
+
+fn switch_fallthrough_order(
+    cfg: &CFG,
+    groups: &[(u64, Vec<usize>)],
+    join: Option<usize>,
+) -> Option<Vec<SwitchGroup>> {
+    if groups.len() < 2 {
+        return None;
+    }
+    let mut targets: Vec<usize> = Vec::with_capacity(groups.len());
+    for (addr, _) in groups {
+        targets.push(*cfg.block_at.get(addr)?);
+    }
+    let mut next_group: Vec<Option<usize>> = vec![None; groups.len()];
+    for (index, &start) in targets.iter().enumerate() {
+        let mut cur = start;
+        let mut seen: HashSet<usize> = HashSet::default();
+        for _ in 0..16 {
+            if !seen.insert(cur) {
+                return None;
+            }
+            let block = cfg.blocks.get(cur)?;
+            if block.successors.len() != 1 {
+                break;
+            }
+            let next = block.successors[0].target;
+            if join == Some(next) || next >= cfg.blocks.len() {
+                break;
+            }
+            if let Some(target_index) = targets.iter().position(|target| *target == next) {
+                if target_index != index {
+                    next_group[index] = Some(target_index);
+                }
+                break;
+            }
+            cur = next;
+        }
+    }
+    let mut state = vec![0u8; groups.len()];
+    let mut order: Vec<usize> = Vec::with_capacity(groups.len());
+    fn visit(
+        index: usize,
+        next_group: &[Option<usize>],
+        state: &mut [u8],
+        order: &mut Vec<usize>,
+    ) -> bool {
+        match state[index] {
+            1 => return false,
+            2 => return true,
+            _ => {}
+        }
+        state[index] = 1;
+        if let Some(next) = next_group[index]
+            && !visit(next, next_group, state, order)
+        {
+            return false;
+        }
+        state[index] = 2;
+        order.push(index);
+        true
+    }
+    for index in 0..groups.len() {
+        if !visit(index, &next_group, &mut state, &mut order) {
+            return None;
+        }
+    }
+    order.reverse();
+    let mut out = Vec::with_capacity(groups.len());
+    for (position, &index) in order.iter().enumerate() {
+        let (target, cases) = groups.get(index)?;
+        let fallthrough = next_group[index]
+            .filter(|next| order.get(position + 1) == Some(next))
+            .and_then(|next| groups.get(next).map(|(target, _)| *target));
+        out.push((*target, cases.clone(), fallthrough));
+    }
+    Some(out)
+}
+
+fn is_const_token(value: &str) -> bool {
+    let value = value.trim();
+    let value = value.strip_prefix('-').unwrap_or(value);
+    !value.is_empty()
+        && (value.starts_with("0x")
+            || value.starts_with("0X")
+            || value.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn parse_equality(cond: &str) -> Option<(String, String, bool)> {
+    if cond.contains(" && ") || cond.contains(" || ") {
+        return None;
+    }
+    for (op, case_true) in [(" == ", true), (" != ", false)] {
+        let Some((left, right)) = cond.split_once(op) else {
+            continue;
+        };
+        let (expr, value) = if is_const_token(right) && !is_const_token(left) {
+            (left, right)
+        } else if is_const_token(left) && !is_const_token(right) {
+            (right, left)
+        } else {
+            return None;
+        };
+        let expr = expr.trim();
+        let value = value.trim();
+        if expr.is_empty() || value.is_empty() {
+            return None;
+        }
+        return Some((expr.to_string(), value.to_string(), case_true));
+    }
+    None
+}
+
+fn dispatch_block_is_pure(ctx: &WalkCtx<'_>, block: usize) -> bool {
+    ctx.bops.get(block).is_some_and(|ops| {
+        ops.iter().all(|(_, op)| {
+            matches!(
+                op,
+                POp::Cmp { .. }
+                    | POp::Test { .. }
+                    | POp::CBranch { .. }
+                    | POp::Branch { .. }
+            )
+        })
+    })
+}
+
+fn detect_compare_chain(ctx: &WalkCtx<'_>, start: usize, join: usize) -> Option<CompareChain> {
+    let n = ctx.cfg.blocks.len();
+    if start >= n || join >= n {
+        return None;
+    }
+    let mut cur = start;
+    let mut expr: Option<String> = None;
+    let mut cases: Vec<CompareCase> = Vec::new();
+    let mut checks: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::default();
+
+    for _ in 0..64 {
+        if cur >= n || !seen.insert(cur) || !dispatch_block_is_pure(ctx, cur) {
+            break;
+        }
+        let block = &ctx.cfg.blocks[cur];
+        if block.successors.len() != 2 {
+            break;
+        }
+        let true_edge = block
+            .successors
+            .iter()
+            .find(|e| e.kind == EdgeKind::BranchTrue);
+        let false_edge = block
+            .successors
+            .iter()
+            .find(|e| e.kind == EdgeKind::BranchFalse);
+        let (Some(true_edge), Some(false_edge)) = (true_edge, false_edge) else {
+            break;
+        };
+        let consts = ctx.block_consts.get(cur).cloned().unwrap_or_default();
+        let cond = recover_condition(
+            ctx.cfg,
+            ctx.bops,
+            ctx.imap,
+            cur,
+            &consts,
+            Some(ctx.hints),
+        );
+        let Some((cond_expr, value, case_true)) = parse_equality(&cond) else {
+            break;
+        };
+        if let Some(prev) = &expr {
+            if prev != &cond_expr {
+                break;
+            }
+        } else {
+            expr = Some(cond_expr);
+        }
+        if cases.iter().any(|c| c.value == value) {
+            break;
+        }
+        let (case, next) = if case_true {
+            (true_edge.target, false_edge.target)
+        } else {
+            (false_edge.target, true_edge.target)
+        };
+        if case == next
+            || case == start
+            || case == join
+            || checks.contains(&case)
+            || cases.iter().any(|c| c.target == case)
+        {
+            break;
+        }
+        cases.push(CompareCase { value, target: case });
+        checks.push(cur);
+        cur = next;
+    }
+
+    if cases.len() < 2 || checks.contains(&join) || cur == start || cur >= n {
+        return None;
+    }
+    let default = (cur != join && !checks.contains(&cur)).then_some(cur);
+    if default.is_some_and(|d| cases.iter().any(|c| c.target == d)) {
+        return None;
+    }
+    Some(CompareChain {
+        expr: expr?,
+        cases,
+        checks,
+        default,
+        join,
+    })
+}
+
+fn region_hits_forbidden(
+    ctx: &WalkCtx<'_>,
+    start: usize,
+    join: usize,
+    forbidden: &HashSet<usize>,
+) -> bool {
+    let mut seen: HashSet<usize> = HashSet::default();
+    let mut stack = vec![start];
+    while let Some(block) = stack.pop() {
+        if block == join || !seen.insert(block) || block >= ctx.cfg.blocks.len() {
+            continue;
+        }
+        if block != start && ctx.loops.get(block).is_some() {
+            continue;
+        }
+        if block != start && forbidden.contains(&block) {
+            return true;
+        }
+        for edge in &ctx.cfg.blocks[block].successors {
+            stack.push(edge.target);
+        }
+    }
+    false
+}
+
+fn compare_chain_is_safe(ctx: &WalkCtx<'_>, chain: &CompareChain) -> bool {
+    let mut forbidden: HashSet<usize> = chain.checks.iter().copied().collect();
+    forbidden.extend(chain.cases.iter().map(|c| c.target));
+    if let Some(default) = chain.default {
+        forbidden.insert(default);
+    }
+    for case in &chain.cases {
+        if case.target == chain.join {
+            continue;
+        }
+        let mut excluded = forbidden.clone();
+        excluded.remove(&case.target);
+        if region_hits_forbidden(ctx, case.target, chain.join, &excluded) {
+            return false;
+        }
+    }
+    if let Some(default) = chain.default
+        && default != chain.join
+    {
+        let mut excluded = forbidden;
+        excluded.remove(&default);
+        if region_hits_forbidden(ctx, default, chain.join, &excluded) {
+            return false;
+        }
+    }
+    true
+}
+
+fn switch_case_ends_terminally(lines: &[PseudoLine], start: usize) -> bool {
+    lines[start..]
+        .iter()
+        .rev()
+        .find(|l| l.kind != LineKind::Comment && !l.text.trim().is_empty())
+        .is_some_and(|l| {
+            let text = l.text.trim();
+            text.starts_with("return")
+                || text.starts_with("goto ")
+                || text == "break;"
+                || text == "continue;"
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_render_compare_switch(
+    ctx: &WalkCtx<'_>,
+    block_id: usize,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) -> bool {
+    let Some(join) = ctx.postdom.join_of(block_id) else {
+        return false;
+    };
+    let Some(chain) = detect_compare_chain(ctx, block_id, join) else {
+        return false;
+    };
+    if !compare_chain_is_safe(ctx, &chain)
+        || chain.cases.iter().any(|c| visited.contains(&c.target))
+        || chain
+            .default
+            .is_some_and(|d| d != join && visited.contains(&d))
+    {
+        return false;
+    }
+
+    let saved_visited = visited.clone();
+    let saved_bytes = ctx.hints.out_bytes.get();
+    let start_lines = lines.len();
+    for check in &chain.checks {
+        visited.insert(*check);
+    }
+
+    let mut case_stops = stops.to_vec();
+    if !case_stops.contains(&join) {
+        case_stops.push(join);
+    }
+    for case in &chain.cases {
+        if !case_stops.contains(&case.target) {
+            case_stops.push(case.target);
+        }
+    }
+    if let Some(default) = chain.default
+        && !case_stops.contains(&default)
+    {
+        case_stops.push(default);
+    }
+
+    let case_ctx = WalkCtx {
+        clone: true,
+        clone_depth: ctx.clone_depth + 1,
+        ..*ctx
+    };
+
+    lines.push(PseudoLine {
+        indent,
+        text: format!("switch ({}) {{", chain.expr),
+        kind: LineKind::Branch,
+        source_addr: Some(ctx.cfg.blocks[block_id].start),
+    });
+
+    let mut groups: Vec<(usize, Vec<String>)> = Vec::new();
+    for case in &chain.cases {
+        if let Some((_, values)) = groups.iter_mut().find(|(target, _)| *target == case.target) {
+            values.push(case.value.clone());
+        } else {
+            groups.push((case.target, vec![case.value.clone()]));
+        }
+    }
+    for (target, values) in groups {
+        for value in values {
+            lines.push(PseudoLine {
+                indent: indent + 1,
+                text: format!("case {value}:"),
+                kind: LineKind::Branch,
+                source_addr: Some(ctx.cfg.blocks[target].start),
+            });
+        }
+        let body_start = lines.len();
+        if target != join && !visited.contains(&target) {
+            let arm_stops: Vec<usize> = case_stops
+                .iter()
+                .copied()
+                .filter(|stop| *stop != target)
+                .collect();
+            walk_arm(
+                &case_ctx,
+                target,
+                visited,
+                lines,
+                indent + 1,
+                depth,
+                &arm_stops,
+                Some(join),
+            );
+        }
+        if !switch_case_ends_terminally(lines, body_start) {
+            lines.push(PseudoLine {
+                indent: indent + 1,
+                text: "break;".into(),
+                kind: LineKind::Branch,
+                source_addr: None,
+            });
+        }
+    }
+
+    if let Some(default) = chain.default
+        && default != join
+    {
+        lines.push(PseudoLine {
+            indent: indent + 1,
+            text: "default:".into(),
+            kind: LineKind::Branch,
+            source_addr: Some(ctx.cfg.blocks[default].start),
+        });
+        let body_start = lines.len();
+        if !visited.contains(&default) {
+            let arm_stops: Vec<usize> = case_stops
+                .iter()
+                .copied()
+                .filter(|stop| *stop != default)
+                .collect();
+            walk_arm(
+                &case_ctx,
+                default,
+                visited,
+                lines,
+                indent + 1,
+                depth,
+                &arm_stops,
+                Some(join),
+            );
+        }
+        if !switch_case_ends_terminally(lines, body_start) {
+            lines.push(PseudoLine {
+                indent: indent + 1,
+                text: "break;".into(),
+                kind: LineKind::Branch,
+                source_addr: None,
+            });
+        }
+    }
+
+    lines.push(PseudoLine {
+        indent,
+        text: "}".into(),
+        kind: LineKind::Branch,
+        source_addr: None,
+    });
+    if !visited.contains(&join) && !stops.contains(&join) {
+        let join_needs_label = ctx.cfg.blocks[join].predecessors.iter().any(|p| {
+            !chain.checks.contains(p)
+                && !chain.cases.iter().any(|c| c.target == *p)
+                && chain.default != Some(*p)
+        });
+        let join_ctx = if join_needs_label { ctx } else { &case_ctx };
+        walk_region(
+            join_ctx,
+            join,
+            visited,
+            lines,
+            indent,
+            depth + 1,
+            stops,
+        );
+    }
+
+    let rendered = lines[start_lines..]
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if rendered.contains("goto ")
+        || rendered.contains("LAB_")
+        || rendered.contains("WARNING")
+        || rendered.contains("truncated")
+    {
+        lines.truncate(start_lines);
+        *visited = saved_visited;
+        ctx.hints.out_bytes.set(saved_bytes);
+        return false;
+    }
+
+    let added: usize = lines[start_lines..]
+        .iter()
+        .map(|l| l.text.len() + 8)
+        .sum();
+    ctx.hints.out_bytes.set(saved_bytes + added);
+    true
+}
+
 fn walk_region(
     ctx: &WalkCtx<'_>,
     block_id: usize,
@@ -893,6 +1376,12 @@ fn walk_region(
     if switch_active {
         let table = switch_table.expect("switch_active requires a table");
         let groups = switch_groups.as_ref().expect("switch_active requires groups");
+        let ordered = switch_fallthrough_order(cfg, groups, switch_join).unwrap_or_else(|| {
+            groups
+                .iter()
+                .map(|(target, cases)| (*target, cases.clone(), None))
+                .collect()
+        });
         let saved_visited = visited.clone();
         let saved_bytes = hints.out_bytes.get();
         let switch_start = lines.len();
@@ -913,7 +1402,7 @@ fn walk_region(
             kind: LineKind::Branch,
             source_addr: Some(table.jump_addr),
         });
-        for (target, cases) in groups {
+        for (target, cases, fallthrough) in &ordered {
             for &case in cases {
                 lines.push(PseudoLine {
                     indent: indent + 1,
@@ -928,6 +1417,13 @@ fn walk_region(
             let Some(&case_block) = cfg.block_at.get(target) else {
                 continue;
             };
+            let mut body_stops = case_stops.clone();
+            if let Some(fallthrough) = fallthrough
+                && let Some(&next_block) = cfg.block_at.get(fallthrough)
+                && !body_stops.contains(&next_block)
+            {
+                body_stops.push(next_block);
+            }
             let body_start = lines.len();
             if case_block != block_id {
                 if visited.contains(&case_block) {
@@ -938,7 +1434,7 @@ fn walk_region(
                         lines,
                         indent + 1,
                         depth,
-                        &case_stops,
+                        &body_stops,
                         switch_join,
                     );
                 } else {
@@ -949,21 +1445,11 @@ fn walk_region(
                         lines,
                         indent + 1,
                         depth + 1,
-                        &case_stops,
+                        &body_stops,
                     );
                 }
             }
-            let last = lines[body_start..]
-                .iter()
-                .rev()
-                .find(|l| l.kind != LineKind::Comment && !l.text.trim().is_empty());
-            if !last.is_some_and(|l| {
-                let t = l.text.trim();
-                t.starts_with("return")
-                    || t.starts_with("goto ")
-                    || t == "break;"
-                    || t == "continue;"
-            }) {
+            if fallthrough.is_none() && !switch_case_ends_terminally(lines, body_start) {
                 lines.push(PseudoLine {
                     indent: indent + 1,
                     text: "break;".into(),
@@ -990,8 +1476,6 @@ fn walk_region(
             .collect::<Vec<_>>()
             .join("\n");
         if rendered.contains("goto ") || rendered.contains("LAB_") || rendered.contains("WARNING") {
-            
-            
             lines.truncate(switch_start);
             hints.out_bytes.set(saved_bytes);
             *visited = saved_visited;
@@ -1017,6 +1501,9 @@ fn walk_region(
                 });
             }
         }
+        return;
+    }
+    if try_render_compare_switch(ctx, block_id, visited, lines, indent, depth, stops) {
         return;
     }
     if let Some(&last_addr) = addrs.last()
@@ -2466,6 +2953,372 @@ mod cleanup_tests {
             !lines.iter().any(|l| l.text.contains("goto")),
             "join clone must not emit a goto"
         );
+    }
+
+    #[test]
+    fn compare_chain_renders_a_switch_without_gotos() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        use crate::disasm::operand_enum::OperandList;
+        use crate::disasm::{DisasmInstruction, InsnBytes};
+
+        let edge = |target: usize, kind: EdgeKind| Edge { target, kind };
+        let mut blocks = vec![
+            BasicBlock {
+                id: 0,
+                start: 0x1000,
+                end: 0x1010,
+                instr_indices: 0..1,
+                successors: vec![edge(3, EdgeKind::BranchTrue), edge(1, EdgeKind::BranchFalse)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 1,
+                start: 0x1010,
+                end: 0x1020,
+                instr_indices: 1..2,
+                successors: vec![edge(4, EdgeKind::BranchTrue), edge(2, EdgeKind::BranchFalse)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 2,
+                start: 0x1020,
+                end: 0x1030,
+                instr_indices: 2..3,
+                successors: vec![edge(5, EdgeKind::BranchTrue), edge(6, EdgeKind::BranchFalse)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 3,
+                start: 0x1030,
+                end: 0x1040,
+                instr_indices: 3..4,
+                successors: vec![edge(7, EdgeKind::Jump)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 4,
+                start: 0x1040,
+                end: 0x1050,
+                instr_indices: 4..5,
+                successors: vec![edge(7, EdgeKind::Jump)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 5,
+                start: 0x1050,
+                end: 0x1060,
+                instr_indices: 5..6,
+                successors: vec![edge(7, EdgeKind::Jump)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 6,
+                start: 0x1060,
+                end: 0x1070,
+                instr_indices: 6..7,
+                successors: vec![edge(7, EdgeKind::Jump)],
+                predecessors: vec![],
+            },
+            BasicBlock {
+                id: 7,
+                start: 0x1070,
+                end: 0x1080,
+                instr_indices: 7..8,
+                successors: vec![],
+                predecessors: vec![],
+            },
+        ];
+        for source in 0..blocks.len() {
+            for edge in blocks[source].successors.clone() {
+                blocks[edge.target].predecessors.push(source);
+            }
+        }
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks,
+            block_at: Default::default(),
+        };
+
+        let cmp1 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(1),
+            size: 8,
+        };
+        let cmp2 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(2),
+            size: 8,
+        };
+        let cmp3 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(3),
+            size: 8,
+        };
+        let br1 = POp::CBranch {
+            target: 0x1030,
+            cond: "je".into(),
+        };
+        let br2 = POp::CBranch {
+            target: 0x1040,
+            cond: "je".into(),
+        };
+        let br3 = POp::CBranch {
+            target: 0x1050,
+            cond: "je".into(),
+        };
+        let case1 = POp::Branch { target: 0x1070 };
+        let case2 = POp::Branch { target: 0x1070 };
+        let case3 = POp::Branch { target: 0x1070 };
+        let default = POp::Branch { target: 0x1070 };
+        let ret = POp::Return;
+        let bops: Vec<Vec<(u64, &POp)>> = vec![
+            vec![(0x1000, &cmp1), (0x1002, &br1)],
+            vec![(0x1010, &cmp2), (0x1012, &br2)],
+            vec![(0x1020, &cmp3), (0x1022, &br3)],
+            vec![(0x1030, &case1)],
+            vec![(0x1040, &case2)],
+            vec![(0x1050, &case3)],
+            vec![(0x1060, &default)],
+            vec![(0x1070, &ret)],
+        ];
+        let insn = |address: u64, mnemonic: &'static str, operands: &str| DisasmInstruction {
+            address,
+            bytes: InsnBytes::from_slice(&[0x90]),
+            mnemonic,
+            operands: OperandList::Text(operands.into()),
+        };
+        let imap = vec![
+            insn(0x1000, "cmp", "rax, 1"),
+            insn(0x1002, "je", "0x1030"),
+            insn(0x1010, "cmp", "rax, 2"),
+            insn(0x1012, "je", "0x1040"),
+            insn(0x1020, "cmp", "rax, 3"),
+            insn(0x1022, "je", "0x1050"),
+        ];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> =
+            (0..cfg.blocks.len()).map(|_| HashMap::default()).collect();
+        let func_lookup = HashMap::default();
+        let back_edges = HashMap::default();
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &imap,
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            switches: &[],
+            clone: false,
+            clone_depth: 0,
+        };
+        let mut visited: HashSet<usize> = HashSet::default();
+        assert_eq!(postdom.join_of(0), Some(7));
+        let chain = detect_compare_chain(&ctx, 0, 7).expect("compare chain");
+        assert_eq!(chain.cases.len(), 3);
+        let mut lines = Vec::new();
+        walk_block(&ctx, 0, &mut visited, &mut lines, 0, 0);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("switch (rax) {"), "{text}");
+        assert!(text.contains("case 1:"), "{text}");
+        assert!(text.contains("case 2:"), "{text}");
+        assert!(text.contains("case 3:"), "{text}");
+        assert!(text.contains("default:"), "{text}");
+        assert!(!text.contains("goto "), "{text}");
+        assert!(!text.contains("LAB_"), "{text}");
+    }
+
+    #[test]
+    fn state_machine_loop_renders_switch_and_continues() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        use crate::disasm::operand_enum::OperandList;
+        use crate::disasm::{DisasmInstruction, InsnBytes};
+
+        let edge = |target: usize, kind: EdgeKind| Edge { target, kind };
+        let spec: Vec<Vec<(usize, EdgeKind)>> = vec![
+            vec![(1, EdgeKind::Jump), (8, EdgeKind::BranchFalse)],
+            vec![(4, EdgeKind::BranchTrue), (2, EdgeKind::BranchFalse)],
+            vec![(5, EdgeKind::BranchTrue), (3, EdgeKind::BranchFalse)],
+            vec![(6, EdgeKind::BranchTrue), (7, EdgeKind::BranchFalse)],
+            vec![(0, EdgeKind::Jump)],
+            vec![(0, EdgeKind::Jump)],
+            vec![(0, EdgeKind::Jump)],
+            vec![(0, EdgeKind::Jump)],
+            vec![],
+        ];
+        let mut blocks: Vec<BasicBlock> = spec
+            .into_iter()
+            .enumerate()
+            .map(|(id, succ)| BasicBlock {
+                id,
+                start: 0x2000 + id as u64 * 0x10,
+                end: 0x2010 + id as u64 * 0x10,
+                instr_indices: id..id + 1,
+                successors: succ.into_iter().map(|(t, k)| edge(t, k)).collect(),
+                predecessors: vec![],
+            })
+            .collect();
+        for source in 0..blocks.len() {
+            for edge in blocks[source].successors.clone() {
+                blocks[edge.target].predecessors.push(source);
+            }
+        }
+        let cfg = CFG {
+            func_entry: 0x2000,
+            blocks,
+            block_at: Default::default(),
+        };
+
+        let cmp0 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(0),
+            size: 8,
+        };
+        let cmp1 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(1),
+            size: 8,
+        };
+        let cmp2 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(2),
+            size: 8,
+        };
+        let cmp3 = POp::Cmp {
+            a: PVar::Reg("rax"),
+            b: PVar::Const(3),
+            size: 8,
+        };
+        let br0 = POp::CBranch {
+            target: 0x2010,
+            cond: "jne".into(),
+        };
+        let br1 = POp::CBranch {
+            target: 0x2040,
+            cond: "je".into(),
+        };
+        let br2 = POp::CBranch {
+            target: 0x2050,
+            cond: "je".into(),
+        };
+        let br3 = POp::CBranch {
+            target: 0x2060,
+            cond: "je".into(),
+        };
+        let back1 = POp::Branch { target: 0x2000 };
+        let back2 = POp::Branch { target: 0x2000 };
+        let back3 = POp::Branch { target: 0x2000 };
+        let back4 = POp::Branch { target: 0x2000 };
+        let ret = POp::Return;
+        let bops: Vec<Vec<(u64, &POp)>> = vec![
+            vec![(0x2000, &cmp0), (0x2002, &br0)],
+            vec![(0x2010, &cmp1), (0x2012, &br1)],
+            vec![(0x2020, &cmp2), (0x2022, &br2)],
+            vec![(0x2030, &cmp3), (0x2032, &br3)],
+            vec![(0x2040, &back1)],
+            vec![(0x2050, &back2)],
+            vec![(0x2060, &back3)],
+            vec![(0x2070, &back4)],
+            vec![(0x2080, &ret)],
+        ];
+        let insn = |address: u64, mnemonic: &'static str, operands: &str| DisasmInstruction {
+            address,
+            bytes: InsnBytes::from_slice(&[0x90]),
+            mnemonic,
+            operands: OperandList::Text(operands.into()),
+        };
+        let imap = vec![
+            insn(0x2000, "cmp", "rax, 0"),
+            insn(0x2002, "jne", "0x2010"),
+            insn(0x2010, "cmp", "rax, 1"),
+            insn(0x2012, "je", "0x2040"),
+            insn(0x2020, "cmp", "rax, 2"),
+            insn(0x2022, "je", "0x2050"),
+            insn(0x2030, "cmp", "rax, 3"),
+            insn(0x2032, "je", "0x2060"),
+        ];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> =
+            (0..cfg.blocks.len()).map(|_| HashMap::default()).collect();
+        let func_lookup = HashMap::default();
+        let mut back_edges = HashMap::default();
+        back_edges.insert(0, 4);
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[(0, 4), (0, 5), (0, 6), (0, 7)]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &imap,
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            switches: &[],
+            clone: false,
+            clone_depth: 0,
+        };
+        let mut visited: HashSet<usize> = HashSet::default();
+        let mut lines = Vec::new();
+        walk_block(&ctx, 0, &mut visited, &mut lines, 0, 0);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("switch (rax) {"), "{text}");
+        assert!(text.contains("case 1:"), "{text}");
+        assert!(text.contains("continue;"), "{text}");
+        assert!(!text.contains("goto "), "{text}");
+        assert!(!text.contains("LAB_"), "{text}");
+    }
+
+    #[test]
+    fn switch_groups_follow_unconditional_fallthrough_order() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        let block = |id: usize, target: Option<usize>| BasicBlock {
+            id,
+            start: 0x3000 + id as u64 * 0x10,
+            end: 0x3010 + id as u64 * 0x10,
+            instr_indices: id..id + 1,
+            successors: target
+                .map(|target| vec![Edge { target, kind: EdgeKind::Jump }])
+                .unwrap_or_default(),
+            predecessors: vec![],
+        };
+        let cfg = CFG {
+            func_entry: 0x3000,
+            blocks: vec![block(0, Some(1)), block(1, None)],
+            block_at: [(0x3000, 0), (0x3010, 1)].into_iter().collect(),
+        };
+        let groups = vec![(0x3000, vec![0]), (0x3010, vec![1])];
+        let order = switch_fallthrough_order(&cfg, &groups, None).expect("order");
+        assert_eq!(order.len(), 2);
+        assert_eq!(order[0].0, 0x3000);
+        assert_eq!(order[0].2, Some(0x3010));
+        assert_eq!(order[1].0, 0x3010);
+        assert_eq!(order[1].2, None);
     }
 
     #[test]
