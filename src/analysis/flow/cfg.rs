@@ -306,6 +306,7 @@ pub fn attach_switch_edges<'a>(
     }
 }
 
+
 fn is_terminator(m: &str) -> bool {
     matches!(
         m,
@@ -435,4 +436,47 @@ pub fn graph_layout(cfg: &CFG, max_lines: usize) -> (Vec<[f32; 2]>, Vec<f32>, Ve
         y += h + V_GAP;
     }
     (pos, heights, levels)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::disasm::types::{DisasmInstruction, InsnBytes};
+    use crate::disasm::operand_enum::OperandList;
+
+    fn ins(address: u64, mnemonic: &'static str, operands: &str) -> DisasmInstruction {
+        DisasmInstruction {
+            address,
+            bytes: InsnBytes::from_slice(&[0]),
+            mnemonic,
+            operands: OperandList::Text(operands.into()),
+        }
+    }
+
+    #[test]
+    fn switch_case_targets_survive_reachability_pruning() {
+        let insns = [
+            ins(0x1000, "jmp", "rax"),
+            ins(0x1002, "ret", ""),
+            ins(0x1004, "ret", ""),
+            ins(0x1006, "ret", ""),
+        ];
+        let mut cfg = build_cfg_with_targets(&insns, 0x1000, 0x1008, &[0x1004]);
+        let case = *cfg.block_at.get(&0x1004).expect("case target must be a leader");
+        assert_eq!(cfg.blocks[case].start, 0x1004);
+        let jump = cfg.blocks.iter().position(|b| b.start == 0x1000).unwrap();
+        let table = SwitchTable {
+            jump_addr: 0x1000,
+            table_addr: 0x2000,
+            case_count: 1,
+            case_targets: vec![0x1004],
+        };
+        attach_switch_edges(&mut cfg, [&table]);
+        assert!(
+            cfg.blocks[jump]
+                .successors
+                .iter()
+                .any(|edge| edge.target == case)
+        );
+    }
 }
