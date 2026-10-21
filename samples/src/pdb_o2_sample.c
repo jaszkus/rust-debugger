@@ -1,6 +1,6 @@
-//! Source for `tests/pdb_sample.exe` + `tests/pdb_sample.pdb` — rebuild with:
-//!   clang --target=x86_64-pc-windows-msvc -g -gcodeview -O0 -c tests/pdb_sample.c -o pdb.obj
-//!   lld-link pdb.obj /DEBUG:FULL /OUT:tests/pdb_sample.exe /PDB:tests/pdb_sample.pdb \
+//! Source for `samples/src/pdb_sample.exe` + `samples/src/pdb_sample.pdb` — rebuild with:
+//!   clang --target=x86_64-pc-windows-msvc -g -gcodeview -O0 -c samples/src/pdb_sample.c -o pdb.obj
+//!   lld-link pdb.obj /DEBUG:FULL /OUT:samples/src/pdb_sample.exe /PDB:samples/src/pdb_sample.pdb \
 //!       /NODEFAULTLIB /ENTRY:main /SUBSYSTEM:console
 //! Covers: struct with pointer cycle (Node.next), struct-by-value param
 //! (Point), enum used in a signature (Color), union (Mixed).

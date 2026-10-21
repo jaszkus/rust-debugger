@@ -2,7 +2,14 @@
 /secret/
 /samples/*
 !/samples/README.md
-!/samples/*.c
+!/samples/src/
+!/samples/src/*.c
+!/samples/*.exe
+!/samples/*.pdb
+!/samples/*.elf
+/samples/kernel32.dll
+/samples/notepad.exe
+/samples/x
 *.rdb
 recent_projects.txt
 backup-*.zip
