@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use iced::widget::{container, row};
+use iced::widget::{container, row, text_input};
 use iced::{Color, Element, Theme};
 
 use super::empty_state;
@@ -53,6 +53,9 @@ impl VListData for RowsData {
             None => Vec::new(),
         }
     }
+    fn menu_open_action(&self) -> Option<Message> {
+        Some(Message::AnimationTick)
+    }
     fn revision(&self) -> u64 {
         self.rev
     }
@@ -92,6 +95,53 @@ fn table_rev(shell: &Shell) -> u64 {
             .wrapping_mul(0xBF58476D1CE4E5B9)
             .wrapping_add(s.modification_number.wrapping_mul(0x94D049BB133111EB))
     })
+}
+
+fn toolbar<'a>(
+    content: Element<'a, Message, Theme, iced::Renderer>,
+) -> Element<'a, Message, Theme, iced::Renderer> {
+    container(content)
+        .padding(crate::gui::theme::pad4(10.0, 8.0, 8.0, 8.0))
+        .width(iced::Length::Fill)
+        .style(crate::gui::theme::flat_style)
+        .into()
+}
+
+fn filter_toolbar<'a>(
+    input: Element<'a, Message, Theme, iced::Renderer>,
+    meta: String,
+) -> Element<'a, Message, Theme, iced::Renderer> {
+    toolbar(
+        row![input, label(meta, T::Mute).size(11.5)]
+            .spacing(12)
+            .align_y(iced::alignment::Vertical::Center)
+            .into(),
+    )
+}
+
+fn search_field<'a>(
+    placeholder: &'static str,
+    value: &str,
+    on_input: fn(String) -> Message,
+) -> Element<'a, Message, Theme, iced::Renderer> {
+    let field = text_input(placeholder, value)
+        .on_input(on_input)
+        .style(crate::gui::theme::search_input_style)
+        .padding([5, 0])
+        .size(13)
+        .width(iced::Length::Fill);
+    container(
+        row![
+            crate::gui::theme::icon_t(crate::gui::theme::icon::SEARCH, 15.0, T::Mute),
+            field
+        ]
+        .spacing(7)
+        .align_y(iced::alignment::Vertical::Center),
+    )
+    .padding([3, 8])
+    .width(300)
+    .style(crate::gui::theme::search_box_style)
+    .into()
 }
 
 fn put_text(

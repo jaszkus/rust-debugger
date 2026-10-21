@@ -4,7 +4,7 @@ use iced::widget::{button, column, row, text_input};
 use iced::{Element, Theme};
 
 use super::super::empty_state;
-use super::{clamp_tab_first, put_text, table_rev, table_tokens};
+use super::{clamp_tab_first, put_text, table_rev, table_tokens, toolbar};
 use crate::gui::app::{Message, Shell};
 use crate::gui::theme::{label, Btn, T};
 use crate::gui::widgets::vlist::{vlist, VListData};
@@ -133,16 +133,22 @@ pub(crate) fn hex_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Render
     );
 
     column![
-        row![
-            text_input("bytes per row", &bpr.to_string())
-                .width(80)
-                .on_input(Message::HexBprEdited)
-                .style(crate::gui::theme::input_style),
-            button(label("Sync from listing", T::Dim))
-                .style(Btn::Quiet.style_fn())
-                .on_press_maybe(follow_row.map(|_| Message::HexScroll(None))),
-        ]
-        .spacing(8),
+        toolbar(
+            row![
+                text_input("Bytes per row", &bpr.to_string())
+                    .width(110)
+                    .on_input(Message::HexBprEdited)
+                    .style(crate::gui::theme::input_style)
+                    .padding([6, 8])
+                    .size(12.5),
+                button(label("Sync from listing", T::Dim))
+                    .style(Btn::Quiet.style_fn())
+                    .on_press_maybe(follow_row.map(|_| Message::HexScroll(None))),
+            ]
+            .spacing(10)
+            .align_y(iced::alignment::Vertical::Center)
+            .into(),
+        ),
         vlist(HexData {
             data,
             sections,
@@ -153,6 +159,6 @@ pub(crate) fn hex_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Render
             rev: table_rev(shell)
         })
     ]
-    .spacing(6)
+    .spacing(0)
     .into()
 }

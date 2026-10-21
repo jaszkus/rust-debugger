@@ -376,7 +376,7 @@ fn emit_operand_tokens(
     ops: &str,
     t: crate::gui::theme::Tokens,
     char_w: f32,
-) {
+) -> f32 {
     let mut offset = 0;
     for token in ops.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
         let word = token
@@ -414,6 +414,7 @@ fn emit_operand_tokens(
         emit(x + offset as f32 * char_w, token.into(), color);
         offset += token.chars().count();
     }
+    x + offset as f32 * char_w
 }
 
 fn build_row_tokens(snap: &ListingSnap, i: usize, char_w: f32) -> Vec<RowToken> {
@@ -478,9 +479,11 @@ fn build_row_tokens(snap: &ListingSnap, i: usize, char_w: f32) -> Vec<RowToken> 
             snap.xref_to_func.get(&insn.address).copied().unwrap_or(0)
         )
     });
-    if let Some(note) = function_note.as_ref() {
-        emit(ops_x + 220.0, note.clone(), t.mint);
-    }
+    let has_function_note = function_note.is_some();
+    let label = snap
+        .labels
+        .get(&insn.address)
+        .map(|l| format!("{}:", truncate_cols(l, 24)));
 
     let mut emit = |x: f32, text: String, color: Color| {
         if !text.is_empty() {
@@ -493,9 +496,6 @@ fn build_row_tokens(snap: &ListingSnap, i: usize, char_w: f32) -> Vec<RowToken> 
             });
         }
     };
-    if let Some(l) = snap.labels.get(&insn.address) {
-        emit(ops_x + 220.0, format!("{}:", truncate_cols(l, 24)), t.mint);
-    }
     emit(
         addr_x,
         format!("{:0width$X}", insn.address, width = snap.address_digits),
@@ -512,50 +512,60 @@ fn build_row_tokens(snap: &ListingSnap, i: usize, char_w: f32) -> Vec<RowToken> 
         if is_flow { t.link } else { t.mnemonic },
     );
     let ops = insn.ops();
-    if is_flow {
+    let mut note_x = if is_flow {
         match parse_addr_str(&ops)
             .and_then(|tgt| snap.func_lookup.get(&tgt).map(|n| (tgt, n.as_str())))
         {
             Some((tgt, n)) => {
                 let head = format!("{tgt:#x} ");
                 emit(ops_x, head.clone(), t.operand);
-                emit(
-                    ops_x + head.chars().count() as f32 * char_w,
-                    format!("<{n}>"),
-                    t.mint,
-                );
+                let name = format!("<{n}>");
+                let name_x = ops_x + head.chars().count() as f32 * char_w;
+                emit(name_x, name.clone(), t.mint);
+                name_x + name.chars().count() as f32 * char_w
             }
             None => emit_operand_tokens(&mut emit, ops_x, &ops, t, char_w),
         }
     } else {
-        emit_operand_tokens(&mut emit, ops_x, &ops, t, char_w);
-    }
+        emit_operand_tokens(&mut emit, ops_x, &ops, t, char_w)
+    };
 
-    let ops_cols = insn.ops().chars().count();
-    let eol_x = ops_x + (ops_cols + 1) as f32 * char_w;
+    const NOTE_GAP: f32 = 26.0;
+    note_x += NOTE_GAP;
+    if let Some(note) = function_note.as_ref() {
+        emit(note_x, note.clone(), t.mint);
+        note_x += note.chars().count() as f32 * char_w + NOTE_GAP;
+    }
+    if let Some(l) = label.as_ref() {
+        emit(note_x, l.clone(), t.mint);
+        note_x += l.chars().count() as f32 * char_w + NOTE_GAP;
+    }
     if let Some(c) = snap.comments.get(&insn.address) {
-        emit(eol_x, format!("; {c}"), t.annot);
-    } else if let Some(count) = snap.xref_to_func.get(&insn.address) {
-        if *count > 0 {
-            emit(
-                eol_x,
-                format!(
-                    "loc_{:X} ({} xref{})",
-                    insn.address,
-                    count,
-                    if *count == 1 { "" } else { "s" }
-                ),
-                t.annot,
-            );
-        }
-    } else if let Some(target) = first_addr_in_operands(&insn.ops())
-        && let Some(s) = snap.string_at.get(&target) {
-            let preview: &str = match s.char_indices().nth(60) {
-                Some((idx, _)) => &s[..idx],
-                None => s,
-            };
-            emit(eol_x, format!("; \"{preview}\""), t.string);
-        }
+        emit(note_x, format!("; {c}"), t.annot);
+    } else if !has_function_note
+        && let Some(count) = snap.xref_to_func.get(&insn.address)
+        && *count > 0
+    {
+        emit(
+            note_x,
+            format!(
+                "loc_{:X} ({} xref{})",
+                insn.address,
+                count,
+                if *count == 1 { "" } else { "s" }
+            ),
+            t.annot,
+        );
+    } else if !has_function_note
+        && let Some(target) = first_addr_in_operands(&insn.ops())
+        && let Some(s) = snap.string_at.get(&target)
+    {
+        let preview: &str = match s.char_indices().nth(60) {
+            Some((idx, _)) => &s[..idx],
+            None => s,
+        };
+        emit(note_x, format!("; \"{preview}\""), t.string);
+    }
     out
 }
 
@@ -630,6 +640,9 @@ impl VListData for ListingViewData {
     }
     fn menu_entries(&self, i: usize) -> Vec<(String, Message)> {
         VListData::menu_entries(&&self.snap, i)
+    }
+    fn menu_open_action(&self) -> Option<Message> {
+        Some(Message::AnimationTick)
     }
     fn paint_chrome(
         &self,

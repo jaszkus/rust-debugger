@@ -330,6 +330,7 @@ impl Shell {
     pub fn animating(&self) -> bool {
         self.anims.active(self.now)
             || self.toasts.animating(self.now)
+            || crate::gui::widgets::vlist::menu_animating()
             || self.read(|s| {
                 s.analysis_progress.is_some()
                     || (s.mcp_started_ms.is_some()

@@ -50,6 +50,9 @@ pub(crate) fn symbols_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Re
                 })
                 .unwrap_or_default()
         }
+        fn menu_open_action(&self) -> Option<Message> {
+            Some(Message::AnimationTick)
+        }
         fn revision(&self) -> u64 {
             self.rev
         }

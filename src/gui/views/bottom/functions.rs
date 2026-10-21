@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
-use iced::widget::{column, row, text_input};
+use iced::widget::column;
 use iced::{Element, Theme};
 
 use super::super::empty_state;
 use super::FUNCTION_COLUMNS;
-use super::{clamp_tab_first, lock, paint_columns, table_header, table_rev, table_tokens, FuncRow};
+use super::{
+    clamp_tab_first, filter_toolbar, lock, paint_columns, search_field, table_header, table_rev,
+    table_tokens, FuncRow,
+};
 use crate::gui::app::{Message, Shell};
-use crate::gui::theme::{label, T};
 use crate::gui::widgets::vlist::{vlist, VListData};
 
 pub(crate) fn functions_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer> {
@@ -44,7 +46,7 @@ pub(crate) fn functions_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::
                             };
                             let xrefs = a.xrefs.by_to.get(&f.entry).map(|v| v.len()).unwrap_or(0);
                             let name = match a.stubs.get(&f.entry) {
-                                Some(st) => format!("{}  → {}", f.name, st.target_name),
+                                Some(st) => format!("{}  -> {}", f.name, st.target_name),
                                 None => s.user_func_names.get(&f.entry).unwrap_or(&f.name).clone(),
                             };
                             (
@@ -108,6 +110,9 @@ pub(crate) fn functions_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::
                 })
                 .unwrap_or_default()
         }
+        fn menu_open_action(&self) -> Option<Message> {
+            Some(Message::AnimationTick)
+        }
         fn revision(&self) -> u64 {
             self.rev
         }
@@ -164,17 +169,17 @@ pub(crate) fn functions_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::
         .into()
     };
     column![
-        row![
-            text_input("Filter (name/addr)", &filter)
-                .width(220)
-                .on_input(Message::FuncFilterEdited)
-                .style(crate::gui::theme::input_style),
-            label(format!("({total} total)"), T::Mute),
-        ]
-        .spacing(8),
+        filter_toolbar(
+            search_field(
+                "Filter (name/addr)",
+                &filter,
+                Message::FuncFilterEdited
+            ),
+            format!("({total} total)"),
+        ),
         table_header(FUNCTION_COLUMNS),
         list
     ]
-    .spacing(6)
+    .spacing(0)
     .into()
 }

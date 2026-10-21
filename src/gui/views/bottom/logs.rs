@@ -65,11 +65,11 @@ const LOG_PAGE: usize = 100;
 const LOG_COLS: [Length; 5] = [
     Length::Fixed(64.0),
     Length::Fixed(64.0),
-    Length::Fixed(200.0),
-    Length::Fixed(240.0),
+    Length::Fixed(210.0),
+    Length::Fixed(320.0),
     Length::Fill,
 ];
-const LOG_GAP: f32 = 12.0;
+const LOG_GAP: f32 = 14.0;
 
 pub fn ai_logs_view(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer> {
     let filter = shell.ai_log_filter;
@@ -144,9 +144,13 @@ pub fn ai_logs_view(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer
             let inner = row![
                 container(mono(ev.time_str.clone(), T::Dim).size(12)).width(LOG_COLS[0]),
                 container(badge(ev.kind.label(), ev.is_error, t)).width(LOG_COLS[1]),
-                container(mono(ev.tool.clone(), T::Base).size(12)).width(LOG_COLS[2]),
-                container(mono(ev.target.clone(), T::Dim).size(12)).width(LOG_COLS[3]),
-                container(result_el).width(LOG_COLS[4]),
+                container(mono(elide_middle(&ev.tool, 26), T::Base).size(12))
+                    .width(LOG_COLS[2])
+                    .clip(true),
+                container(mono(elide_middle(&ev.target, 42), T::Dim).size(12))
+                    .width(LOG_COLS[3])
+                    .clip(true),
+                container(result_el).width(LOG_COLS[4]).clip(true),
             ]
             .spacing(LOG_GAP)
             .align_y(iced::alignment::Vertical::Center);
@@ -205,6 +209,22 @@ pub fn ai_logs_view(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer
 
     let _ = toolbar;
     body
+}
+
+fn elide_middle(s: &str, max: usize) -> String {
+    let len = s.chars().count();
+    if len <= max {
+        return s.to_string();
+    }
+    if max <= 5 {
+        return s.chars().take(max).collect();
+    }
+    let left = (max - 3) / 2;
+    let right = max - 3 - left;
+    let mut out: String = s.chars().take(left).collect();
+    out.push_str("...");
+    out.extend(s.chars().skip(len - right));
+    out
 }
 
 pub fn seg_button<'a>(

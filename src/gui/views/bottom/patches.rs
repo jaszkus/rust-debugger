@@ -50,6 +50,9 @@ pub(crate) fn patches_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Re
                 .map(|(_, _, v, _, _)| vec![("Undo patch here".into(), Message::PatchUndo(*v))])
                 .unwrap_or_default()
         }
+        fn menu_open_action(&self) -> Option<Message> {
+            Some(Message::AnimationTick)
+        }
         fn revision(&self) -> u64 {
             self.rev
         }

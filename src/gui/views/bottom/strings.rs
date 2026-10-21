@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
-use iced::widget::{column, row, text_input};
+use iced::widget::column;
 use iced::{Element, Theme};
 
 use super::super::empty_state;
 use super::STRING_COLUMNS;
-use super::{clamp_tab_first, paint_columns, table_header, table_rev, table_tokens};
+use super::{
+    clamp_tab_first, filter_toolbar, paint_columns, search_field, table_header, table_rev,
+    table_tokens,
+};
 use crate::gui::app::{Message, Shell};
-use crate::gui::theme::{label, T};
 use crate::gui::widgets::vlist::{vlist, VListData};
 
 pub(crate) fn strings_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Renderer> {
@@ -68,6 +70,9 @@ pub(crate) fn strings_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Re
                     ]
                 })
                 .unwrap_or_default()
+        }
+        fn menu_open_action(&self) -> Option<Message> {
+            Some(Message::AnimationTick)
         }
         fn copy_action(&self, i: usize) -> Option<Message> {
             self.indices
@@ -137,17 +142,13 @@ pub(crate) fn strings_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::Re
         .into()
     };
     column![
-        row![
-            text_input("Filter…", &filter)
-                .width(220)
-                .on_input(Message::FuncFilterEdited)
-                .style(crate::gui::theme::input_style),
-            label(format!("({shown} of {total})"), T::Mute),
-        ]
-        .spacing(8),
+        filter_toolbar(
+            search_field("Filter strings", &filter, Message::FuncFilterEdited),
+            format!("({shown} of {total})"),
+        ),
         table_header(STRING_COLUMNS),
         list
     ]
-    .spacing(6)
+    .spacing(0)
     .into()
 }
