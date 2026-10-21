@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["data/", "assets/", "target/"]
+extend-exclude = ["data/", "assets/", "target/", "THIRD_PARTY_LICENSES.md"]
 
 [default]
 extend-ignore-re = [
