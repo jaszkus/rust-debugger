@@ -57,6 +57,25 @@ fn user_home() -> Option<std::path::PathBuf> {
 pub(crate) fn config_path_for(home: &std::path::Path) -> std::path::PathBuf {
     home.join(".rust-debugger").join("config.json")
 }
+pub(crate) fn read_settings_from(path: &std::path::Path) -> Option<UiSettings> {
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+pub(crate) fn write_settings_to(
+    path: &std::path::Path,
+    settings: &UiSettings,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::rename(tmp, path).map_err(|e| e.to_string())
+}
 fn legacy_settings_path() -> Option<std::path::PathBuf> {
     if std::env::var_os("RD_SETTINGS_PATH").is_some() || cfg!(test) {
         return None;
@@ -325,22 +344,17 @@ impl Shell {
             return;
         }
         let path = settings_path();
-        let mut from_legacy = false;
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(_) => {
+        let (settings, from_legacy) = match read_settings_from(&path) {
+            Some(settings) => (settings, false),
+            None => {
                 let Some(legacy) = legacy_settings_path() else {
                     return;
                 };
-                let Ok(bytes) = std::fs::read(legacy) else {
+                let Some(settings) = read_settings_from(&legacy) else {
                     return;
                 };
-                from_legacy = true;
-                bytes
+                (settings, true)
             }
-        };
-        let Ok(settings) = serde_json::from_slice::<UiSettings>(&bytes) else {
-            return;
         };
         self.theme_mode = theme::AppThemeMode::from_idx(settings.theme);
         self.compact_rows = settings.compact;
@@ -421,16 +435,7 @@ impl Shell {
             hex_bytes_per_row,
         };
         let path = settings_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-        std::fs::rename(tmp, path).map_err(|e| e.to_string())
+        write_settings_to(&path, &settings)
     }
 
     pub fn server_on(&self) -> bool {

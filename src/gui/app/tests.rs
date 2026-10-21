@@ -620,6 +620,47 @@ mod stage1_tests {
     }
 
     #[test]
+    fn config_file_roundtrips_and_rejects_invalid_json() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rd-config-roundtrip-{}-{unique}.json",
+            std::process::id()
+        ));
+        let settings = UiSettings {
+            theme: 1,
+            compact: true,
+            collapsed: false,
+            side_ratio: 0.3,
+            bottom_ratio: 0.4,
+            bottom_tab: 2,
+            side_tab: 3,
+            show_recent_startup: true,
+            restore_last: true,
+            analyze_on_open: false,
+            allow_changes: false,
+            allow_execution: true,
+            ui_scale: 1.1,
+            mcp_port: 9000,
+            mcp_enabled: true,
+            hex_bytes_per_row: 32,
+        };
+        crate::gui::app::shell::write_settings_to(&path, &settings).unwrap();
+        let loaded = crate::gui::app::shell::read_settings_from(&path).expect("config read");
+        assert_eq!(loaded.theme, 1);
+        assert_eq!(loaded.bottom_tab, 2);
+        assert_eq!(loaded.side_tab, 3);
+        assert_eq!(loaded.mcp_port, 9000);
+        assert!(loaded.mcp_enabled);
+        assert_eq!(loaded.hex_bytes_per_row, 32);
+        std::fs::write(&path, b"{not valid").unwrap();
+        assert!(crate::gui::app::shell::read_settings_from(&path).is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn config_path_uses_rust_debugger_directory() {
         let path = crate::gui::app::shell::config_path_for(std::path::Path::new("home"));
         assert_eq!(
