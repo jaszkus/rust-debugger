@@ -110,8 +110,12 @@ fn white_mono<'a>(
 
 fn sig<'a>(name: String, rest: String) -> Element<'a, Message, Theme, iced::Renderer> {
     column![
-        white_mono(name, 12.0, iced::font::Weight::Medium).font(theme::mono_font()),
-        mono(rest, T::Dim).size(12),
+        container(white_mono(name, 12.0, iced::font::Weight::Medium).font(theme::mono_font()))
+            .width(Length::Fill)
+            .clip(true),
+        container(mono(rest, T::Dim).size(12))
+            .width(Length::Fill)
+            .clip(true),
     ]
     .spacing(2)
     .into()
@@ -123,7 +127,10 @@ fn kv_table<'a>(pairs: Vec<(String, String)>) -> Element<'a, Message, Theme, ice
         col = col.push(
             row![
                 container(label(k, T::Mute).size(12)).width(Length::Fill),
-                container(mono(v, T::Base).size(12)).align_x(iced::alignment::Horizontal::Right),
+                container(mono(v, T::Base).size(12))
+                    .width(Length::Fixed(140.0))
+                    .align_x(iced::alignment::Horizontal::Right)
+                    .clip(true),
             ]
             .align_y(iced::alignment::Vertical::Center),
         );
