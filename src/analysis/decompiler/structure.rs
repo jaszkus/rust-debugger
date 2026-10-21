@@ -6,8 +6,8 @@ use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 
-const MAX_CLONE_BLOCKS: usize = 16;
-const MAX_CLONE_LINES: usize = 100;
+const MAX_CLONE_BLOCKS: usize = 32;
+const MAX_CLONE_LINES: usize = 200;
 
 pub(crate) fn compute_dowhile(
     cfg: &CFG,
