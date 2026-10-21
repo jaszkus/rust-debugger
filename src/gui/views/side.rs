@@ -59,11 +59,20 @@ fn li_row<'a>(
     msg: Option<Message>,
 ) -> Element<'a, Message, Theme, iced::Renderer> {
     let body = row![
-        container(mono(left, T::Base).size(12)).width(Length::Fill),
-        container(label(note, T::Mute).size(11)).align_x(iced::alignment::Horizontal::Right),
+        container(mono(left, T::Base).size(12))
+            .width(Length::Fill)
+            .clip(true),
+        container(label(note, T::Mute).size(11))
+            .width(Length::Fixed(88.0))
+            .align_x(iced::alignment::Horizontal::Right),
     ]
+    .spacing(8)
     .align_y(iced::alignment::Vertical::Center);
-    let b = button(container(body).padding(theme::pad4(5.0, 8.0, 5.0, 8.0)))
+    let b = button(
+        container(body)
+            .width(Length::Fill)
+            .padding(theme::pad4(5.0, 8.0, 5.0, 8.0)),
+    )
         .padding(0)
         .width(Length::Fill)
         .style(|t: &Theme, status| iced::widget::button::Style {
