@@ -13,6 +13,7 @@ Static analysis, pcode decompilation, live debugging and an x86-64 emulator<br/>
 in one fast, self-contained workbench, with a GPU-accelerated GUI<br/>
 and an MCP server for AI agents.
 
+
 <br/>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
@@ -57,6 +58,11 @@ and an MCP server for AI agents.
 Rust Debugger brings the core of a classic reverse engineering suite into a single native binary: loader,
 disassembler, analyzer, decompiler, emulator and debugger. Use it from the GPU-accelerated GUI, from the
 command line, or remotely from AI agents over MCP.
+
+<img width="1920" height="1005" alt="image" src="https://github.com/user-attachments/assets/912448e6-61ed-47f0-9deb-3db68ccb8056" />
+<img width="1920" height="1005" alt="image" src="https://github.com/user-attachments/assets/20064bb2-0a13-4edd-8cdc-94a64bb22f35" />
+<img width="1920" height="1005" alt="image" src="https://github.com/user-attachments/assets/51c79841-e68a-485a-bfe6-d22db69b46c6" />
+
 
 | Highlight | Details |
 | --- | --- |
