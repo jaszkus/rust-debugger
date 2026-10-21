@@ -1,6 +1,8 @@
 /target
 /secret/
-/samples
+/samples/*
+!/samples/README.md
+!/samples/*.c
 *.rdb
 recent_projects.txt
 backup-*.zip

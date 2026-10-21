@@ -11,7 +11,7 @@
 
 Static analysis, pcode decompilation, live debugging and an x86-64 emulator<br/>
 in one fast, self-contained workbench, with a GPU-accelerated GUI<br/>
-and a **Ghidra-compatible MCP server** for AI agents.
+and an MCP server for AI agents.
 
 <br/>
 
@@ -61,7 +61,6 @@ command line, or remotely from AI agents over MCP.
 | Highlight | Details |
 | --- | --- |
 | **All-in-one** | Loader, disassembler, analyzer, decompiler, emulator and debugger in a single native binary. |
-| **Built for AI agents** | 200+ **Ghidra-compatible** MCP tool names, so existing Ghidra-MCP clients and prompts work out of the box. |
 | **Fast and headless-friendly** | Batch `--analyze` and `--serve` modes need no GPU. Analysis results are cached in compressed project files. |
 | **Modern GUI** | GPU-accelerated front-end built on `iced` / `wgpu` (Vulkan, DX12 or Metal). |
 | **Static and dynamic** | Move from disassembly to decompiled C-like code, then step through it live or dry-run it in the emulator. |
@@ -174,8 +173,7 @@ rust-debugger --serve 7777           # headless MCP server for AI agents
 
 ## MCP server
 
-Rust Debugger speaks **JSON-RPC over HTTP** on `127.0.0.1` and exposes **200+ Ghidra-compatible tool names**, so
-existing Ghidra-MCP clients and prompts work without changes.
+Rust Debugger speaks **JSON-RPC over HTTP** on `127.0.0.1` and exposes **200+ MCP tool names**.
 
 ```sh
 rust-debugger --serve 7777                         # endpoint: http://127.0.0.1:7777/mcp
@@ -642,7 +640,7 @@ Three front-ends (GUI, MCP server and CLI) share the same two engines: a **stati
 flowchart TB
     subgraph FE["Front-ends"]
         GUI["GUI<br/>iced / wgpu"]
-        MCP["MCP server<br/>200+ Ghidra-compatible tools"]
+        MCP["MCP server<br/>200+ tools"]
         CLI["CLI<br/>--analyze · --bench"]
     end
 
@@ -737,6 +735,7 @@ Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
   `data/StringModelLLR.bin` is a precomputed table derived from it.
   See [NOTICE](NOTICE) and [data/README.md](data/README.md).
 - Third-party Rust crates keep their own licenses.
+- Bundled fonts are listed with their licenses in [assets/README.md](assets/README.md).
 
 > [!IMPORTANT]
 > Rust Debugger is intended for **security research, malware analysis, interoperability and education**.

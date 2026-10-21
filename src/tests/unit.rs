@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests");
-    p.push(name);
-    p
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let sample = root.join("samples").join(name);
+    if sample.exists() {
+        return sample;
+    }
+    root.join("tests").join(name)
 }
 
 macro_rules! require_fixture {
@@ -784,7 +786,7 @@ fn sse_instructions_lift_without_unimplemented() {
 
 #[test]
 fn find_callsites_survives_incomplete_linear_disasm() {
-    let np = std::path::PathBuf::from(r"C:\Windows\System32\notepad.exe");
+    let np = fixture("notepad.exe");
     if !np.exists() {
         return;
     }
@@ -879,7 +881,7 @@ fn multibyte_nop_encoding_round_trips() {
 #[test]
 fn switch_table_targets_must_be_executable() {
     require_fixture!("kernel32.dll");
-    let np = std::path::PathBuf::from(r"C:\Windows\System32\notepad.exe");
+    let np = fixture("notepad.exe");
     let path = if np.exists() {
         np
     } else {

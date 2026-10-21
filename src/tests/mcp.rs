@@ -1,5 +1,15 @@
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+fn fixture_path(name: &str) -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let sample = root.join("samples").join(name);
+    if sample.exists() {
+        return sample;
+    }
+    root.join("tests").join(name)
+}
 
 fn rpc(port: u16, body: &str) -> serde_json::Value {
     let decoded = http_body(port, body);
@@ -251,7 +261,7 @@ fn mcp_markdown_mode_opt_in() {
 
 #[test]
 fn program_slots_roundtrip() {
-    let k32 = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/kernel32.dll");
+    let k32 = fixture_path("kernel32.dll");
     if !k32.exists() {
         eprintln!("skipped: fixture kernel32.dll not present");
         return;
@@ -749,7 +759,7 @@ fn mcp_tools_list_supports_pagination_and_lists_search_tools_first() {
 
 #[test]
 fn mcp_open_program_does_not_duplicate_loaded_binary() {
-    let k32 = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/kernel32.dll");
+    let k32 = fixture_path("kernel32.dll");
     if !k32.exists() {
         eprintln!("skipped: fixture kernel32.dll not present");
         return;
@@ -795,7 +805,7 @@ fn mcp_open_program_does_not_duplicate_loaded_binary() {
 
 #[test]
 fn mcp_composite_and_async_tools() {
-    let k32 = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/kernel32.dll");
+    let k32 = fixture_path("kernel32.dll");
     if !k32.exists() {
         eprintln!("skipped: fixture kernel32.dll not present");
         return;

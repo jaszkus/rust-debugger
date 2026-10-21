@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests");
-    p.push(name);
-    p
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let sample = root.join("samples").join(name);
+    if sample.exists() {
+        return sample;
+    }
+    root.join("tests").join(name)
 }
 
 struct Rng(u64);
