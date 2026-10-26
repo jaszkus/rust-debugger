@@ -678,6 +678,8 @@ pub(crate) fn recover_condition(
     let mut jcc_mnemonic = String::new();
     let mut ah_float_cmp: Option<(PVar, PVar)> = None;
     let mut ah_test_mask: Option<i64> = None;
+    let mut ops_since_sub: usize = usize::MAX;
+    let mut cmp_follows_sub = false;
 
     for (addr, op) in &bops[block_id] {
         if let Some(di) = imap_get(imap, *addr) {
@@ -693,9 +695,11 @@ pub(crate) fn recover_condition(
             POp::Cmp { a, b, size } => {
                 cmp_pair = Some((a.clone(), b.clone(), false));
                 cmp_size = *size;
+                cmp_follows_sub = ops_since_sub <= 1;
             }
             POp::Test { a, b, size } => {
                 cmp_size = *size;
+                cmp_follows_sub = ops_since_sub <= 1;
                 let is_ah = matches!(a, PVar::Reg(_))
                     && imap_get(imap, *addr)
                         .map(|d| d.ops().to_ascii_lowercase().starts_with("ah"))
@@ -734,6 +738,11 @@ pub(crate) fn recover_condition(
             }
             _ => {}
         }
+        if matches!(op, POp::IntSub { .. }) {
+            ops_since_sub = 0;
+        } else {
+            ops_since_sub = ops_since_sub.saturating_add(1);
+        }
     }
 
     if !jcc_mnemonic.is_empty()
@@ -755,6 +764,21 @@ pub(crate) fn recover_condition(
     }
 
     if let Some((a, b, is_test)) = cmp_pair {
+        if let Some((kind, fa, fb, dst)) = &flag_setter
+            && kind == "sub"
+            && cmp_follows_sub
+            && cmp_tests_flag_result(&a, &b, is_test, dst)
+            && let Some(cond) = flag_condition(
+                kind,
+                &cv(fa),
+                &cv(fb),
+                &jcc_mnemonic,
+                cmp_size,
+                is_test,
+            )
+        {
+            return cond;
+        }
         let av = cv(&a);
         let bv = cv(&b);
         return jcc_to_expr(&jcc_mnemonic, &av, &bv, is_test, cmp_size);
@@ -794,6 +818,49 @@ pub(crate) fn recover_condition(
     }
 
     "cond".into()
+}
+
+fn cmp_tests_flag_result(a: &PVar, b: &PVar, is_test: bool, dst: &str) -> bool {
+    if is_test {
+        return fmt_var(a) == dst && fmt_var(b) == dst;
+    }
+    let zero = |v: &PVar| matches!(v, PVar::Const(0) | PVar::Addr(0));
+    (fmt_var(a) == dst && zero(b)) || (fmt_var(b) == dst && zero(a))
+}
+
+fn flag_condition(
+    kind: &str,
+    a: &str,
+    b: &str,
+    jcc: &str,
+    size: u32,
+    is_test: bool,
+) -> Option<String> {
+    match kind {
+        "sub" => {
+            let cond = jcc_to_expr(jcc, a, b, false, size);
+            (cond != "cond").then_some(cond)
+        }
+        "and" | "or" | "xor" => {
+            let op = match kind {
+                "and" => "&",
+                "or" => "|",
+                _ => "^",
+            };
+            let expr = format!("({} {} {})", a, op, b);
+            let cond = result_cond(jcc, &expr);
+            (cond != "cond").then_some(cond)
+        }
+        "add" => {
+            if !is_test {
+                return None;
+            }
+            let expr = format!("({} + {})", a, b);
+            let cond = result_cond(jcc, &expr);
+            (cond != "cond").then_some(cond)
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn float_cc_via_mask(jcc: &str, mask: i64, a: &str, b: &str) -> String {
@@ -912,6 +979,33 @@ mod tests {
         set_addr_is_64(false);
         assert_eq!(fmt_var(&PVar::Addr(0x2000)), "DAT_2000");
         set_addr_is_64(true);
+    }
+
+    #[test]
+    fn subtraction_condition_folds_to_a_comparison() {
+        assert_eq!(
+            flag_condition("sub", "msg", "0x300", "je", 4, false).as_deref(),
+            Some("msg == 0x300")
+        );
+        assert_eq!(
+            flag_condition("sub", "a", "b", "jb", 8, false).as_deref(),
+            Some("(ulonglong)a < (ulonglong)b")
+        );
+        assert_eq!(
+            flag_condition("and", "a", "b", "je", 4, false).as_deref(),
+            Some("(a & b) == 0")
+        );
+        assert_eq!(flag_condition("add", "a", "b", "je", 4, false), None);
+    }
+
+    #[test]
+    fn cmp_of_flag_result_detects_the_same_register() {
+        let rax = PVar::Reg("rax");
+        assert!(cmp_tests_flag_result(&rax, &rax, true, "rax"));
+        assert!(cmp_tests_flag_result(&rax, &PVar::Const(0), false, "rax"));
+        assert!(cmp_tests_flag_result(&PVar::Const(0), &rax, false, "rax"));
+        assert!(!cmp_tests_flag_result(&rax, &PVar::Const(1), false, "rax"));
+        assert!(!cmp_tests_flag_result(&rax, &rax, true, "rbx"));
     }
 
     #[test]
