@@ -23,6 +23,7 @@ pub(crate) struct DecompileJob<'a> {
     pub thunk_targets: &'a HashMap<u64, u64>,
     pub cancel: &'a AtomicBool,
     pub is64: bool,
+    pub supports_decompiler: bool,
     pub progress_fn: &'a (dyn Fn(&str, usize) + Send + Sync),
 }
 
@@ -40,8 +41,12 @@ pub(crate) fn decompile_parallel(job: DecompileJob<'_>) -> HashMap<u64, Pseudoco
         thunk_targets,
         cancel,
         is64,
+        supports_decompiler,
         progress_fn,
     } = job;
+    if !supports_decompiler {
+        return HashMap::default();
+    }
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -106,6 +111,12 @@ pub fn decompile_on_demand(
     analysis: &mut AnalysisResult,
     addr: u64,
 ) -> Result<u64, String> {
+    if !matches!(disasm.arch.as_str(), "x86" | "x86_64") {
+        return Err(format!(
+            "decompiler supports x86/x86-64 only (arch: {})",
+            disasm.arch
+        ));
+    }
     let entry = analysis
         .functions
         .iter()
@@ -129,6 +140,12 @@ pub fn decompile_snapshot(
     analysis: &AnalysisResult,
     addr: u64,
 ) -> Result<(CFG, StackFrame, Pseudocode), String> {
+    if !matches!(disasm.arch.as_str(), "x86" | "x86_64") {
+        return Err(format!(
+            "decompiler supports x86/x86-64 only (arch: {})",
+            disasm.arch
+        ));
+    }
     let f = analysis
         .functions
         .iter()

@@ -952,6 +952,7 @@ fn auto_analyze_inner(
         switches: &switches,
         cancel,
         is64: disasm.arch.contains("64"),
+        supports_decompiler: matches!(disasm.arch.as_str(), "x86" | "x86_64"),
         is_win64,
         debug_types: debug_types.as_ref(),
         thunk_targets: &thunk_targets,

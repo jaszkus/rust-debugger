@@ -2633,6 +2633,10 @@ fn arm64_pipeline_disasm_functions_xrefs() {
     assert_eq!(calls.len(), 1, "one call edge expected");
     assert_eq!(calls[0].from, 0x400004);
     assert_eq!(calls[0].to, 0x40000c);
+    assert!(
+        res.pseudocode.is_empty(),
+        "the x86 decompiler must not run on ARM64 input"
+    );
 }
 
 #[test]
