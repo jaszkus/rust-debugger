@@ -7,6 +7,18 @@ use crate::analysis::flow::cfg::CFG;
 use crate::disasm::DisasmInstruction;
 use rustc_hash::FxHashMap as HashMap;
 
+thread_local! {
+    static ADDR_IS_64: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+pub(crate) fn set_addr_is_64(value: bool) {
+    ADDR_IS_64.with(|cell| cell.set(value));
+}
+
+fn is_small_abs_addr(value: u64) -> bool {
+    ADDR_IS_64.with(std::cell::Cell::get) && value <= u32::MAX as u64
+}
+
 pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
     let mut out = Vec::new();
     fn visit(v: &PVar, out: &mut Vec<&'static str>) {
@@ -459,6 +471,9 @@ pub(crate) fn fmt_load(
                     }
             format!("*({0} *)&{1}", ty, name)
         }
+        PVar::Addr(a) if is_small_abs_addr(*a) => {
+            format!("*({} *){}", ty, fmt_const(*a as i64))
+        }
         PVar::Addr(a) => format!("*({0} *)&DAT_{1:X}", ty, a),
         PVar::Reg(r) => {
             let base = reg_values
@@ -566,6 +581,7 @@ pub(crate) fn fmt_var(v: &PVar) -> String {
                 format!("*({} - {:#x})", inner, -disp)
             }
         }
+        PVar::Addr(a) if is_small_abs_addr(*a) => fmt_const(*a as i64),
         PVar::Addr(a) => format!("DAT_{:X}", a),
         PVar::Tmp(i) => format!("tmp_{}", i),
     }
@@ -887,6 +903,16 @@ pub(crate) fn jcc_only_expr(jcc: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_absolute_addresses_are_immediates_on_x64() {
+        set_addr_is_64(true);
+        assert_eq!(fmt_var(&PVar::Addr(0xffff_ffff)), "0xffffffff");
+        assert_eq!(fmt_var(&PVar::Addr(0x1_8000_0000)), "DAT_180000000");
+        set_addr_is_64(false);
+        assert_eq!(fmt_var(&PVar::Addr(0x2000)), "DAT_2000");
+        set_addr_is_64(true);
+    }
 
     #[test]
     fn unsigned_casts_follow_operand_width() {

@@ -454,6 +454,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         debug_types,
         cancel,
     } = input;
+    set_addr_is_64(is64);
     let mut stats = DecompStats {
         blocks: cfg.blocks.len(),
         ..Default::default()
@@ -1371,6 +1372,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     cleanup_labels(&mut lines);
     debug_check_braces("cleanup_labels", func_name, &lines, 0);
     alias::name_remaining_registers(&mut lines);
+    alias::inline_single_use_temps(&mut lines);
+    alias::propagate_aliases(&mut lines);
     ghidra_type_names(&mut lines);
     ghidra_function_names(&mut lines);
     debug_goto_classes(func_name, &lines);

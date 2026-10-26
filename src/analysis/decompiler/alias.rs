@@ -842,7 +842,7 @@ fn line_writes(text: &str, name: &str) -> bool {
 fn is_inlinable(name: &str) -> bool {
     
     
-    name.starts_with("tmp_")
+    name.starts_with("tmp_") || name.starts_with("uVar") || name.starts_with("fVar")
 }
 
 fn ident_count(text: &str, name: &str) -> usize {
@@ -1144,7 +1144,11 @@ fn is_number(s: &str) -> bool {
 fn is_removable(name: &str) -> bool {
     
     
-    name.starts_with("local_") || name.starts_with("arg_") || name.starts_with("tmp_")
+    name.starts_with("local_")
+        || name.starts_with("arg_")
+        || name.starts_with("tmp_")
+        || name.starts_with("uVar")
+        || name.starts_with("fVar")
 }
 
 
