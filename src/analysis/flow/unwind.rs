@@ -373,6 +373,10 @@ fn eh_frame_scan(binary: &ParsedBinary, addr_size: usize) -> Vec<u64> {
         }
         let is64 = hdr == 12;
         let id_pos = pos + hdr;
+        let id_len = if is64 { 8 } else { 4 };
+        if id_pos.checked_add(id_len).is_none_or(|end| end > rec_end) {
+            break;
+        }
         let cie_id: u64 = if is64 {
             u64::from_le_bytes(data[id_pos..id_pos + 8].try_into().unwrap())
         } else {
@@ -514,6 +518,12 @@ fn macho_function_starts(binary: &ParsedBinary) -> Vec<u64> {
         };
         let cmdsize = cmdsize_raw as usize;
         if cmdsize < 8 || off + cmdsize > d.len() {
+            break;
+        }
+        if cmd == LC_SEGMENT_64 && cmdsize < 72 {
+            break;
+        }
+        if cmd == LC_SEGMENT && cmdsize < 56 {
             break;
         }
         if cmd == LC_SEGMENT_64 {

@@ -337,6 +337,79 @@ fn unwind_pe_pdata_32bit_ignored() {
 }
 
 #[test]
+fn unwind_elf_truncated_eh_frame_does_not_panic() {
+    let mut data = vec![0xFF, 0xFF, 0xFF, 0xFF];
+    data.extend_from_slice(&[0u8; 8]);
+    let bin = ParsedBinary {
+        format: "ELF".into(),
+        arch: "x86_64".into(),
+        entry_point: 0x1000,
+        sections: vec![Section {
+            name: ".eh_frame".into(),
+            vaddr: 0x1000,
+            size: data.len() as u64,
+            offset: 0,
+            is_executable: false,
+            readable: true,
+            writable: false,
+            initialized: true,
+        }],
+        symbols: Vec::new(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        strings: Vec::new(),
+        data: Arc::new(data),
+        image_base: 0,
+        is_dll: false,
+        pe_characteristics: 0,
+        dll_characteristics: 0,
+        overlay: None,
+        tls_callbacks: Vec::new(),
+        delay_imports: Vec::new(),
+        has_rich: false,
+        libraries: Vec::new(),
+        rpaths: Vec::new(),
+        macho_uuid: None,
+        relocations: Vec::new(),
+    };
+    assert!(function_starts(&bin).is_empty());
+}
+
+#[test]
+fn unwind_macho_truncated_segment_command_does_not_panic() {
+    let mut data = vec![0u8; 40];
+    data[0..4].copy_from_slice(&0xfeed_facfu32.to_le_bytes());
+    data[16..20].copy_from_slice(&1u32.to_le_bytes());
+    data[20..24].copy_from_slice(&8u32.to_le_bytes());
+    data[32..36].copy_from_slice(&0x19u32.to_le_bytes());
+    data[36..40].copy_from_slice(&8u32.to_le_bytes());
+    let bin = ParsedBinary {
+        format: "Mach-O".into(),
+        arch: "x86_64".into(),
+        entry_point: 0,
+        sections: Vec::new(),
+        symbols: Vec::new(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        strings: Vec::new(),
+        data: Arc::new(data),
+        image_base: 0,
+        is_dll: false,
+        pe_characteristics: 0,
+        dll_characteristics: 0,
+        overlay: None,
+        tls_callbacks: Vec::new(),
+        delay_imports: Vec::new(),
+        has_rich: false,
+        libraries: Vec::new(),
+        rpaths: Vec::new(),
+        macho_uuid: None,
+        relocations: Vec::new(),
+    };
+    assert!(function_starts(&bin).is_empty());
+}
+
+#[test]
 fn unwind_elf_eh_frame_hdr_table() {
     let mut data = vec![0u8; 0x1000 + 32];
     let hdr: usize = 0x1000;
