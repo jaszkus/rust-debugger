@@ -3,6 +3,7 @@ pub mod expr;
 pub mod lifting;
 pub mod pcode;
 pub mod printing;
+pub mod ssa;
 pub mod structure;
 mod state_machine;
 

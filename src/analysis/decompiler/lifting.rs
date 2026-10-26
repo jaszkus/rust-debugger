@@ -1244,7 +1244,17 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let dowhile = compute_dowhile(cfg, &bops, imap, &back_edges, &block_consts, &hints);
     let postdom = Postdom::compute(cfg);
     let loops = Loops::compute(cfg, entry_id, &back_edge_list);
-    let dead = compute_dead_ops_g(&graph, entry_id, &bops, cancel);
+    let ssa = ssa::SsaFunction::build(cfg, &bops);
+    if let Some(view) = &ssa
+        && std::env::var_os("RD_DEBUG_SSA").is_some()
+        && let Err(err) = view.validate(cfg)
+    {
+        eprintln!("[ssa] {func_name}: {err}");
+    }
+    let mut dead = compute_dead_ops_g(&graph, entry_id, &bops, cancel);
+    if let Some(view) = &ssa {
+        dead.extend(view.dead_stmts(cfg, &bops));
+    }
     stats.dead_ops = dead.len();
     stats.t_dataflow = t_phase.elapsed();
     if is_cancelled(cancel) {
