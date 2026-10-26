@@ -6,13 +6,13 @@ use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 
-const MAX_CLONE_BLOCKS: usize = 16;
-const MAX_CLONE_LINES: usize = 80;
+const MAX_CLONE_BLOCKS: usize = 24;
+const MAX_CLONE_LINES: usize = 100;
 const MAX_CLONE_DEPTH: u8 = 2;
 const MAX_TINY_CLONE_DEPTH: u8 = 4;
 const TINY_CLONE_BLOCKS: usize = 4;
-const MAX_CLONES_PER_TARGET: u8 = 2;
-const MAX_CLONES_PER_TINY_TARGET: u8 = 6;
+const MAX_CLONES_PER_TARGET: u8 = 4;
+const MAX_CLONES_PER_TINY_TARGET: u8 = 8;
 
 thread_local! {
     static TAIL_CALL: std::cell::Cell<Option<(usize, u32)>> =
@@ -750,8 +750,10 @@ fn reg_live_after_block(ctx: &WalkCtx<'_>, block_id: usize, reg: &'static str) -
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_or_jump(
     ctx: &WalkCtx<'_>,
+    from: usize,
     target: usize,
     visited: &mut HashSet<usize>,
     lines: &mut Vec<PseudoLine>,
@@ -766,7 +768,7 @@ fn walk_or_jump(
         walk_region(ctx, target, visited, lines, indent, depth + 1, stops);
         return;
     }
-    if let Some(cloned) = clone_terminal_region(ctx, target, visited, indent, depth, stops) {
+    if let Some(cloned) = clone_visited_region(ctx, from, target, visited, indent, depth, stops) {
         lines.extend(cloned);
     } else {
         lines.push(PseudoLine {
@@ -788,7 +790,7 @@ fn memo_clear() {
 }
 
 fn clone_total_budget(ctx: &WalkCtx<'_>) -> usize {
-    (ctx.cfg.blocks.len() * 3).clamp(120, 1500)
+    (ctx.cfg.blocks.len() * 4).clamp(160, 1200)
 }
 
 fn clone_allowed(ctx: &WalkCtx<'_>, target: usize, region_blocks: usize) -> bool {
@@ -905,6 +907,7 @@ fn collect_clone_region(
     stop: Option<usize>,
     stops: &[usize],
     max_blocks: usize,
+    allow_loop_members: bool,
 ) -> Option<(HashSet<usize>, bool)> {
     let n = ctx.cfg.blocks.len();
     let in_loop = |b: usize| ctx.loops.get(b).is_some() || !ctx.loops.enclosing(b).is_empty();
@@ -916,7 +919,14 @@ fn collect_clone_region(
             reaches_stop = true;
             continue;
         }
-        if b >= n || stops.contains(&b) || in_loop(b) {
+        if b >= n || stops.contains(&b) {
+            return None;
+        }
+        if allow_loop_members {
+            if ctx.loops.get(b).is_some() {
+                return None;
+            }
+        } else if in_loop(b) {
             return None;
         }
         if !region.insert(b) {
@@ -970,6 +980,7 @@ fn finish_clone(
     truncated_before: bool,
     max_lines: usize,
     key: (usize, usize),
+    allow_actions: bool,
 ) -> Option<Vec<PseudoLine>> {
     let text = out
         .iter()
@@ -998,8 +1009,8 @@ fn finish_clone(
         || out.len() > max_lines
         || text.contains("LAB_")
         || text.contains("goto ")
-        || text.contains("continue;")
-        || (!has_switch && text.contains("break;"))
+        || (!allow_actions && text.contains("continue;"))
+        || (!allow_actions && !has_switch && text.contains("break;"))
         || text.contains("WARNING")
         || text.contains("truncated")
     {
@@ -1031,7 +1042,7 @@ fn clone_terminal_region(
         return None;
     }
     let (max_blocks, max_lines) = clone_budget(ctx, target);
-    let Some((region, _)) = collect_clone_region(ctx, target, None, &[], max_blocks) else {
+    let Some((region, _)) = collect_clone_region(ctx, target, None, &[], max_blocks, true) else {
         clone_mark_bad(ctx, key);
         return None;
     };
@@ -1054,7 +1065,7 @@ fn clone_terminal_region(
     };
     let mut out = Vec::new();
     walk_region(&clone_ctx, target, &mut cv, &mut out, indent, depth + 1, &[]);
-    finish_clone(ctx, out, bytes_before, truncated_before, max_lines, key)
+    finish_clone(ctx, out, bytes_before, truncated_before, max_lines, key, false)
 }
 
 fn clone_arm_region(
@@ -1079,7 +1090,7 @@ fn clone_arm_region(
     }
     let (max_blocks, max_lines) = clone_budget(ctx, target);
     let (region, reaches_stop) =
-        collect_clone_region(ctx, target, Some(stop), stops, max_blocks)?;
+        collect_clone_region(ctx, target, Some(stop), stops, max_blocks, false)?;
     if !reaches_stop {
         return None;
     }
@@ -1110,7 +1121,104 @@ fn clone_arm_region(
         depth + 1,
         &[stop],
     );
-    finish_clone(ctx, out, bytes_before, truncated_before, max_lines, key)
+    finish_clone(ctx, out, bytes_before, truncated_before, max_lines, key, false)
+}
+
+const MAX_ACTION_CLONE_BLOCKS: usize = 12;
+const MAX_ACTION_CLONE_LINES: usize = 80;
+
+fn clone_continue_region(
+    ctx: &WalkCtx<'_>,
+    from: usize,
+    target: usize,
+    visited: &HashSet<usize>,
+    indent: u32,
+    depth: usize,
+) -> Option<Vec<PseudoLine>> {
+    if ctx.clone_depth >= MAX_TINY_CLONE_DEPTH || target >= ctx.cfg.blocks.len() {
+        return None;
+    }
+    for header in ctx.loops.enclosing(from) {
+        let Some(info) = ctx.loops.get(header) else {
+            continue;
+        };
+        if target == header || !info.body.contains(&target) {
+            continue;
+        }
+        let key = (target, header);
+        if clone_known_bad(ctx, key) {
+            continue;
+        }
+        let (max_blocks, _) = clone_budget(ctx, target);
+        let Some((region, reaches_stop)) =
+            collect_clone_region(ctx, target, Some(header), &[], max_blocks, true)
+        else {
+            clone_mark_bad(ctx, key);
+            continue;
+        };
+        if !reaches_stop
+            || region.len() > MAX_ACTION_CLONE_BLOCKS
+            || !clone_allowed(ctx, target, region.len())
+        {
+            continue;
+        }
+        let mut cv = visited.clone();
+        for b in &region {
+            cv.remove(b);
+        }
+        let bytes_before = ctx.hints.out_bytes.get();
+        let truncated_before = ctx.hints.out_truncated.get();
+        let clone_ctx = WalkCtx {
+            clone: true,
+            clone_depth: ctx.clone_depth + 1,
+            ..*ctx
+        };
+        let mut out = Vec::new();
+        walk_region(
+            &clone_ctx,
+            target,
+            &mut cv,
+            &mut out,
+            indent,
+            depth + 1,
+            &[header],
+        );
+        let Some(mut body) = finish_clone(
+            ctx,
+            out,
+            bytes_before,
+            truncated_before,
+            MAX_ACTION_CLONE_LINES,
+            key,
+            true,
+        ) else {
+            continue;
+        };
+        if body.len() + 1 > MAX_ACTION_CLONE_LINES || body.iter().any(|l| l.text.contains("goto ")) {
+            continue;
+        }
+        body.push(PseudoLine {
+            indent,
+            text: "continue;".into(),
+            kind: LineKind::Branch,
+            source_addr: None,
+        });
+        return Some(body);
+    }
+    None
+}
+
+fn clone_visited_region(
+    ctx: &WalkCtx<'_>,
+    from: usize,
+    target: usize,
+    visited: &HashSet<usize>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) -> Option<Vec<PseudoLine>> {
+    clone_terminal_region(ctx, target, visited, indent, depth, stops)
+        .or_else(|| clone_continue_region(ctx, from, target, visited, indent, depth))
 }
 
 pub(crate) fn walk_block(
@@ -1834,7 +1942,16 @@ fn walk_region_step(
             if is_dowhile {
                 close_dowhile(ctx, block_id, visited, lines, loop_indent, depth, stops);
             } else if is_loop_header {
-                close_while_scope(ctx, visited, lines, loop_indent, loop_after, depth, stops);
+                close_while_scope(
+                    ctx,
+                    block_id,
+                    visited,
+                    lines,
+                    loop_indent,
+                    loop_after,
+                    depth,
+                    stops,
+                );
             }
             return;
         }};
@@ -1993,7 +2110,7 @@ fn walk_region_step(
             source_addr: None,
         });
         if let Some(exit) = loop_after {
-            walk_or_jump(ctx, exit, visited, lines, indent, depth, stops);
+            walk_or_jump(ctx, block_id, exit, visited, lines, indent, depth, stops);
         }
         return;
     }
@@ -2161,7 +2278,7 @@ fn walk_region_step(
                 source_addr: None,
             });
             if let Some(exit) = loop_after {
-                walk_or_jump(ctx, exit, visited, lines, loop_indent, depth, outer_stops);
+                walk_or_jump(ctx, block_id, exit, visited, lines, loop_indent, depth, outer_stops);
             }
         }
         return;
@@ -2268,7 +2385,7 @@ fn walk_region_step(
                             TAIL_CALL.with(|t| t.set(Some((edge.target, body_indent))));
                         }
                     } else if let Some(cloned) =
-                        clone_terminal_region(ctx, edge.target, visited, indent, depth, stops)
+                        clone_visited_region(ctx, block_id, edge.target, visited, indent, depth, stops)
                     {
                         lines.extend(cloned);
                     } else {
@@ -2283,6 +2400,7 @@ fn walk_region_step(
                 _ => {
                     walk_or_jump(
                         ctx,
+                        block_id,
                         edge.target,
                         visited,
                         lines,
@@ -2362,7 +2480,7 @@ fn walk_region_step(
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        walk_or_jump(ctx, f.target, visited, lines, indent, depth, stops);
+                        walk_or_jump(ctx, block_id, f.target, visited, lines, indent, depth, stops);
                     }
                     (None, Some(fa)) => {
                         cond = negate_cond(&cond);
@@ -2379,7 +2497,7 @@ fn walk_region_step(
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        walk_or_jump(ctx, t.target, visited, lines, indent, depth, stops);
+                        walk_or_jump(ctx, block_id, t.target, visited, lines, indent, depth, stops);
                     }
                     (None, None) => {}
                 }
@@ -2399,7 +2517,7 @@ fn walk_region_step(
                     if !visited.contains(&t.target) {
                         walk_region(ctx, t.target, visited, lines, indent + 1, depth + 1, stops);
                     } else if let Some(cloned) =
-                        clone_terminal_region(ctx, t.target, visited, indent + 1, depth, stops)
+                        clone_visited_region(ctx, block_id, t.target, visited, indent + 1, depth, stops)
                     {
                         lines.extend(cloned);
                     } else {
@@ -2429,7 +2547,7 @@ fn walk_region_step(
                     if !visited.contains(&f.target) {
                         walk_region(ctx, f.target, visited, lines, indent + 1, depth + 1, stops);
                     } else if let Some(cloned) =
-                        clone_terminal_region(ctx, f.target, visited, indent + 1, depth, stops)
+                        clone_visited_region(ctx, block_id, f.target, visited, indent + 1, depth, stops)
                     {
                         lines.extend(cloned);
                     } else {
@@ -2568,7 +2686,7 @@ fn walk_region_step(
                     kind: LineKind::Branch,
                     source_addr: None,
                 });
-                walk_or_jump(ctx, cont, visited, lines, indent, depth, stops);
+                walk_or_jump(ctx, block_id, cont, visited, lines, indent, depth, stops);
                 finish!();
             }
 
@@ -2583,7 +2701,7 @@ fn walk_region_step(
             if !visited.contains(&t.target) {
                 walk_region(ctx, t.target, visited, lines, indent + 1, depth + 1, stops);
             } else if let Some(cloned) =
-                clone_terminal_region(ctx, t.target, visited, indent + 1, depth, stops)
+                clone_visited_region(ctx, block_id, t.target, visited, indent + 1, depth, stops)
             {
                 lines.extend(cloned);
             } else {
@@ -2603,7 +2721,7 @@ fn walk_region_step(
             if !visited.contains(&f.target) {
                 walk_region(ctx, f.target, visited, lines, indent + 1, depth + 1, stops);
             } else if let Some(cloned) =
-                clone_terminal_region(ctx, f.target, visited, indent + 1, depth, stops)
+                clone_visited_region(ctx, block_id, f.target, visited, indent + 1, depth, stops)
             {
                 lines.extend(cloned);
             } else {
@@ -2633,13 +2751,15 @@ fn walk_region_step(
             source_addr: None,
         });
         if let Some(exit) = loop_after {
-            walk_or_jump(ctx, exit, visited, lines, indent, depth, stops);
+            walk_or_jump(ctx, block_id, exit, visited, lines, indent, depth, stops);
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn close_while_scope(
     ctx: &WalkCtx<'_>,
+    block_id: usize,
     visited: &mut HashSet<usize>,
     lines: &mut Vec<PseudoLine>,
     indent: u32,
@@ -2654,7 +2774,7 @@ fn close_while_scope(
         source_addr: None,
     });
     if let Some(exit) = loop_after {
-        walk_or_jump(ctx, exit, visited, lines, indent, depth, stops);
+        walk_or_jump(ctx, block_id, exit, visited, lines, indent, depth, stops);
     }
 }
 
@@ -2704,7 +2824,7 @@ fn close_dowhile(
     });
     for e in &cfg.blocks[latch].successors {
         if e.target != block_id {
-            walk_or_jump(ctx, e.target, visited, lines, indent, depth, stops);
+            walk_or_jump(ctx, block_id, e.target, visited, lines, indent, depth, stops);
         }
     }
 }
@@ -2908,6 +3028,142 @@ pub(crate) fn inline_terminal_gotos(lines: &mut Vec<PseudoLine>) {
 
 
 
+
+const MAX_TERMINAL_TAIL_BLOCKS: usize = 10;
+const MAX_TERMINAL_TAIL_LINES: usize = 32;
+const MAX_TERMINAL_TAIL_USES: usize = 12;
+const MAX_TERMINAL_TAIL_TOTAL: usize = 1600;
+
+fn linear_terminal_region(cfg: &CFG, start: usize) -> Option<Vec<usize>> {
+    let n = cfg.blocks.len();
+    if start >= n || cfg.blocks[start].predecessors.iter().any(|&p| p >= start) {
+        return None;
+    }
+    let mut region = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::default();
+    let mut cur = start;
+    loop {
+        if cur >= n || !seen.insert(cur) || region.len() >= MAX_TERMINAL_TAIL_BLOCKS {
+            return None;
+        }
+        region.push(cur);
+        let block = &cfg.blocks[cur];
+        if block.successors.is_empty() {
+            return Some(region);
+        }
+        let [edge] = block.successors.as_slice() else {
+            return None;
+        };
+        if !matches!(edge.kind, EdgeKind::Jump | EdgeKind::Fallthrough) {
+            return None;
+        }
+        cur = edge.target;
+    }
+}
+
+fn terminal_region_lines(
+    lines: &[PseudoLine],
+    cfg: &CFG,
+    region: &[usize],
+) -> Option<Vec<(String, LineKind, Option<u64>)>> {
+    let mut first: HashMap<u64, usize> = HashMap::default();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(addr) = line.source_addr {
+            first.entry(addr).or_insert(i);
+        }
+    }
+    let mut out = Vec::new();
+    let mut saw_return = false;
+    for &b in region {
+        let block = cfg.blocks.get(b)?;
+        let mut hits: Vec<(usize, u64)> = first
+            .iter()
+            .filter(|(addr, _)| **addr >= block.start && **addr < block.end)
+            .map(|(addr, idx)| (*idx, *addr))
+            .collect();
+        hits.sort_unstable();
+        if hits.is_empty() && region.last() == Some(&b) {
+            return None;
+        }
+        for (_, addr) in hits {
+            let idx = *first.get(&addr)?;
+            let line = lines.get(idx)?;
+            let text = line.text.trim();
+            if text.is_empty() || text.starts_with("//") || label_of(text).is_some() {
+                continue;
+            }
+            if text.starts_with('{')
+                || text.starts_with('}')
+                || is_keyword(text, "if")
+                || is_keyword(text, "else")
+                || is_keyword(text, "while")
+                || is_keyword(text, "do")
+                || is_keyword(text, "for")
+                || is_keyword(text, "switch")
+                || text.starts_with("goto ")
+                || text.starts_with("break;")
+                || text.starts_with("continue;")
+            {
+                return None;
+            }
+            if is_keyword(text, "return") {
+                saw_return = true;
+            }
+            out.push((text.to_string(), line.kind, line.source_addr));
+        }
+        if saw_return {
+            break;
+        }
+    }
+    if saw_return && out.len() <= MAX_TERMINAL_TAIL_LINES {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn inline_terminal_block_regions(cfg: &CFG, lines: &mut Vec<PseudoLine>) {
+    let mut uses: HashMap<u64, usize> = HashMap::default();
+    let mut budget = 0usize;
+    let mut replacements: Vec<(usize, Vec<PseudoLine>)> = Vec::new();
+    for i in 0..lines.len() {
+        let Some(target) = goto_target(&lines[i].text) else {
+            continue;
+        };
+        let Some(addr) = parse_label_addr(target) else {
+            continue;
+        };
+        let Some(block) = block_by_start(cfg, addr) else {
+            continue;
+        };
+        let used = uses.get(&addr).copied().unwrap_or(0);
+        if used >= MAX_TERMINAL_TAIL_USES || budget >= MAX_TERMINAL_TAIL_TOTAL {
+            continue;
+        }
+        let Some(region) = linear_terminal_region(cfg, block) else {
+            continue;
+        };
+        let Some(body) = terminal_region_lines(lines, cfg, &region) else {
+            continue;
+        };
+        let indent = lines[i].indent;
+        let mut out = Vec::with_capacity(body.len());
+        for (text, kind, source_addr) in body {
+            out.push(PseudoLine {
+                indent,
+                text,
+                kind,
+                source_addr,
+            });
+        }
+        budget += out.len();
+        *uses.entry(addr).or_default() += 1;
+        replacements.push((i, out));
+    }
+    for (idx, out) in replacements.into_iter().rev() {
+        lines.splice(idx..=idx, out);
+    }
+}
 
 pub(crate) fn retarget_goto_chains(lines: &mut [PseudoLine]) {
     let Some(close) = lines
@@ -3650,6 +3906,90 @@ mod cleanup_tests {
         assert_eq!(order[0].0, 0x1010);
         assert_eq!(order[0].2, Some(0x1020));
         assert_eq!(order[1].2, None);
+    }
+
+    #[test]
+    fn terminal_block_regions_are_inlined_at_each_goto() {
+        let cfg = test_cfg(vec![vec![3], vec![3], vec![3], vec![4], vec![]]);
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("goto LAB_1030;", LineKind::Branch),
+            line("} else {", LineKind::Branch),
+            line("goto LAB_1030;", LineKind::Branch),
+            line("}", LineKind::Branch),
+            line("goto LAB_9000;", LineKind::Branch),
+            line("goto LAB_9001;", LineKind::Branch),
+            line("goto LAB_9002;", LineKind::Branch),
+            line("goto LAB_9003;", LineKind::Branch),
+            line("goto LAB_9004;", LineKind::Branch),
+            line("goto LAB_9005;", LineKind::Branch),
+            line("goto LAB_9006;", LineKind::Branch),
+            line("goto LAB_9007;", LineKind::Branch),
+            line("LAB_1030:", LineKind::Label),
+            PseudoLine {
+                indent: 1,
+                text: "eax = r12d;".into(),
+                kind: LineKind::Assignment,
+                source_addr: Some(0x1030),
+            },
+            PseudoLine {
+                indent: 1,
+                text: "return;".into(),
+                kind: LineKind::Return,
+                source_addr: Some(0x1040),
+            },
+        ];
+        inline_terminal_block_regions(&cfg, &mut lines);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert!(
+            !texts.iter().any(|t| t.contains("goto LAB_1030")),
+            "{texts:?}"
+        );
+        assert_eq!(texts.iter().filter(|t| **t == "return;").count(), 3);
+        assert_eq!(texts.iter().filter(|t| **t == "eax = r12d;").count(), 3);
+    }
+
+    #[test]
+    fn action_clone_renders_a_loop_transition_as_continue() {
+        let cfg = test_cfg(vec![vec![1], vec![2], vec![0]]);
+        let loops = Loops::compute(&cfg, 0, &[(0, 2)]);
+        let postdom = Postdom::compute(&cfg);
+        let back: HashMap<usize, usize> = [(0usize, 2usize)].into_iter().collect();
+        let dowhile: HashSet<usize> = HashSet::default();
+        let dead: HashSet<(usize, usize)> = HashSet::default();
+        let func_lookup: HashMap<u64, String> = HashMap::default();
+        let consts: Vec<HashMap<&'static str, Lattice>> = vec![HashMap::default(); 3];
+        let hints = TypeHints::default();
+        let store = POp::Store {
+            addr: PVar::Addr(0x5000),
+            src: PVar::Const(1),
+            size: 8,
+        };
+        let bops: Vec<Vec<(u64, &POp)>> = vec![vec![], vec![], vec![(0x1020, &store)]];
+        memo_clear();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &[],
+            func_lookup: &func_lookup,
+            back_edges: &back,
+            block_consts: &consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: false,
+            hints: &hints,
+            switches: &[],
+            clone: false,
+            clone_depth: 0,
+        };
+        let body = clone_continue_region(&ctx, 1, 2, &HashSet::default(), 1, 0)
+            .expect("transition clone expected");
+        let text: Vec<_> = body.iter().map(|l| l.text.as_str()).collect();
+        assert!(text.contains(&"continue;"), "{text:?}");
+        assert!(text.iter().any(|t| t.contains("0x5000")), "{text:?}");
     }
 
     #[test]

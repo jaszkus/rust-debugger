@@ -1,8 +1,9 @@
 ﻿use super::printing::*;
 use super::structure::{
     GotoClass, Loops, Postdom, WalkCtx, classify_gotos, cleanup_labels, code_part,
-    compute_dowhile, elide_else_after_terminal, inline_terminal_gotos,
-    prune_unreachable_returns, retarget_goto_chains, squash_empty_branches, walk_block,
+    compute_dowhile, elide_else_after_terminal, inline_terminal_block_regions,
+    inline_terminal_gotos, prune_unreachable_returns, retarget_goto_chains,
+    squash_empty_branches, walk_block,
 };
 use super::state_machine;
 use super::*;
@@ -1361,6 +1362,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     });
 
     retarget_goto_chains(&mut lines);
+    inline_terminal_block_regions(cfg, &mut lines);
     inline_terminal_gotos(&mut lines);
     retarget_goto_chains(&mut lines);
     inline_terminal_gotos(&mut lines);
