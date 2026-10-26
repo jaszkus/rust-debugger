@@ -134,6 +134,124 @@ pub(crate) fn propagate_aliases(lines: &mut Vec<PseudoLine>) {
 
 
 
+fn callee_saved(name: &str) -> bool {
+    matches!(
+        canonical_reg(name),
+        "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15"
+    )
+}
+
+pub(crate) fn drop_callee_saved_bookkeeping(lines: &mut Vec<PseudoLine>) {
+    let mut saves: HashMap<String, (&'static str, usize)> = HashMap::default();
+    let mut restores: HashMap<String, Vec<usize>> = HashMap::default();
+    for (i, line) in lines.iter().enumerate() {
+        let Some((lhs, rhs)) = assignment_parts(&line.text) else {
+            continue;
+        };
+        if is_register(rhs) && callee_saved(rhs) && is_identifier(lhs) {
+            saves.entry(lhs.to_string()).or_insert((canonical_reg(rhs), i));
+        }
+        if is_register(lhs) && callee_saved(lhs) && is_identifier(rhs) {
+            restores.entry(rhs.to_string()).or_default().push(i);
+        }
+    }
+    let mut remove: HashSet<usize> = HashSet::default();
+    for (local, (_, save_idx)) in saves {
+        if !local.starts_with("local_") && !local.starts_with("stk_") {
+            continue;
+        }
+        let Some(restore_idxs) = restores.get(&local) else {
+            continue;
+        };
+        let mut ok = true;
+        let mut decl_idx = None;
+        for (i, line) in lines.iter().enumerate() {
+            if i == save_idx || restore_idxs.contains(&i) {
+                continue;
+            }
+            if line.kind == LineKind::Declaration
+                && declared_name(&line.text) == Some(local.as_str())
+            {
+                decl_idx = Some(i);
+                continue;
+            }
+            if tokens_contain(line.text.split("//").next().unwrap_or(""), &local) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            remove.insert(save_idx);
+            remove.extend(restore_idxs.iter().copied());
+            if let Some(i) = decl_idx {
+                remove.insert(i);
+            }
+        }
+    }
+    if !remove.is_empty() {
+        let mut i = 0;
+        lines.retain(|_| {
+            let keep = !remove.contains(&i);
+            i += 1;
+            keep
+        });
+    }
+}
+
+pub(crate) fn inline_single_assignment_registers(lines: &mut Vec<PseudoLine>) {
+    let mut writes: HashMap<&'static str, Vec<(usize, String)>> = HashMap::default();
+    for (i, line) in lines.iter().enumerate() {
+        let Some((lhs, rhs)) = assignment_parts(&line.text) else {
+            continue;
+        };
+        if is_register(lhs) {
+            writes
+                .entry(canonical_reg(lhs))
+                .or_default()
+                .push((i, rhs.trim().to_string()));
+        }
+    }
+    let mut candidates: Vec<(&'static str, usize, String)> = Vec::new();
+    for (reg, list) in writes {
+        if list.len() != 1 || matches!(reg, "rsp" | "rbp") || !callee_saved(reg) {
+            continue;
+        }
+        let (idx, rhs) = &list[0];
+        if !(is_identifier(rhs) || is_number(rhs)) || rhs == reg {
+            continue;
+        }
+        if lines[..*idx].iter().any(|l| {
+            l.kind != LineKind::Comment
+                && l.kind != LineKind::Declaration
+                && tokens_contain(l.text.split("//").next().unwrap_or(""), reg)
+        }) {
+            continue;
+        }
+        candidates.push((reg, *idx, rhs.clone()));
+    }
+    if candidates.is_empty() {
+        return;
+    }
+    let mut aliases: HashMap<String, String> = HashMap::default();
+    let mut assignments: HashSet<usize> = HashSet::default();
+    for (reg, idx, rhs) in &candidates {
+        aliases.insert((*reg).to_string(), rhs.clone());
+        assignments.insert(*idx);
+    }
+    for (i, line) in lines.iter_mut().enumerate() {
+        if assignments.contains(&i) {
+            continue;
+        }
+        line.text = substitute_tokens(&line.text, &aliases);
+    }
+    let mut i = 0;
+    lines.retain(|_| {
+        let keep = !assignments.contains(&i);
+        i += 1;
+        keep
+    });
+}
+
 pub(crate) fn drop_self_assignments(lines: &mut Vec<PseudoLine>) {
     lines.retain(|line| {
         let t = line.text.split("//").next().unwrap_or("").trim();
@@ -924,6 +1042,54 @@ mod tests {
             kind,
             source_addr: None,
         }
+    }
+
+    #[test]
+    fn single_assignment_callee_saved_register_is_inlined() {
+        let mut lines = vec![
+            line("rbx = param_1;", LineKind::Assignment),
+            line("if (rbx == 0) {", LineKind::Branch),
+            line("return rbx;", LineKind::Return),
+            line("}", LineKind::Branch),
+        ];
+        inline_single_assignment_registers(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec!["if (param_1 == 0) {", "return param_1;", "}"]
+        );
+    }
+
+    #[test]
+    fn callee_saved_save_restore_pair_is_removed() {
+        let mut lines = vec![
+            line("longlong local_res20;", LineKind::Declaration),
+            line("local_res20 = rbx;", LineKind::Assignment),
+            line("rbx = param_1;", LineKind::Assignment),
+            line("if (rbx == 0) {", LineKind::Branch),
+            line("rbx = local_res20;", LineKind::Assignment),
+            line("return;", LineKind::Return),
+            line("}", LineKind::Branch),
+            line("rbx = local_res20;", LineKind::Assignment),
+        ];
+        drop_callee_saved_bookkeeping(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec!["rbx = param_1;", "if (rbx == 0) {", "return;", "}"]
+        );
+    }
+
+    #[test]
+    fn caller_saved_register_is_not_inlined() {
+        let mut lines = vec![
+            line("rax = 5;", LineKind::Assignment),
+            line("foo();", LineKind::Call),
+            line("return rax;", LineKind::Return),
+        ];
+        inline_single_assignment_registers(&mut lines);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[2].text, "return rax;");
     }
 
     fn run(lines: Vec<PseudoLine>) -> Vec<String> {

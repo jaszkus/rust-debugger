@@ -164,15 +164,28 @@ fn is_stack_bookkeeping(text: &str, bp_is_frame: bool) -> bool {
     if rhs == lhs || is_sp(rhs) || is_bp(rhs) {
         return true;
     }
+    let reg_plus_const = |reg: &str| -> bool {
+        let Some(rest) = rhs.strip_prefix(reg) else {
+            return false;
+        };
+        if rest.trim().is_empty() {
+            return true;
+        }
+        let Some(num) = rest.trim_start().strip_prefix(['+', '-']) else {
+            return false;
+        };
+        parse_c_int(num.trim()).is_some()
+    };
+    if (is_bp(lhs) && reg_plus_const("rsp")) || (is_sp(lhs) && reg_plus_const("rbp")) {
+        return true;
+    }
     let Some(rest) = rhs.strip_prefix(lhs) else {
         return false;
     };
     let Some(num) = rest.trim_start().strip_prefix(['+', '-']) else {
         return false;
     };
-    let n = num.trim();
-    n.strip_prefix("0x")
-        .map_or_else(|| n.parse::<i64>().is_ok(), |h| i64::from_str_radix(h, 16).is_ok())
+    parse_c_int(num.trim()).is_some()
 }
 
 
@@ -1307,6 +1320,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     lines.retain(|l| !is_stack_bookkeeping(&l.text, bp_is_frame));
     drop_save_restore_comments(&mut lines);
     alias::propagate_aliases(&mut lines);
+    alias::drop_callee_saved_bookkeeping(&mut lines);
+    alias::inline_single_assignment_registers(&mut lines);
     alias::cse_repeated_expressions(&mut lines);
     alias::propagate_aliases(&mut lines);
     alias::drop_dead_register_assignments(&mut lines);
@@ -1355,6 +1370,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     debug_check_braces("elide_else", func_name, &lines, 0);
     cleanup_labels(&mut lines);
     debug_check_braces("cleanup_labels", func_name, &lines, 0);
+    ghidra_type_names(&mut lines);
     debug_goto_classes(func_name, &lines);
     debug_line_histogram(func_name, &lines);
     debug_other_shapes(func_name, &lines);
@@ -1368,6 +1384,54 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
 
 
 
+
+fn ghidra_type_name(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "int8_t" => "char",
+        "uint8_t" => "byte",
+        "int16_t" => "short",
+        "uint16_t" => "ushort",
+        "int32_t" => "int",
+        "uint32_t" => "uint",
+        "int64_t" => "longlong",
+        "uint64_t" => "ulonglong",
+        "intptr_t" => "longlong",
+        "uintptr_t" => "ulonglong",
+        _ => return None,
+    })
+}
+
+fn ghidra_type_names(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        if line.kind == LineKind::Comment {
+            continue;
+        }
+        let (code, comment) = match line.text.find("//") {
+            Some(i) => line.text.split_at(i),
+            None => (line.text.as_str(), ""),
+        };
+        let bytes = code.as_bytes();
+        let mut out = String::with_capacity(code.len() + 8);
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c.is_ascii_alphabetic() || c == b'_' {
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                let word = &code[start..i];
+                out.push_str(ghidra_type_name(word).unwrap_or(word));
+            } else {
+                let ch = code[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+        out.push_str(comment);
+        line.text = out;
+    }
+}
 
 fn parse_c_int(s: &str) -> Option<i64> {
     let (neg, s) = match s.strip_prefix('-') {
@@ -2895,7 +2959,9 @@ mod graph_tests {
     fn rbp_as_gpr_is_not_bookkeeping() {
         assert!(!is_stack_bookkeeping("rbp = rbp + 1;", false));
         assert!(is_stack_bookkeeping("rsp = rsp - 0x28;", false));
+        assert!(is_stack_bookkeeping("rsp = rsp + -0x40;", false));
         assert!(is_stack_bookkeeping("rbp = rsp;", true));
+        assert!(is_stack_bookkeeping("rbp = rsp - 0x20;", true));
     }
 
     #[test]
@@ -2954,6 +3020,27 @@ mod graph_tests {
         for m in ["mov", "add", "verw", "lea", "pxor"] {
             assert!(!is_float_mnemonic(m), "{m}");
         }
+    }
+
+    #[test]
+    fn exact_width_types_use_ghidra_spellings() {
+        let mut lines = vec![
+            pl("int64_t local_10;", LineKind::Declaration),
+            pl("*(uint32_t *)(param_1 + 4) = 1;", LineKind::Assignment),
+            pl("uint8_t buf[16];", LineKind::Declaration),
+            pl("return (int16_t)param_2;", LineKind::Return),
+        ];
+        ghidra_type_names(&mut lines);
+        let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "longlong local_10;",
+                "*(uint *)(param_1 + 4) = 1;",
+                "byte buf[16];",
+                "return (short)param_2;"
+            ]
+        );
     }
 
     #[test]

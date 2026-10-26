@@ -721,7 +721,7 @@ fn decompiler_x86_renders_32bit_names_and_absolute_mem() {
         text
     );
     assert!(
-        text.contains("int32_t t("),
+        text.contains("int t("),
         "signature should be 32-bit: {}",
         text
     );
@@ -1909,7 +1909,7 @@ fn pdb_regrel_locals_reach_eager_decompilation() {
         .join("\n");
     assert!(text.contains("Node n;"), "Node local:\n{}", text);
     assert!(text.contains("Point p;"), "Point local:\n{}", text);
-    assert!(text.contains("int32_t result;"), "result local:\n{}", text);
+    assert!(text.contains("int result;"), "result local:\n{}", text);
     assert!(text.contains("n.id = 5"), "Node field write:\n{}", text);
     assert!(text.contains("add_points(p, p)"), "two arguments:\n{}", text);
 }

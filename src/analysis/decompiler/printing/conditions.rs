@@ -651,6 +651,7 @@ pub(crate) fn recover_condition(
     };
 
     let mut cmp_pair: Option<(PVar, PVar, bool)> = None;
+    let mut cmp_size: u32 = 8;
     let mut float_cmp_pair: Option<(PVar, PVar)> = None;
     let mut bit_test: Option<(PVar, PVar)> = None;
     let mut flag_setter: Option<(String, PVar, PVar, String)> = None;
@@ -669,8 +670,12 @@ pub(crate) fn recover_condition(
             }
         }
         match op {
-            POp::Cmp { a, b, .. } => cmp_pair = Some((a.clone(), b.clone(), false)),
-            POp::Test { a, b, .. } => {
+            POp::Cmp { a, b, size } => {
+                cmp_pair = Some((a.clone(), b.clone(), false));
+                cmp_size = *size;
+            }
+            POp::Test { a, b, size } => {
+                cmp_size = *size;
                 let is_ah = matches!(a, PVar::Reg(_))
                     && imap_get(imap, *addr)
                         .map(|d| d.ops().to_ascii_lowercase().starts_with("ah"))
@@ -732,7 +737,7 @@ pub(crate) fn recover_condition(
     if let Some((a, b, is_test)) = cmp_pair {
         let av = cv(&a);
         let bv = cv(&b);
-        return jcc_to_expr(&jcc_mnemonic, &av, &bv, is_test);
+        return jcc_to_expr(&jcc_mnemonic, &av, &bv, is_test, cmp_size);
     }
 
     if let Some((a, b)) = float_cmp_pair {
@@ -822,7 +827,7 @@ pub(crate) fn result_cond(jcc: &str, expr: &str) -> String {
     }
 }
 
-pub(crate) fn jcc_to_expr(jcc: &str, a: &str, b: &str, is_test: bool) -> String {
+pub(crate) fn jcc_to_expr(jcc: &str, a: &str, b: &str, is_test: bool, size: u32) -> String {
     if is_test {
         if a == b {
             return match jcc {
@@ -839,6 +844,7 @@ pub(crate) fn jcc_to_expr(jcc: &str, a: &str, b: &str, is_test: bool) -> String 
             _ => format!("({} & {})", a, b),
         };
     }
+    let unsigned = if size >= 8 { "ulonglong" } else { "uint" };
     match jcc {
         "je" | "jz" => format!("{} == {}", a, b),
         "jne" | "jnz" => format!("{} != {}", a, b),
@@ -846,10 +852,10 @@ pub(crate) fn jcc_to_expr(jcc: &str, a: &str, b: &str, is_test: bool) -> String 
         "jle" | "jng" => format!("{} <= {}", a, b),
         "jg" | "jnle" => format!("{} > {}", a, b),
         "jge" | "jnl" => format!("{} >= {}", a, b),
-        "jb" | "jnae" | "jc" => format!("(unsigned){} < (unsigned){}", a, b),
-        "jbe" | "jna" => format!("(unsigned){} <= (unsigned){}", a, b),
-        "ja" | "jnbe" => format!("(unsigned){} > (unsigned){}", a, b),
-        "jae" | "jnb" | "jnc" => format!("(unsigned){} >= (unsigned){}", a, b),
+        "jb" | "jnae" | "jc" => format!("({unsigned}){a} < ({unsigned}){b}"),
+        "jbe" | "jna" => format!("({unsigned}){a} <= ({unsigned}){b}"),
+        "ja" | "jnbe" => format!("({unsigned}){a} > ({unsigned}){b}"),
+        "jae" | "jnb" | "jnc" => format!("({unsigned}){a} >= ({unsigned}){b}"),
         "js" => format!("({} - {}) < 0", a, b),
         "jns" => format!("({} - {}) >= 0", a, b),
         "jo" => format!("overflow({} - {})", a, b),
@@ -871,5 +877,22 @@ pub(crate) fn jcc_only_expr(jcc: &str) -> String {
         "jo" => "OF".into(),
         "jno" => "!OF".into(),
         _ => "cond".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_casts_follow_operand_width() {
+        assert_eq!(
+            jcc_to_expr("jb", "a", "b", false, 4),
+            "(uint)a < (uint)b"
+        );
+        assert_eq!(
+            jcc_to_expr("jae", "a", "b", false, 8),
+            "(ulonglong)a >= (ulonglong)b"
+        );
     }
 }

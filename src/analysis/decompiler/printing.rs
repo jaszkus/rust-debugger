@@ -141,7 +141,7 @@ pub(crate) struct TypeHints {
     pub(crate) rbp_delta: i64,
     pub(crate) rsp_at: HashMap<u64, i64>,
     pub(crate) hidden_locals: HashSet<String>,
-    pub(crate) last_cmp: std::cell::RefCell<Option<(String, String, bool)>>,
+    pub(crate) last_cmp: std::cell::RefCell<Option<(String, String, bool, u32)>>,
     pub(crate) out_bytes: std::cell::Cell<usize>,
     pub(crate) out_truncated: std::cell::Cell<bool>,
     pub(crate) cur_pc: std::cell::Cell<u64>,
@@ -436,16 +436,16 @@ pub(crate) fn render_op(
                 Some((format!("return {};", ret_val), LineKind::Return))
             }
         }
-        POp::Cmp { a, b, .. } => {
+        POp::Cmp { a, b, size } => {
             let av = pval_str(&resolve_pval_with_hints(a, reg_values, hints));
             let bv = pval_str(&resolve_pval_with_hints(b, reg_values, hints));
-            *hints.last_cmp.borrow_mut() = Some((av, bv, false));
+            *hints.last_cmp.borrow_mut() = Some((av, bv, false, *size));
             None
         }
-        POp::Test { a, b, .. } => {
+        POp::Test { a, b, size } => {
             let av = pval_str(&resolve_pval_with_hints(a, reg_values, hints));
             let bv = pval_str(&resolve_pval_with_hints(b, reg_values, hints));
-            *hints.last_cmp.borrow_mut() = Some((av, bv, true));
+            *hints.last_cmp.borrow_mut() = Some((av, bv, true, *size));
             None
         }
         POp::FloatCmp { .. } => {
@@ -458,7 +458,9 @@ pub(crate) fn render_op(
                 .last_cmp
                 .borrow()
                 .as_ref()
-                .map(|(a, b, is_test)| jcc_to_expr(&format!("j{}", cond), a, b, *is_test))
+                .map(|(a, b, is_test, size)| {
+                    jcc_to_expr(&format!("j{}", cond), a, b, *is_test, *size)
+                })
                 .unwrap_or_else(|| format!("({})", cond));
             let sv = pval_str(&resolve_pval_with_hints(src, reg_values, hints));
             let dv = fmt_var_with_hints(dst, hints);

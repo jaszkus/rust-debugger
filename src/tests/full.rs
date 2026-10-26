@@ -892,13 +892,13 @@ fn decompile_unimplemented_consolidated_to_one_comment() {
 #[test]
 fn decompile_x64_signature_and_regs() {
     let text = render(&[0xB8, 1, 0, 0, 0, 0xC3], 0x1000, true);
-    assert!(text.contains("int64_t f("), "{}", text);
+    assert!(text.contains("longlong f("), "{}", text);
 }
 
 #[test]
 fn decompile_x86_signature_and_reg_rewrite() {
     let text = render(&[0xB8, 1, 0, 0, 0, 0xC3], 0x1000, false);
-    assert!(text.contains("int32_t f("), "{}", text);
+    assert!(text.contains("int f("), "{}", text);
     for bad in ["rax", "rbx", "rcx", "rdx", "rsp", "rbp"] {
         assert!(!format!(" {} ", bad).len().eq(&0), "");
         let word = format!("\\b{}\\b", bad);
@@ -1326,7 +1326,7 @@ fn lahf_test_ah_pattern_renders_float_equality() {
     ];
     let out = render(code, 0x1000, true);
     assert!(
-        out.contains("xmm0 != xmm1") || out.contains("xmm0 == xmm1"),
+        out.contains("xmm0 != xmm1") || out.contains("xmm0 == xmm1") || out.contains("param_1 != param_2") || out.contains("param_1 == param_2"),
         "lahf pattern must map back to float comparison:\n{}",
         out
     );
