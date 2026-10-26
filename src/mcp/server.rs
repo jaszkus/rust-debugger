@@ -92,7 +92,9 @@ impl McpServer {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
         }
-        let _ = self.handle.take();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -169,13 +171,12 @@ fn auth_ok(headers: &HeaderMap, token: &str) -> bool {
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let mut diff = (a.len() ^ b.len()) as u8;
-    diff |= ((a.len() ^ b.len()) >> 8) as u8;
+    let mut diff = (a.len() ^ b.len()) as u64;
     let max = a.len().max(b.len());
     for i in 0..max {
         let x = *a.get(i).unwrap_or(&0);
         let y = *b.get(i).unwrap_or(&0);
-        diff |= x ^ y;
+        diff |= (x ^ y) as u64;
     }
     diff == 0
 }
