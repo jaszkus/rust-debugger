@@ -3,8 +3,8 @@ use crate::analysis::flow::cfg::CFG;
 use crate::analysis::operands::canonical_reg;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-pub(crate) const MAX_SSA_VARS: usize = 24_000;
-pub(crate) const MAX_SSA_PHIS: usize = 8_192;
+pub(crate) const MAX_SSA_VARS: usize = 65_536;
+pub(crate) const MAX_SSA_PHIS: usize = 32_768;
 
 pub(crate) const ALL_REGS: &[&str] = &[
     "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13",
@@ -517,10 +517,124 @@ fn compute_df(cfg: &CFG, idom: &[usize], reachable: &[bool]) -> Vec<Vec<usize>> 
     df
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TempName {
+    pub name: String,
+    pub size: u32,
+    pub float: bool,
+    pub signed: bool,
+}
+
+fn temp_op_kind(op: &POp) -> (bool, bool) {
+    match op {
+        POp::FloatBinop { .. } | POp::FloatCmp { .. } => (true, false),
+        POp::Cvt { kind, .. } => {
+            if kind == "f2i" {
+                (false, true)
+            } else {
+                (true, false)
+            }
+        }
+        POp::Sext { .. } | POp::IntSar { .. } | POp::IntSDiv { .. } => (false, true),
+        _ => (false, false),
+    }
+}
+
+impl SsaFunction {
+    pub(crate) fn temp_name_plan(
+        &self,
+        bops: &[Vec<(u64, &POp)>],
+        existing: &HashSet<String>,
+    ) -> HashMap<u32, TempName> {
+        struct Info {
+            first: (usize, usize),
+            size: u32,
+            float: bool,
+            signed: bool,
+        }
+        let mut info: HashMap<u32, Info> = HashMap::default();
+        let note = |base: BaseVar, pos: (usize, usize), size: u32, op: &POp,
+                        info: &mut HashMap<u32, Info>| {
+            let BaseVar::Tmp(id) = base else {
+                return;
+            };
+            let (float, signed) = temp_op_kind(op);
+            info.entry(id)
+                .and_modify(|i| {
+                    if pos < i.first {
+                        i.first = pos;
+                    }
+                    i.size = i.size.max(size);
+                    i.float |= float;
+                    i.signed |= signed;
+                })
+                .or_insert(Info {
+                    first: pos,
+                    size,
+                    float,
+                    signed,
+                });
+        };
+        for (b, block) in self.blocks.iter().enumerate() {
+            let Some(ops) = bops.get(b) else {
+                continue;
+            };
+            for (i, stmt) in block.stmts.iter().enumerate() {
+                let Some((_, op)) = ops.get(i) else {
+                    continue;
+                };
+                for d in &stmt.defs {
+                    let v = &self.vars[d.0 as usize];
+                    note(v.base, (b, i), v.size, op, &mut info);
+                }
+                for u in &stmt.uses {
+                    let v = &self.vars[u.0 as usize];
+                    note(v.base, (b, i), v.size, op, &mut info);
+                }
+            }
+        }
+        let mut entries: Vec<(u32, Info)> = info.into_iter().collect();
+        entries.sort_by_key(|(id, i)| (i.first, *id));
+        let mut counters: HashMap<&'static str, u32> = HashMap::default();
+        let mut used: HashSet<String> = existing.clone();
+        let mut out: HashMap<u32, TempName> = HashMap::default();
+        for (id, info) in entries {
+            let prefix = if info.float && !info.signed {
+                "fVar"
+            } else if info.signed {
+                "iVar"
+            } else {
+                "uVar"
+            };
+            let counter = counters.entry(prefix).or_insert(0);
+            let name = loop {
+                *counter += 1;
+                let candidate = format!("{prefix}{counter}");
+                if !used.contains(&candidate) {
+                    break candidate;
+                }
+            };
+            used.insert(name.clone());
+            out.insert(
+                id,
+                TempName {
+                    name,
+                    size: info.size.clamp(1, 16),
+                    float: info.float && !info.signed,
+                    signed: info.signed,
+                },
+            );
+        }
+        out
+    }
+}
 impl SsaFunction {
     pub(crate) fn build(cfg: &CFG, bops: &[Vec<(u64, &POp)>]) -> Option<SsaFunction> {
         let n = cfg.blocks.len();
         if n == 0 || bops.len() < n {
+            if std::env::var_os("RD_DEBUG_SSA").is_some() {
+                eprintln!("[ssa] block/ops mismatch: {} {}", n, bops.len());
+            }
             return None;
         }
         let entry = cfg
@@ -553,6 +667,9 @@ impl SsaFunction {
             }
         }
         if def_blocks.len() > MAX_SSA_VARS {
+            if std::env::var_os("RD_DEBUG_SSA").is_some() {
+                eprintln!("[ssa] too many vars: {}", def_blocks.len());
+            }
             return None;
         }
         let mut bases: Vec<BaseVar> = def_blocks.keys().copied().collect();
@@ -578,6 +695,9 @@ impl SsaFunction {
                     let idx = blocks[f].phis.len();
                     phi_total += 1;
                     if phi_total > MAX_SSA_PHIS {
+                        if std::env::var_os("RD_DEBUG_SSA").is_some() {
+                            eprintln!("[ssa] too many phis: {phi_total}");
+                        }
                         return None;
                     }
                     let preds = cfg.blocks[f].predecessors.len();

@@ -1245,6 +1245,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let postdom = Postdom::compute(cfg);
     let loops = Loops::compute(cfg, entry_id, &back_edge_list);
     let ssa = ssa::SsaFunction::build(cfg, &bops);
+    if ssa.is_none() && std::env::var_os("RD_DEBUG_SSA").is_some() {
+        eprintln!("[ssa] {func_name}: skipped ({} blocks)", cfg.blocks.len());
+    }
     if let Some(view) = &ssa
         && std::env::var_os("RD_DEBUG_SSA").is_some()
         && let Err(err) = view.validate(cfg)
@@ -1362,6 +1365,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     drop_save_restore_comments(&mut lines);
     alias::propagate_aliases(&mut lines);
     alias::drop_callee_saved_bookkeeping(&mut lines);
+    alias::drop_saved_register_restores(&mut lines);
     alias::inline_single_assignment_registers(&mut lines);
     alias::cse_repeated_expressions(&mut lines);
     alias::propagate_aliases(&mut lines);
@@ -1412,11 +1416,17 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     debug_check_braces("elide_else", func_name, &lines, 0);
     cleanup_labels(&mut lines);
     debug_check_braces("cleanup_labels", func_name, &lines, 0);
-    alias::name_remaining_registers(&mut lines);
+    alias::name_remaining_registers(&mut lines, !bp_is_frame);
     alias::inline_single_use_temps(&mut lines);
     alias::propagate_aliases(&mut lines);
+    if let Some(view) = &ssa {
+        let existing = alias::collect_identifiers(&lines);
+        let plan = view.temp_name_plan(&bops, &existing);
+        alias::name_temporary_values(&mut lines, &plan);
+    }
     ghidra_type_names(&mut lines);
     ghidra_function_names(&mut lines);
+    alias::remove_unused_declarations(&mut lines);
     debug_goto_classes(func_name, &lines);
     debug_line_histogram(func_name, &lines);
     debug_other_shapes(func_name, &lines);
@@ -1903,7 +1913,8 @@ fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
         let t = lines[i].text.trim();
         let is_canary_load = (t.contains("*(fs:") || t.contains("*(gs:"))
             && (t.contains("+ 0x28") || t.contains("+ 0x14"));
-        if !is_canary_load {
+        let is_cookie_init = t.contains("^ rsp");
+        if !is_canary_load && !is_cookie_init {
             continue;
         }
         remove.insert(i);
@@ -1937,7 +1948,15 @@ fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
         }
     }
     if remove.is_empty() {
+        if std::env::var_os("RD_DEBUG_CANARY").is_some() {
+            for line in lines.iter().filter(|l| l.text.contains("^ rsp")).take(4) {
+                eprintln!("[canary] seen: {:?}", line.text);
+            }
+        }
         return;
+    }
+    if std::env::var_os("RD_DEBUG_CANARY").is_some() {
+        eprintln!("[canary] removing {} line(s)", remove.len());
     }
     for (i, line) in lines.iter().enumerate() {
         if line.text.contains(['{', '}']) {
@@ -1947,6 +1966,10 @@ fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
             || line.text.contains("__security_check_cookie")
             || line.text.contains("__security_cookie")
         {
+            remove.insert(i);
+        }
+        let c = line.text.split("//").next().unwrap_or("").trim();
+        if c.contains("^ rsp") {
             remove.insert(i);
         }
     }
@@ -3165,6 +3188,26 @@ mod graph_tests {
         assert_eq!(lines[0].text, "return FUN_180001000(param_1);");
         assert_eq!(lines[1].text, "thunk_FUN_180002000();");
         assert!(lines[2].text.contains("sub_180003000"));
+    }
+
+    #[test]
+    fn msvc_cookie_bookkeeping_is_removed() {
+        fn pl(text: &str, kind: LineKind) -> PseudoLine {
+            PseudoLine { indent: 0, text: text.into(), kind, source_addr: None }
+        }
+        let mut lines = vec![
+            pl("uVar1 = *(longlong *)&DAT_1800c1230 ^ rsp + -0x110;", LineKind::Assignment),
+            pl("local_48 = uVar1;", LineKind::Assignment),
+            pl("FUN_180084C50(local_48 ^ rsp);", LineKind::Call),
+            pl("uVar1 = 3;", LineKind::Assignment),
+            pl("return;", LineKind::Return),
+        ];
+        drop_stack_canary(&mut lines);
+        let out = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(!out.contains("DAT_1800c1230"), "{out}");
+        assert!(!out.contains("local_48"), "{out}");
+        assert!(!out.contains("FUN_180084C50"), "{out}");
+        assert!(out.contains("uVar1 = 3;"), "{out}");
     }
 
     #[test]

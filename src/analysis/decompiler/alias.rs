@@ -1,4 +1,4 @@
-
+﻿
 
 
 
@@ -139,6 +139,194 @@ fn callee_saved(name: &str) -> bool {
         canonical_reg(name),
         "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15"
     )
+}
+
+pub(crate) fn drop_saved_register_restores(lines: &mut Vec<PseudoLine>) {
+    let mut declared: HashSet<String> = HashSet::default();
+    for line in lines.iter() {
+        if line.kind == LineKind::Declaration
+            && let Some(name) = declared_name(&line.text)
+        {
+            declared.insert(name.to_string());
+        }
+    }
+    let mut saves: HashMap<&'static str, Vec<usize>> = HashMap::default();
+    let mut restores: HashMap<&'static str, Vec<usize>> = HashMap::default();
+    let mut first_body = lines
+        .iter()
+        .position(|l| l.kind == LineKind::OpenBrace)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    while first_body < lines.len()
+        && (lines[first_body].kind == LineKind::Declaration
+            || lines[first_body].text.trim().is_empty())
+    {
+        first_body += 1;
+    }
+    for (i, line) in lines.iter().enumerate() {
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        let code = line.text.split("//").next().unwrap_or("").trim();
+        let Some((lhs, rhs)) = code.split_once(" = ") else {
+            continue;
+        };
+        let lhs = lhs.trim();
+        let rhs = rhs.trim().trim_end_matches(';').trim();
+        if let Some(reg) = in_register_name(lhs)
+            && saved_register(reg)
+            && (rhs.starts_with("*(")
+                || (is_identifier(rhs) && declared.contains(rhs)))
+            && next_is_exit(lines, i)
+        {
+            restores.entry(reg).or_default().push(i);
+        }
+        if lhs.starts_with("*(")
+            && let Some(reg) = in_register_name(rhs)
+            && saved_register(reg)
+            && i >= first_body
+            && i < first_body + 24
+        {
+            saves.entry(reg).or_default().push(i);
+        }
+    }
+    let saves_n = saves.values().map(|v| v.len()).sum::<usize>();
+    let restores_n = restores.values().map(|v| v.len()).sum::<usize>();
+    let mut remove: HashSet<usize> = HashSet::default();
+    let mut renamed: HashSet<&'static str> = HashSet::default();
+    for (reg, list) in restores {
+        let Some(save_list) = saves.get(reg) else {
+            continue;
+        };
+        if list.is_empty() || save_list.is_empty() {
+            continue;
+        }
+        remove.extend(list.iter().copied());
+        remove.extend(save_list.iter().copied());
+        renamed.insert(reg);
+    }
+    if remove.is_empty() {
+        if std::env::var_os("RD_DEBUG_CANARY").is_some() && saves_n > 0 {
+            eprintln!("[savedreg] none: saves={saves_n} restores={restores_n}");
+            for line in lines.iter().filter(|l| {
+                let c = l.text.split("//").next().unwrap_or("");
+                c.contains("rbx") || c.contains("rsi") || c.contains("rdi") || c.contains("local_res")
+            }).take(30) {
+                eprintln!("[savedreg] seen: {:?}", line.text);
+            }
+        }
+        return;
+    }
+    if std::env::var_os("RD_DEBUG_CANARY").is_some() {
+        eprintln!("[savedreg] remove={} saves={saves_n} restores={restores_n}", remove.len());
+    }
+    let mut i = 0usize;
+    lines.retain(|_| {
+        let keep = !remove.contains(&i);
+        i += 1;
+        keep
+    });
+    for reg in renamed {
+        let token = format!("in_{}", reg.to_ascii_uppercase());
+        for line in lines.iter_mut() {
+            line.text = replace_word(&line.text, &token, reg);
+        }
+    }
+}
+
+fn is_saved_reg_assign(text: &str) -> bool {
+    let Some((lhs, _)) = text.split_once(" = ") else {
+        return false;
+    };
+    in_register_name(lhs.trim()).is_some_and(saved_register)
+}
+
+fn saved_register(name: &str) -> bool {
+    matches!(
+        canonical_reg(name),
+        "rbx" | "rbp" | "rsi" | "rdi" | "r12" | "r13" | "r14" | "r15"
+    )
+}
+
+fn next_is_exit(lines: &[PseudoLine], index: usize) -> bool {
+    let mut i = index + 1;
+    while i < lines.len() {
+        let t = lines[i].text.split("//").next().unwrap_or("").trim();
+        if t.is_empty() {
+            i += 1;
+            continue;
+        }
+        if is_saved_reg_assign(t) {
+            i += 1;
+            continue;
+        }
+        return t == "return;" || t == "}" || t == "break;" || t.starts_with("return ");
+    }
+    false
+}
+
+fn replace_word(text: &str, from: &str, to: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let tok = &text[start..i];
+            if tok == from {
+                out.push_str(to);
+            } else {
+                out.push_str(tok);
+            }
+        } else {
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn in_register_name(token: &str) -> Option<&'static str> {
+    Some(match token {
+        "rax" => "rax",
+        "rbx" => "rbx",
+        "rcx" => "rcx",
+        "rdx" => "rdx",
+        "rsi" => "rsi",
+        "rdi" => "rdi",
+        "rbp" => "rbp",
+        "rsp" => "rsp",
+        "r8" => "r8",
+        "r9" => "r9",
+        "r10" => "r10",
+        "r11" => "r11",
+        "r12" => "r12",
+        "r13" => "r13",
+        "r14" => "r14",
+        "r15" => "r15",
+        "in_RAX" => "rax",
+        "in_RBX" => "rbx",
+        "in_RCX" => "rcx",
+        "in_RDX" => "rdx",
+        "in_RSI" => "rsi",
+        "in_RDI" => "rdi",
+        "in_RBP" => "rbp",
+        "in_RSP" => "rsp",
+        "in_R8" => "r8",
+        "in_R9" => "r9",
+        "in_R10" => "r10",
+        "in_R11" => "r11",
+        "in_R12" => "r12",
+        "in_R13" => "r13",
+        "in_R14" => "r14",
+        "in_R15" => "r15",
+        _ => return None,
+    })
 }
 
 pub(crate) fn drop_callee_saved_bookkeeping(lines: &mut Vec<PseudoLine>) {
@@ -301,7 +489,7 @@ fn cast_for_width(width: u32) -> &'static str {
     }
 }
 
-pub(crate) fn name_remaining_registers(lines: &mut Vec<PseudoLine>) {
+pub(crate) fn name_remaining_registers(lines: &mut Vec<PseudoLine>, allow_bp: bool) {
     let mut max_width: HashMap<&'static str, u32> = HashMap::default();
     let mut first_write: HashMap<&'static str, bool> = HashMap::default();
     let mut tokens: HashMap<String, (&'static str, u32)> = HashMap::default();
@@ -328,7 +516,7 @@ pub(crate) fn name_remaining_registers(lines: &mut Vec<PseudoLine>) {
                 return;
             }
             let reg = canonical_reg(word);
-            if matches!(reg, "rip" | "rsp" | "rbp") {
+            if matches!(reg, "rip" | "rsp") || (reg == "rbp" && !allow_bp) {
                 return;
             }
             if !max_width.contains_key(reg) {
@@ -962,6 +1150,138 @@ fn tokens_contain_reg(text: &str, reg: &str) -> bool {
 
 
 
+pub(crate) fn collect_identifiers(lines: &[PseudoLine]) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::default();
+    for line in lines {
+        for_each_ident(&line.text, |word| {
+            out.insert(word.to_string());
+        });
+    }
+    out
+}
+
+pub(crate) fn name_temporary_values(
+    lines: &mut Vec<PseudoLine>,
+    plan: &HashMap<u32, crate::analysis::decompiler::ssa::TempName>,
+) {
+    if plan.is_empty() {
+        return;
+    }
+    let mut declared: HashSet<String> = HashSet::default();
+    for line in lines.iter() {
+        if line.kind == LineKind::Declaration
+            && let Some(name) = declared_name(&line.text)
+        {
+            declared.insert(name.to_string());
+        }
+    }
+    let mut mapping: HashMap<u32, String> = HashMap::default();
+    for (&id, t) in plan {
+        if !declared.contains(&format!("tmp_{id}")) {
+            mapping.insert(id, t.name.clone());
+        }
+    }
+    if mapping.is_empty() {
+        return;
+    }
+    let generated: HashSet<String> = mapping.values().cloned().collect();
+    let mut used: HashSet<String> = HashSet::default();
+    for line in lines.iter_mut() {
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        line.text = rewrite_temporary_tokens(&line.text, &mapping);
+        let code = line.text.split("//").next().unwrap_or("");
+        for_each_ident(code, |word| {
+            if generated.contains(word) {
+                used.insert(word.to_string());
+            }
+        });
+    }
+    let mut at = lines
+        .iter()
+        .position(|l| l.kind == LineKind::OpenBrace)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    while at < lines.len() && lines[at].kind == LineKind::Declaration {
+        at += 1;
+    }
+    let mut ids: Vec<(&u32, &String)> = mapping.iter().collect();
+    ids.sort_by_key(|(id, _)| **id);
+    let mut decls: Vec<String> = Vec::new();
+    for (id, name) in ids {
+        if !used.contains(name) {
+            continue;
+        }
+        let Some(t) = plan.get(id) else {
+            continue;
+        };
+        let ty = if t.float {
+            if t.size == 8 { "double" } else { "float" }
+        } else if t.signed {
+            match t.size {
+                1 => "int8_t",
+                2 => "int16_t",
+                4 => "int32_t",
+                _ => "int64_t",
+            }
+        } else {
+            match t.size {
+                1 => "byte",
+                2 => "ushort",
+                4 => "uint",
+                _ => "undefined8",
+            }
+        };
+        decls.push(format!("{} {};", ty, name));
+    }
+    for decl in decls {
+        lines.insert(
+            at,
+            PseudoLine {
+                indent: 1,
+                text: decl,
+                kind: LineKind::Declaration,
+                source_addr: None,
+            },
+        );
+        at += 1;
+    }
+}
+
+fn rewrite_temporary_tokens(text: &str, mapping: &HashMap<u32, String>) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let tok = &text[start..i];
+            let replaced = tok
+                .strip_prefix("tmp_")
+                .and_then(|rest| rest.parse::<u32>().ok())
+                .and_then(|id| mapping.get(&id));
+            if let Some(name) = replaced {
+                out.push_str(name);
+            } else {
+                out.push_str(tok);
+            }
+        } else {
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+pub(crate) fn remove_unused_declarations(lines: &mut Vec<PseudoLine>) {
+    drop_unused_declarations(lines);
+}
 fn drop_unused_declarations(lines: &mut Vec<PseudoLine>) {
     let mut referenced: HashSet<String> = HashSet::default();
     for line in lines.iter() {
@@ -1233,7 +1553,7 @@ mod tests {
             line("return rax;", LineKind::Return),
             line("}", LineKind::Branch),
         ];
-        name_remaining_registers(&mut lines);
+        name_remaining_registers(&mut lines, false);
         let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(text[0], "{");
         assert_eq!(text[1], "undefined8 uVar1;");
@@ -1252,7 +1572,7 @@ mod tests {
             line("}", LineKind::Branch),
             line("}", LineKind::CloseBrace),
         ];
-        name_remaining_registers(&mut lines);
+        name_remaining_registers(&mut lines, false);
         let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(text[0], "{");
         assert_eq!(text[1], "if (in_RAX == 0) {");
@@ -1675,6 +1995,52 @@ mod tests {
         ];
         propagate_aliases(&mut lines);
         assert_eq!(lines[3].text, "use(x);");
+    }
+
+    #[test]
+    fn saved_register_pair_is_removed_and_register_is_renamed() {
+        let mut lines = vec![
+            line("{", LineKind::OpenBrace),
+            line("int64_t local_res8;", LineKind::Declaration),
+            line("*(int64_t *)(rsp + 0x8) = rbx;", LineKind::Assignment),
+            line("rbx = param_2;", LineKind::Assignment),
+            line("use(rbx);", LineKind::Call),
+            line("rbx = local_res8;", LineKind::Assignment),
+            line("return;", LineKind::Return),
+            line("}", LineKind::CloseBrace),
+        ];
+        drop_saved_register_restores(&mut lines);
+        let out = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(!out.contains("rsp + 0x8"), "{out}");
+        assert!(!out.contains("rbx = local_res8"), "{out}");
+        assert!(out.contains("rbx = param_2;"), "{out}");
+        assert!(out.contains("use(rbx);"), "{out}");
+    }
+
+    #[test]
+    fn temporary_values_get_names_and_declarations() {
+        let mut plan: HashMap<u32, crate::analysis::decompiler::ssa::TempName> = HashMap::default();
+        plan.insert(
+            3,
+            crate::analysis::decompiler::ssa::TempName {
+                name: "uVar1".into(),
+                size: 8,
+                float: false,
+                signed: false,
+            },
+        );
+        let mut lines = vec![
+            line("{", LineKind::OpenBrace),
+            line("tmp_3 = *(int64_t *)param_1;", LineKind::Assignment),
+            line("x = tmp_3 + 1;", LineKind::Assignment),
+            line("}", LineKind::CloseBrace),
+        ];
+        name_temporary_values(&mut lines, &plan);
+        let out = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(!out.contains("tmp_3"), "{out}");
+        assert!(out.contains("uVar1 = *(int64_t *)param_1;"), "{out}");
+        assert!(out.contains("x = uVar1 + 1;"), "{out}");
+        assert!(out.contains("undefined8 uVar1;"), "{out}");
     }
 
     #[test]
