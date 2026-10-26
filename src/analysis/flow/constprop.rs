@@ -37,6 +37,11 @@ impl ConstantPropagator {
         }
     }
 
+    fn clear_state(&mut self) {
+        self.registers.clear();
+        self.memory.clear();
+    }
+
     fn process_instruction(&mut self, insn: &DisasmInstruction) {
         match insn.mnemonic {
             "mov" => self.handle_mov(insn),
@@ -47,6 +52,8 @@ impl ConstantPropagator {
             "add" => self.handle_add(insn),
             "sub" => self.handle_sub(insn),
             "call" => self.handle_call(insn),
+            "jmp" | "ret" | "retn" | "retf" | "hlt" | "ud2" => self.clear_state(),
+            m if m.starts_with('j') => self.clear_state(),
             _ => {}
         }
     }
@@ -307,4 +314,35 @@ fn is_register(s: &str) -> bool {
             | "esp"
             | "ebp"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_clears_register_facts() {
+        let code = [0x48, 0xC7, 0xC0, 0x34, 0x12, 0x00, 0x00, 0x75, 0x00];
+        let insns =
+            crate::disasm::disassemble_region(&code, 0x1000, "x86_64").expect("disasm");
+        let mut cp = ConstantPropagator::new();
+        cp.propagate_slice(&insns);
+        assert!(matches!(
+            cp.get_register_value("rax"),
+            None | Some(RegValue::Unknown)
+        ));
+    }
+
+    #[test]
+    fn straight_line_register_fact_survives() {
+        let code = [0x48, 0xC7, 0xC0, 0x34, 0x12, 0x00, 0x00, 0x90];
+        let insns =
+            crate::disasm::disassemble_region(&code, 0x1000, "x86_64").expect("disasm");
+        let mut cp = ConstantPropagator::new();
+        cp.propagate_slice(&insns);
+        assert_eq!(
+            cp.get_register_value("rax"),
+            Some(RegValue::Known(0x1234))
+        );
+    }
 }
