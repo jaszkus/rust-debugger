@@ -278,6 +278,7 @@ pub fn search_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resu
 
         let mut off = 0u64;
         while off < span {
+            let chunk_start = off;
             let want = (span - off).min(CHUNK as u64) as usize;
             let data = match read_proc_mem_blocking(state, lo + off, want) {
                 Ok(d) if !d.is_empty() => d,
@@ -317,7 +318,8 @@ pub fn search_process_memory(args: &Value, state: &Arc<Mutex<AppState>>) -> Resu
             if off < span {
                 let max_needle = plans.iter().map(|p| p.bytes.len()).max().unwrap_or(1);
                 let overlap = (max_needle - 1) as u64;
-                off = off.saturating_sub(overlap.min(off));
+                let rewound = off.saturating_sub(overlap.min(off));
+                off = rewound.max(chunk_start + 1);
             }
         }
         regions_scanned += 1;
