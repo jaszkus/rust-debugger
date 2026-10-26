@@ -156,7 +156,7 @@ impl ToastEvent {
             return ToastEvent::McpStarted(port);
         }
         if m == "MCP server stopped" {
-            return ToastEvent::McpStopped(8765);
+            return ToastEvent::McpStopped(0);
         }
         if m.starts_with("BP set ")
             && let Ok(a) = u64::from_str_radix(m.trim_start_matches("BP set "), 16) {
