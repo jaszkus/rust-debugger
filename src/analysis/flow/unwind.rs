@@ -45,6 +45,27 @@ fn section_bytes<'a>(binary: &'a ParsedBinary, name: &str) -> Option<(u64, &'a [
     Some((sec.vaddr, &binary.data[start..end]))
 }
 
+fn pe_unwind_is_chained(binary: &ParsedBinary, unwind_rva: u32) -> bool {
+    if unwind_rva == 0 {
+        return false;
+    }
+    let va = binary.image_base.wrapping_add(unwind_rva as u64);
+    let Some(sec) = binary
+        .sections
+        .iter()
+        .find(|s| va >= s.vaddr && va < s.vaddr.saturating_add(s.size))
+    else {
+        return false;
+    };
+    let Some(off) = sec.offset.checked_add(va - sec.vaddr) else {
+        return false;
+    };
+    binary
+        .data
+        .get(off as usize)
+        .is_some_and(|byte| byte & 0x20 != 0)
+}
+
 fn pe_pdata_starts(binary: &ParsedBinary) -> Vec<u64> {
     let mut out = Vec::new();
     let Some((_, data)) = section_bytes(binary, ".pdata") else {
@@ -58,12 +79,66 @@ fn pe_pdata_starts(binary: &ParsedBinary) -> Vec<u64> {
         let o = i * 12;
         let begin = u32::from_le_bytes(data[o..o + 4].try_into().unwrap());
         let end = u32::from_le_bytes(data[o + 4..o + 8].try_into().unwrap());
-        if end > begin {
+        let unwind_rva = u32::from_le_bytes(data[o + 8..o + 12].try_into().unwrap());
+        if end > begin && !pe_unwind_is_chained(binary, unwind_rva) {
             let va = binary.image_base.wrapping_add(begin as u64);
             if is_exec(binary, va) {
                 out.push(va);
             }
         }
+    }
+    out
+}
+
+pub fn function_ranges(binary: &ParsedBinary) -> Vec<(u64, u64)> {
+    if binary.format.starts_with("PE") {
+        pe_pdata_ranges(binary)
+    } else {
+        Vec::new()
+    }
+}
+
+fn pe_pdata_ranges(binary: &ParsedBinary) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    let Some((_, data)) = section_bytes(binary, ".pdata") else {
+        return out;
+    };
+    if binary.arch != "x86_64" {
+        return out;
+    }
+    let count = data.len() / 12;
+    let mut current: Option<(u64, u64)> = None;
+    for i in 0..count.min(500_000) {
+        let o = i * 12;
+        let begin = u32::from_le_bytes(data[o..o + 4].try_into().unwrap());
+        let end = u32::from_le_bytes(data[o + 4..o + 8].try_into().unwrap());
+        let unwind_rva = u32::from_le_bytes(data[o + 8..o + 12].try_into().unwrap());
+        if end <= begin {
+            continue;
+        }
+        let start = binary.image_base.wrapping_add(begin as u64);
+        let stop = binary.image_base.wrapping_add(end as u64);
+        if !is_exec(binary, start) {
+            continue;
+        }
+        let chained = pe_unwind_is_chained(binary, unwind_rva);
+        match current {
+            Some((cur_start, cur_end)) if chained && start == cur_end => {
+                current = Some((cur_start, stop));
+            }
+            Some((cur_start, cur_end)) if chained && start >= cur_start && start < cur_end => {
+                current = Some((cur_start, cur_end.max(stop)));
+            }
+            _ => {
+                if let Some(range) = current.take() {
+                    out.push(range);
+                }
+                current = Some((start, stop));
+            }
+        }
+    }
+    if let Some(range) = current {
+        out.push(range);
     }
     out
 }

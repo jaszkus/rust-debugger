@@ -11,7 +11,7 @@ use crate::analysis::function_id::{
 use crate::analysis::noreturn::NoReturnAnalyzer;
 use crate::analysis::pcode::{PInstr, POp, PVar};
 use crate::analysis::stack::StackFrame;
-use crate::analysis::unwind::function_starts;
+use crate::analysis::unwind::{function_ranges, function_starts};
 use crate::analysis::xref::{build_xrefs, XRef, XRefKind};
 use crate::disasm::{DisasmInstruction, InsnBytes};
 use crate::parser::{self, ExtractedString, Import, ParsedBinary, Section, StringEncoding, Symbol};
@@ -296,6 +296,37 @@ fn unwind_pe_pdata_yields_entry() {
     let bin = pe_test_bin();
     let starts = function_starts(&bin);
     assert_eq!(starts, vec![(0x140_001_000, FuncSource::UnwindInfo)]);
+}
+
+#[test]
+fn unwind_pe_pdata_skips_chained_fragments() {
+    const BASE: u64 = 0x140_000_000;
+    let mut bin = pe_test_bin();
+    let data = std::sync::Arc::make_mut(&mut bin.data);
+    data.resize(0x1019, 0);
+    data[0x100c..0x1010].copy_from_slice(&0x1010u32.to_le_bytes());
+    data[0x1010..0x1014].copy_from_slice(&0x1020u32.to_le_bytes());
+    data[0x1014..0x1018].copy_from_slice(&0x3000u32.to_le_bytes());
+    data[0x1018] = 0x20;
+    bin.sections[1].size = 24;
+    bin.sections.push(Section {
+        name: ".rdata".into(),
+        vaddr: BASE + 0x3000,
+        size: 1,
+        offset: 0x1018,
+        is_executable: false,
+        readable: true,
+        writable: false,
+        initialized: true,
+    });
+    assert_eq!(
+        function_starts(&bin),
+        vec![(BASE + 0x1000, FuncSource::UnwindInfo)]
+    );
+    assert_eq!(
+        function_ranges(&bin),
+        vec![(BASE + 0x1000, BASE + 0x1020)]
+    );
 }
 
 #[test]

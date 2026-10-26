@@ -406,6 +406,16 @@ fn auto_analyze_inner(
     }
     add_debug_function_starts(&mut functions, disasm, debug_types.as_deref());
     functions.sort_by_key(|f| f.entry);
+    {
+        let ranges: HashMap<u64, u64> = unwind::function_ranges(binary).into_iter().collect();
+        if !ranges.is_empty() {
+            for func in functions.iter_mut() {
+                if let Some(&end) = ranges.get(&func.entry) {
+                    func.end = func.end.max(end);
+                }
+            }
+        }
+    }
 
     for func in functions.iter_mut() {
         if let Some(name) = pdb_names.get(&func.entry) {
