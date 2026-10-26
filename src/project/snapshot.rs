@@ -160,9 +160,7 @@ pub fn save_project_db(program: &ProgramData, path: &str) -> Result<(), String> 
             let _ = std::fs::create_dir_all(parent);
         }
     let tmp = format!("{}.{}.tmp", path, std::process::id());
-    let mut data = w.buf;
-    let hash = fnv1a64(&data);
-    data.extend_from_slice(&hash.to_le_bytes());
+    let data = w.buf;
     let mut out = data[..8].to_vec();
     let payload = &data[8..];
     out.extend_from_slice(MAGIC_ZSTD);
