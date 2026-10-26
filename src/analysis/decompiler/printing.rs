@@ -292,6 +292,31 @@ pub(crate) fn render_op(
             scale,
             disp,
         } => {
+            let stack_name = match (base, index) {
+                (Some(b), None) => match &**b {
+                    PVar::Reg(reg) if matches!(*reg, "rsp" | "esp" | "rbp" | "ebp") => {
+                        let base_id = if matches!(*reg, "rbp" | "ebp") { 0u8 } else { 1u8 };
+                        hints.var_names.as_ref().and_then(|vn| {
+                            vn.stack_by_raw
+                                .get(&(base_id, *disp))
+                                .filter(|name| {
+                                    name.starts_with("local_") || name.starts_with("arg_")
+                                })
+                                .cloned()
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(name) = stack_name {
+                let v = format!("&{}", name);
+                track(reg_values, dst, PVal::E(v.clone()));
+                return Some((
+                    format!("{} = {};", fmt_var_with_hints(dst, hints), v),
+                    LineKind::Assignment,
+                ));
+            }
             let mut parts = Vec::new();
             if let Some(b) = base {
                 parts.push(pval_str(&resolve_pval_with_hints(b, reg_values, hints)));

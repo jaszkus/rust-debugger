@@ -1638,7 +1638,7 @@ fn debug_types_reach_eager_decompilation() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        main_text.contains("compute((rsp") && main_text.contains(", 0xff)"),
+        main_text.contains("compute(&local_18") && main_text.contains(", 0xff)"),
         "Win64 call arguments:\n{}",
         main_text
     );
@@ -1725,7 +1725,7 @@ fn dwarf_debug_types_reach_eager_decompilation() {
     assert!(!main_text.contains("fs:64"), "TLS canary load removed:\n{}", main_text);
     assert!(text.contains("return in_RAX;"), "missing return value:\n{}", text);
     assert!(
-        main_text.contains("compute((rbp - 0x20))"),
+        main_text.contains("compute(&n)"),
         "SysV call argument:\n{}",
         main_text
     );
