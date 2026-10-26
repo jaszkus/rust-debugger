@@ -1190,21 +1190,43 @@ pub fn apply_names(lines: &mut [crate::analysis::decompiler::PseudoLine], rv: &R
     for (&(pc, reg), name) in &vn.write_reg {
         expand_aliases(reg, name, 8, false, &mut by_pc.entry(pc).or_default().write);
     }
+    let mut unique: HashMap<&'static str, Option<String>> = HashMap::default();
+    for (&(_, reg), name) in &vn.read_reg {
+        match unique.entry(reg) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(Some(name.clone()));
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if e.get().as_deref() != Some(name.as_str()) {
+                    e.insert(None);
+                }
+            }
+        }
+    }
+    let mut fallback: Vec<(&'static str, String)> = Vec::new();
+    for (reg, name) in unique {
+        if let Some(name) = name
+            && name != reg {
+                let size = vn.size_of.get(&name).copied().unwrap_or(8);
+                expand_aliases(reg, &name, size, true, &mut fallback);
+            }
+    }
+    let empty = PcNames::default();
     for line in lines.iter_mut() {
-        let pc = match line.source_addr {
-            Some(p) => p,
-            None => continue,
-        };
-        let pn = match by_pc.get(&pc) {
-            Some(p) => p,
-            None => continue,
-        };
-        let new_text = rewrite_line(&line.text, pn);
-        line.text = new_text;
+        let pn = line
+            .source_addr
+            .and_then(|pc| by_pc.get(&pc))
+            .unwrap_or(&empty);
+        line.text = rewrite_line_with(&line.text, pn, &fallback);
     }
 }
 
+#[cfg(test)]
 fn rewrite_line(text: &str, pn: &PcNames) -> String {
+    rewrite_line_with(text, pn, &[])
+}
+
+fn rewrite_line_with(text: &str, pn: &PcNames, fallback: &[(&'static str, String)]) -> String {
     let (code, comment) = match text.find("//") {
         Some(i) => text.split_at(i),
         None => (text, ""),
@@ -1214,13 +1236,17 @@ fn rewrite_line(text: &str, pn: &PcNames) -> String {
         let rhs = &rest[3..];
         let plain_target = lhs.bytes().all(|c| is_ident_char(c) || c == b' ');
         let new_lhs = if plain_target {
-            rewrite_idents(lhs, &pn.write, true)
+            rewrite_idents_with(lhs, &pn.write, true, &[])
         } else {
-            rewrite_idents(lhs, &pn.read, false)
+            rewrite_idents_with(lhs, &pn.read, false, fallback)
         };
-        format!("{} = {}", new_lhs, rewrite_idents(rhs, &pn.read, false))
+        format!(
+            "{} = {}",
+            new_lhs,
+            rewrite_idents_with(rhs, &pn.read, false, fallback)
+        )
     } else {
-        rewrite_idents(code, &pn.read, false)
+        rewrite_idents_with(code, &pn.read, false, fallback)
     };
     out.push_str(comment);
     out
@@ -1233,8 +1259,18 @@ fn lookup<'m>(map: &'m [(&'static str, String)], tok: &str) -> Option<&'m str> {
     map.iter().find(|(from, _)| *from == tok).map(|(_, to)| to.as_str())
 }
 
+#[cfg(test)]
 fn rewrite_idents(s: &str, map: &[(&'static str, String)], first_only: bool) -> String {
-    if map.is_empty() {
+    rewrite_idents_with(s, map, first_only, &[])
+}
+
+fn rewrite_idents_with(
+    s: &str,
+    map: &[(&'static str, String)],
+    first_only: bool,
+    fallback: &[(&'static str, String)],
+) -> String {
+    if map.is_empty() && fallback.is_empty() {
         return s.to_string();
     }
     let bytes = s.as_bytes();
@@ -1248,7 +1284,7 @@ fn rewrite_idents(s: &str, map: &[(&'static str, String)], first_only: bool) -> 
             while i < bytes.len() && is_ident_char(bytes[i]) { i += 1; }
             let tok = &s[start..i];
             if !(first_only && replaced)
-                && let Some(rep) = lookup(map, tok) {
+                && let Some(rep) = lookup(map, tok).or_else(|| lookup(fallback, tok)) {
                     out.push_str(rep);
                     replaced = true;
                     continue;
@@ -1274,6 +1310,24 @@ mod tests {
 
     fn map(pairs: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
         pairs.iter().map(|&(a, b)| (a, b.to_string())).collect()
+    }
+
+    #[test]
+    fn apply_names_falls_back_to_unique_register_name() {
+        use crate::analysis::decompiler::{LineKind, PseudoLine};
+        let mut rv = empty_function(true);
+        rv.names
+            .read_reg
+            .insert((0x1000, "rcx"), "param_1".into());
+        rv.names.size_of.insert("param_1".into(), 8);
+        let mut lines = vec![PseudoLine {
+            indent: 0,
+            text: "if (rcx == 0) {".into(),
+            kind: LineKind::Branch,
+            source_addr: Some(0x1004),
+        }];
+        apply_names(&mut lines, &rv);
+        assert_eq!(lines[0].text, "if (param_1 == 0) {");
     }
 
     #[test]
