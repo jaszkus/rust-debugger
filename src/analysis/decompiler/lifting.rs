@@ -28,6 +28,7 @@ const MAX_HINT_PASSES: usize = 8;
 
 const STATE_MACHINE_UNTHREAD: bool = false;
 
+#[derive(Clone, Copy)]
 pub struct LiftInput<'a> {
     pub cfg: &'a CFG,
     pub pinstrs_in_func: &'a [PInstr],
@@ -434,8 +435,36 @@ fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeSca
     }
 }
 
+fn goto_line_count(pc: &Pseudocode) -> usize {
+    pc.lines
+        .iter()
+        .filter(|l| l.text.trim_start().starts_with("goto LAB_"))
+        .count()
+}
+
+fn renders_switch(pc: &Pseudocode) -> bool {
+    pc.lines
+        .iter()
+        .any(|l| l.text.trim_start().starts_with("switch ("))
+}
+
 pub fn decompile(input: LiftInput<'_>) -> Pseudocode {
-    decompile_with_stats(input).0
+    let first = decompile_with_stats(input).0;
+    if !renders_switch(&first) {
+        return first;
+    }
+    let second = decompile_with_stats(LiftInput {
+        switches: &[],
+        ..input
+    })
+    .0;
+    if goto_line_count(&second) < goto_line_count(&first)
+        && second.lines.len() <= first.lines.len() + first.lines.len() / 5
+    {
+        second
+    } else {
+        first
+    }
 }
 
 pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
@@ -2856,6 +2885,28 @@ mod graph_tests {
             kind,
             source_addr: None,
         }
+    }
+
+    #[test]
+    fn switch_selection_uses_the_lower_goto_count() {
+        let with_switch = Pseudocode {
+            func_entry: 0,
+            func_name: "f".into(),
+            lines: vec![
+                pl("switch (x) {", LineKind::Branch),
+                pl("goto LAB_10;", LineKind::Branch),
+                pl("}", LineKind::Branch),
+            ],
+        };
+        let without_switch = Pseudocode {
+            func_entry: 0,
+            func_name: "f".into(),
+            lines: vec![pl("if (x) { return; }", LineKind::Branch)],
+        };
+        assert!(renders_switch(&with_switch));
+        assert!(!renders_switch(&without_switch));
+        assert_eq!(goto_line_count(&with_switch), 1);
+        assert_eq!(goto_line_count(&without_switch), 0);
     }
 
     #[test]
