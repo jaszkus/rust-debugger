@@ -281,7 +281,7 @@ pub(crate) fn render_op(
             ))
         }
         POp::LeaAddr { dst, addr } => {
-            let v = format!("&DAT_{:X}", addr);
+            let v = format!("&DAT_{:x}", addr);
             track(reg_values, dst, PVal::E(v.clone()));
             Some((format!("{} = {};", fmt_var(dst), v), LineKind::Assignment))
         }

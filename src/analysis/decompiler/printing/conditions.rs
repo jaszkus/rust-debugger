@@ -474,7 +474,7 @@ pub(crate) fn fmt_load(
         PVar::Addr(a) if is_small_abs_addr(*a) => {
             format!("*({} *){}", ty, fmt_const(*a as i64))
         }
-        PVar::Addr(a) => format!("*({0} *)&DAT_{1:X}", ty, a),
+        PVar::Addr(a) => format!("*({0} *)&DAT_{1:x}", ty, a),
         PVar::Reg(r) => {
             let base = reg_values
                 .get(r)
@@ -582,7 +582,7 @@ pub(crate) fn fmt_var(v: &PVar) -> String {
             }
         }
         PVar::Addr(a) if is_small_abs_addr(*a) => fmt_const(*a as i64),
-        PVar::Addr(a) => format!("DAT_{:X}", a),
+        PVar::Addr(a) => format!("DAT_{:x}", a),
         PVar::Tmp(i) => format!("tmp_{}", i),
     }
 }
