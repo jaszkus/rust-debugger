@@ -1921,6 +1921,71 @@ fn p1_switch_4byte_relative() {
 }
 
 #[test]
+fn switch_bound_check_survives_intervening_instructions() {
+    use crate::parser::{ParsedBinary, Section};
+    use std::sync::Arc;
+    let mut code = vec![0x83, 0xF9, 0x01];
+    code.extend(std::iter::repeat_n(0x90, 14));
+    code.extend([0x8B, 0x84, 0x8A, 0x00, 0x20, 0x00, 0x00]);
+    code.extend([0x48, 0x01, 0xD0]);
+    code.extend([0xFF, 0xE0]);
+    let mut data = vec![0u8; 0x3000];
+    data[..code.len()].copy_from_slice(&code);
+    data[0x2000..0x2004].copy_from_slice(&0x1000u32.to_le_bytes());
+    data[0x2004..0x2008].copy_from_slice(&0x1010u32.to_le_bytes());
+    let bin = ParsedBinary {
+        format: "ELF".into(),
+        arch: "x86_64".into(),
+        entry_point: 0x1000,
+        sections: vec![
+            Section {
+                name: ".text".into(),
+                vaddr: 0x1000,
+                size: 0x100,
+                offset: 0,
+                is_executable: true,
+                readable: true,
+                writable: false,
+                initialized: true,
+            },
+            Section {
+                name: ".rodata".into(),
+                vaddr: 0x2000,
+                size: 0x100,
+                offset: 0x2000,
+                is_executable: false,
+                readable: true,
+                writable: false,
+                initialized: true,
+            },
+        ],
+        symbols: vec![],
+        imports: vec![],
+        exports: vec![],
+        strings: vec![],
+        data: Arc::new(data),
+        image_base: 0,
+        is_dll: false,
+        pe_characteristics: 0,
+        dll_characteristics: 0,
+        overlay: None,
+        tls_callbacks: vec![],
+        delay_imports: vec![],
+        has_rich: false,
+        libraries: vec![],
+        rpaths: Vec::new(),
+        macho_uuid: None,
+        relocations: Vec::new(),
+    };
+    let d = crate::disasm::disassemble_binary(&bin).unwrap();
+    let tables = crate::analysis::advanced::detect_switch_tables(&d.instructions, &bin, None);
+    assert!(!tables.is_empty(), "RVA switch with a distant bound must be detected");
+    let t = &tables[0];
+    assert_eq!(t.case_count, 2);
+    assert_eq!(t.case_targets, vec![0x1000, 0x1010]);
+}
+
+#[test]
 fn p2_debug_line_emits_rows() {
     let mut unit = vec![];
     unit.extend_from_slice(&2u16.to_le_bytes());

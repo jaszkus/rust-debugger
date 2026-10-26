@@ -360,7 +360,7 @@ fn msvc_rva_switch(
     let mut table_rva = None;
     let mut case_limit = None;
     let mut saw_add = false;
-    for p in &insns[i.saturating_sub(12)..i] {
+    for p in &insns[i.saturating_sub(48)..i] {
         let ops = p.ops();
         match p.mnem() {
             "add" => {

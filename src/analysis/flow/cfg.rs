@@ -207,25 +207,18 @@ pub fn build_cfg_with_targets(
         let mut reachable = vec![false; blocks.len()];
         let mut stack = vec![entry_id];
         reachable[entry_id] = true;
+        for (i, block) in blocks.iter().enumerate() {
+            if (pinned[i] || extra_targets.contains(&block.start)) && !reachable[i] {
+                reachable[i] = true;
+                stack.push(i);
+            }
+        }
         while let Some(b) = stack.pop() {
             for e in &blocks[b].successors {
                 if e.target < blocks.len() && !reachable[e.target] {
                     reachable[e.target] = true;
                     stack.push(e.target);
                 }
-            }
-        }
-        for (i, p) in pinned.iter().enumerate() {
-            if *p {
-                reachable[i] = true;
-            }
-        }
-        
-        
-        
-        for (i, block) in blocks.iter().enumerate() {
-            if extra_targets.contains(&block.start) {
-                reachable[i] = true;
             }
         }
         if reachable.iter().any(|r| !r) {
@@ -478,5 +471,21 @@ mod tests {
                 .iter()
                 .any(|edge| edge.target == case)
         );
+    }
+
+    #[test]
+    fn extra_target_descendants_survive_reachability_pruning() {
+        let insns = [
+            ins(0x1000, "jmp", "rax"),
+            ins(0x1002, "ret", ""),
+            ins(0x1004, "je", "0x1008"),
+            ins(0x1006, "ret", ""),
+            ins(0x1008, "ret", ""),
+            ins(0x100a, "ret", ""),
+        ];
+        let cfg = build_cfg_with_targets(&insns, 0x1000, 0x100c, &[0x1004]);
+        assert!(cfg.block_at.contains_key(&0x1004));
+        assert!(cfg.block_at.contains_key(&0x1006));
+        assert!(cfg.block_at.contains_key(&0x1008));
     }
 }
