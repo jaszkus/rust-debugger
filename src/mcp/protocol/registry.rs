@@ -74,7 +74,7 @@ pub const ALL_TOOLS: &[ToolSpec] = &[
     ("list_stubs", "List detected import thunks / stub functions", schema_list_paginated),
     ("list_switch_tables", "List detected switch/jump tables", schema_search),
     ("find_format_strings", "List strings containing C printf-style format specifiers (%s, %d, etc.)", schema_search),
-    ("search_in_decompiled", "Search regex/substring across all decompiled pseudocode", schema_search),
+    ("search_in_decompiled", "Search substring across all decompiled pseudocode", schema_search),
     ("search_instruction_pattern", "Find sequences of instructions matching a pattern of mnemonics (e.g. 'push;mov;call'). Paged: has_more / next_offset", schema_pattern),
 
     ("disassemble_range", "Disassemble N instructions starting at an address (or up to end_address). No analysis required.", schema_disasm_range),

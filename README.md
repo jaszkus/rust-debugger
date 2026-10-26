@@ -307,7 +307,7 @@ Expand a group for the full list of tools and their descriptions.
 | `disassemble_bytes` | Disassemble a hex byte string at an arbitrary base address. No binary required. |
 | `get_annotated_disasm` | Disassembly of a function with inline annotations: comments, call targets, string refs, xrefs |
 | `get_assembly_context` | Disassemble N instructions before/after an address |
-| `search_in_decompiled` | Search regex/substring across all decompiled pseudocode |
+| `search_in_decompiled` | Search substring across all decompiled pseudocode |
 | `search_instructions` | Search instructions by mnemonic and/or operand substring |
 | `search_instruction_pattern` | Find sequences of instructions matching a pattern of mnemonics (e.g. 'push;mov;call'). Paged: has_more / next_offset |
 
