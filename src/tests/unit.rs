@@ -1817,7 +1817,11 @@ fn pdb_enums_and_bitfields_reach_decompilation() {
     let main = text("main");
     assert!(main.contains("Flags f;"), "bitfield local:\n{}", main);
     assert!(main.contains("f.color = GREEN;"), "enum constant:\n{}", main);
-    assert!(main.contains("f.b = rax;"), "bitfield destination:\n{}", main);
+    assert!(
+        main.contains("f.a = rax;"),
+        "bitfield storage destination:\n{}",
+        main
+    );
     let classify = text("classify");
     assert!(classify.contains("f.b"), "bitfield read:\n{}", classify);
 }

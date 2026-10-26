@@ -92,7 +92,9 @@ impl VarType {
     }
     pub fn decl(&self, name: &str) -> String {
         match self {
-            VarType::Undefined(n) if *n > 8 => format!("uint8_t {}[{}]", name, n),
+            VarType::Undefined(n) if !matches!(*n, 1 | 2 | 4 | 8) => {
+                format!("uint8_t {}[{}]", name, (*n).max(1))
+            }
             VarType::Pointer => format!("{}{}", self.c_str(), name),
             _ => format!("{} {}", self.c_str(), name),
         }
@@ -232,6 +234,15 @@ pub fn recover(cfg: &CFG, pinstrs: &[PInstr], _imap: &[crate::disasm::DisasmInst
 }
 
 pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi) -> RecoveredFunction {
+    recover_with_ops(cfg, &build_block_ops(cfg, pinstrs), is64, abi_hint)
+}
+
+pub fn recover_with_ops(
+    cfg: &CFG,
+    block_ops: &[Vec<(u64, &POp)>],
+    is64: bool,
+    abi_hint: Abi,
+) -> RecoveredFunction {
     let n = cfg.blocks.len();
     if n == 0 {
         return empty_function(is64);
@@ -241,9 +252,8 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         _ => 0,
     };
 
-    let block_ops = build_block_ops(cfg, pinstrs);
     let (order, reachable) = reverse_postorder(cfg, entry);
-    let (rbp_delta, rsp_at) = compute_deltas(cfg, &block_ops, &order, entry);
+    let (rbp_delta, rsp_at) = compute_deltas(cfg, block_ops, &order, entry);
 
     let norm_off = |base: u8, off: i64, pc: u64| -> i64 {
         if base == 0 { rbp_delta.unwrap_or(0) + off }
@@ -251,8 +261,8 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
     };
 
     let ptr: i64 = if is64 { 8 } else { 4 };
-    let accesses = scan_stack_accesses(&block_ops, ptr as u32);
-    let input_reads = if is64 { entry_value_reads(cfg, &block_ops, &order, &reachable) } else { Vec::new() };
+    let accesses = scan_stack_accesses(block_ops, ptr as u32);
+    let input_reads = if is64 { entry_value_reads(cfg, block_ops, &order, &reachable) } else { Vec::new() };
 
     let abi = if !is64 {
         Abi::Auto
@@ -262,7 +272,20 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         abi_hint
     };
     let usage = reg_usage(&input_reads);
-    let reg_params = if is64 { build_reg_params(abi, &usage) } else { Vec::new() };
+    let param_start = match (is64, abi) {
+        (true, Abi::SysV64) => 8,
+        (true, _) => 8 + MS_SHADOW_SPACE,
+        (false, _) => 4,
+    };
+    let has_stack_params = is64
+        && accesses
+            .iter()
+            .any(|a| !a.write && !a.taken && norm_off(a.base, a.off, a.pc) >= param_start);
+    let reg_params = if is64 {
+        build_reg_params(abi, &usage, has_stack_params)
+    } else {
+        Vec::new()
+    };
     let n_xmm = reg_params.iter().filter(|p| p.reg.starts_with("xmm")).count();
 
     let ctx = match (is64, abi) {
@@ -297,6 +320,7 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
 
     let mut noffs: Vec<i64> = slots.keys().copied().collect();
     noffs.sort_unstable();
+    let next_off: HashMap<i64, i64> = noffs.windows(2).map(|w| (w[0], w[1])).collect();
 
     let mut vn = VarNames::default();
     let mut vars: Vec<RecoveredVar> = Vec::new();
@@ -307,7 +331,22 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         let write_only = s.reads == 0 && s.taken == 0 && s.writes > 0;
         let class = classify_slot(noff, write_only, &ctx);
         let name = slot_name(noff, class, &ctx);
-        let size = if s.size > 0 { s.size } else if s.taken > 0 { ptr as u32 } else { 4 };
+        let extent = if s.taken > 0 {
+            next_off
+                .get(&noff)
+                .map_or(0, |&n| (n - noff).clamp(0, 4096) as u32)
+        } else {
+            0
+        };
+        let size = if extent > 8 {
+            s.size.max(extent)
+        } else if s.size > 0 {
+            s.size
+        } else if s.taken > 0 {
+            ptr as u32
+        } else {
+            4
+        };
         let all_float = s.float_hits == s.total && !s.float_mixed && (s.float_size == 4 || s.float_size == 8);
         let ty = if all_float { VarType::from_float_size(s.float_size) } else { VarType::from_size(size) };
         let (kind, keep) = match class {
@@ -317,7 +356,9 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         };
         vn.type_of.insert(name.clone(), ty.clone());
         vn.size_of.insert(name.clone(), size);
-        vn.kept.insert(name.clone());
+        if keep {
+            vn.kept.insert(name.clone());
+        }
         vars.push(RecoveredVar {
             id: vars.len() as u32,
             name: name.clone(),
@@ -331,19 +372,33 @@ pub fn recover_with_abi(cfg: &CFG, pinstrs: &[PInstr], is64: bool, abi_hint: Abi
         slot_info.insert(noff, (name, class));
     }
 
+    let mut ambiguous_raw: HashSet<(u8, i64)> = HashSet::default();
     let mut raw_class: HashMap<(u8, i64), (u64, SlotClass)> = HashMap::default();
     for (i, a) in accesses.iter().enumerate() {
         let (name, class) = &slot_info[&access_noff[i]];
         if !a.taken {
             if a.write { vn.write_stack.insert((a.pc, a.base, a.off), name.clone()); }
             else { vn.read_stack.insert((a.pc, a.base, a.off), name.clone()); }
-            vn.stack_by_raw
-                .entry((a.base, a.off))
-                .or_insert_with(|| name.clone());
+            match vn.stack_by_raw.entry((a.base, a.off)) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    if e.get() != name {
+                        ambiguous_raw.insert((a.base, a.off));
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(name.clone());
+                }
+            }
+        }
+        if ambiguous_raw.contains(&(a.base, a.off)) {
+            continue;
         }
         let cl = *class;
         let e = raw_class.entry((a.base, a.off)).or_insert((a.pc, cl));
         if a.pc < e.0 { *e = (a.pc, cl); }
+    }
+    for k in &ambiguous_raw {
+        vn.stack_by_raw.remove(k);
     }
     let mut local_slots: HashSet<(u8, i64)> = HashSet::default();
     let mut param_slots: HashSet<(u8, i64)> = HashSet::default();
@@ -478,9 +533,32 @@ fn reverse_postorder(cfg: &CFG, entry: usize) -> (Vec<usize>, Vec<bool>) {
 
 fn is_sp(r: &str) -> bool { r == "rsp" || r == "esp" }
 fn is_bp(r: &str) -> bool { r == "rbp" || r == "ebp" }
-fn is_xmm(r: &str) -> bool { r.starts_with("xmm") || r.starts_with("ymm") }
+fn is_xmm(r: &str) -> bool {
+    r.starts_with("xmm") || r.starts_with("ymm") || r.starts_with("zmm")
+}
 fn is_sp_var(v: &PVar) -> bool { pvar_reg(v).is_some_and(is_sp) }
 fn is_bp_var(v: &PVar) -> bool { pvar_reg(v).is_some_and(is_bp) }
+
+fn affects_stack(op: &POp) -> bool {
+    match op {
+        POp::Push { .. } | POp::Pop { .. } => true,
+        POp::IntSub {
+            dst,
+            b: PVar::Const(_),
+            ..
+        }
+        | POp::IntAdd {
+            dst,
+            b: PVar::Const(_),
+            ..
+        } => is_sp_var(dst),
+        POp::Copy { dst, src, .. } => {
+            (is_sp_var(dst) && is_bp_var(src)) || (is_bp_var(dst) && is_sp_var(src))
+        }
+        POp::AddrOf { dst, .. } => is_sp_var(dst) || is_bp_var(dst),
+        _ => false,
+    }
+}
 
 fn step_stack(op: &POp, rsp: &mut i64, rbp: &mut Option<i64>) {
     match op {
@@ -504,6 +582,13 @@ fn step_stack(op: &POp, rsp: &mut i64, rbp: &mut Option<i64>) {
                 if let Some(rd) = *rbp { *rsp = rd + *disp; }
             } else if is_bp_var(dst) && is_sp_var(base) {
                 *rbp = Some(*rsp + *disp);
+            } else if is_sp_var(dst) && is_sp_var(base) {
+                *rsp += *disp;
+            } else if is_bp_var(dst)
+                && is_bp_var(base)
+                && let Some(rd) = *rbp
+            {
+                *rbp = Some(rd + *disp);
             }
         }
         _ => {}
@@ -521,6 +606,15 @@ fn compute_deltas(
     let mut block_exit: Vec<Option<i64>> = vec![None; n];
     block_entry[entry] = Some(0);
     let mut rbp_delta: Option<i64> = None;
+    let events: Vec<Vec<&POp>> = block_ops
+        .iter()
+        .map(|ops| {
+            ops.iter()
+                .map(|&(_, op)| op)
+                .filter(|op| affects_stack(op))
+                .collect()
+        })
+        .collect();
 
     for round in 0..2 {
         let mut changed = true;
@@ -543,7 +637,7 @@ fn compute_deltas(
                     None => continue,
                 };
                 let mut rbp = rbp_delta;
-                for &(_, op) in &block_ops[b] {
+                for &op in &events[b] {
                     step_stack(op, &mut rsp, &mut rbp);
                 }
                 if rbp_delta.is_none() { rbp_delta = rbp; }
@@ -586,7 +680,7 @@ fn compute_deltas(
 
 
 #[inline]
-fn base_id(b: &StackBase) -> u8 {
+pub(crate) fn base_id(b: &StackBase) -> u8 {
     if matches!(b, StackBase::Rbp) { 0 } else { 1 }
 }
 
@@ -713,7 +807,8 @@ fn write_size(op: &POp) -> u32 {
         | POp::IntOr { size, .. } | POp::IntXor { size, .. } | POp::IntLeft { size, .. }
         | POp::IntShr { size, .. } | POp::IntSar { size, .. } | POp::SetCC { size, .. }
         | POp::FloatBinop { size, .. } | POp::Rotate { size, .. } | POp::Bswap { size, .. }
-        | POp::SegmentOp { size, .. } => *size,
+        | POp::SegmentOp { size, .. } | POp::Cmp { size, .. } | POp::Test { size, .. }
+        | POp::FloatCmp { size, .. } | POp::Push { size, .. } | POp::Pop { size, .. } => *size,
         POp::Zext { to_size, .. } | POp::Sext { to_size, .. } => *to_size,
         POp::LeaAddr { .. } | POp::AddrOf { .. } => 8,
         _ => 4,
@@ -722,10 +817,9 @@ fn write_size(op: &POp) -> u32 {
 
 fn read_size(op: &POp) -> u32 {
     match op {
-        POp::Zext { from_size, .. } => *from_size,
-        POp::Sext { .. } | POp::Cvt { .. } => 0,
-        POp::Push { size, .. } => *size,
-        POp::Pop { size, .. } => *size,
+        POp::Zext { from_size, .. } | POp::Sext { from_size, .. } => *from_size,
+        POp::Cvt { .. } => 0,
+        POp::Push { size, .. } | POp::Pop { size, .. } => *size,
         _ => write_size(op),
     }
 }
@@ -826,7 +920,7 @@ fn transfer_mask(ops: &[(u64, &POp)], mut mask: u32, mut rec: Option<&mut Vec<In
     for &(pc, op) in ops {
         rlocs.clear();
         collect_reads(op, &mut rlocs);
-        for &(rl, _) in &rlocs {
+        for &(rl, as_addr) in &rlocs {
             if let Loc::Reg(r) = rl
                 && let Some(bit) = reg_bit(r)
                     && mask & (1u32 << bit) != 0
@@ -834,7 +928,7 @@ fn transfer_mask(ops: &[(u64, &POp)], mut mask: u32, mut rec: Option<&mut Vec<In
                             v.push(InputRead {
                                 reg: r,
                                 pc,
-                                size: read_size(op),
+                                size: if as_addr { 8 } else { read_size(op) },
                                 push: matches!(op, POp::Push { .. }),
                                 spill: spill_target(op),
                             });
@@ -955,40 +1049,45 @@ fn make_float_param(idx: usize, reg: &'static str, u: Option<&RegUse>) -> RegPar
         None => (0, 0, 0, 0),
     };
     let (ty, size) = if size == 4 { (VarType::Float, 4) } else { (VarType::Double, 8) };
-    RegParam { name: format!("param_{}", idx), reg, ty, size, uses, first_pc, last_pc, synthetic: false }
+    RegParam { name: format!("param_{}", idx), reg, ty, size, uses, first_pc, last_pc, synthetic: u.is_none() }
 }
 
-fn build_reg_params(abi: Abi, usage: &HashMap<&'static str, RegUse>) -> Vec<RegParam> {
+fn build_reg_params(
+    abi: Abi,
+    usage: &HashMap<&'static str, RegUse>,
+    has_stack_params: bool,
+) -> Vec<RegParam> {
     let mut out: Vec<RegParam> = Vec::new();
     match abi {
         Abi::SysV64 => {
-            let mut hi: Option<usize> = None;
-            for (i, &r) in ABI_X64_SYSV.iter().enumerate() {
-                if usage.contains_key(r) { hi = Some(i); }
-            }
-            let n_int = hi.map_or(0, |h| h + 1);
+            let hi = ABI_X64_SYSV.iter().rposition(|&r| usage.contains_key(r));
+            let n_int = if has_stack_params {
+                ABI_X64_SYSV.len()
+            } else {
+                hi.map_or(0, |h| h + 1)
+            };
             for (i, &reg) in ABI_X64_SYSV.iter().take(n_int).enumerate() {
                 out.push(make_int_param(i + 1, reg, usage.get(reg)));
             }
-            let mut k = 0usize;
-            for &reg in ABI_X64_SYSV_FLOAT {
-                if let Some(u) = usage.get(reg) {
-                    out.push(make_float_param(n_int + 1 + k, reg, Some(u)));
-                    k += 1;
+            if let Some(hf) = ABI_X64_SYSV_FLOAT
+                .iter()
+                .rposition(|&r| usage.contains_key(r))
+            {
+                for (k, &reg) in ABI_X64_SYSV_FLOAT.iter().take(hf + 1).enumerate() {
+                    out.push(make_float_param(n_int + 1 + k, reg, usage.get(reg)));
                 }
             }
         }
         _ => {
-            let mut hi: Option<usize> = None;
-            for i in 0..ABI_X64_MS.len() {
-                if usage.contains_key(ABI_X64_MS[i]) || usage.contains_key(ABI_X64_FLOAT[i]) {
-                    hi = Some(i);
-                }
+            let mut hi = (0..ABI_X64_MS.len()).rev().find(|&i| {
+                usage.contains_key(ABI_X64_MS[i]) || usage.contains_key(ABI_X64_FLOAT[i])
+            });
+            if has_stack_params {
+                hi = Some(ABI_X64_MS.len() - 1);
             }
             if let Some(hi) = hi {
                 for i in 0..=hi {
-                    let ireg = ABI_X64_MS[i];
-                    let freg = ABI_X64_FLOAT[i];
+                    let (ireg, freg) = (ABI_X64_MS[i], ABI_X64_FLOAT[i]);
                     if let Some(u) = usage.get(ireg) {
                         out.push(make_int_param(i + 1, ireg, Some(u)));
                     } else if let Some(u) = usage.get(freg) {
@@ -1043,14 +1142,31 @@ struct PcNames {
     write: Vec<(&'static str, String)>,
 }
 
-fn expand_aliases(reg: &'static str, name: &str, partial_casts: bool, out: &mut Vec<(&'static str, String)>) {
+fn expand_aliases(
+    reg: &'static str,
+    name: &str,
+    size: u32,
+    partial_casts: bool,
+    out: &mut Vec<(&'static str, String)>,
+) {
     out.push((reg, name.to_string()));
     for &(alias, bits) in sub_aliases(reg) {
-        match bits {
-            32 => out.push((alias, name.to_string())),
-            16 if partial_casts => out.push((alias, format!("(uint16_t){}", name))),
-            8 if partial_casts => out.push((alias, format!("(uint8_t){}", name))),
-            _ => {}
+        if !partial_casts {
+            if bits == 32 {
+                out.push((alias, name.to_string()));
+            }
+            continue;
+        }
+        let cast = match bits {
+            32 => "uint32_t",
+            16 => "uint16_t",
+            8 => "uint8_t",
+            _ => continue,
+        };
+        if size * 8 > bits as u32 {
+            out.push((alias, format!("({}){}", cast, name)));
+        } else {
+            out.push((alias, name.to_string()));
         }
     }
 }
@@ -1062,10 +1178,17 @@ pub fn apply_names(lines: &mut [crate::analysis::decompiler::PseudoLine], rv: &R
     }
     let mut by_pc: HashMap<u64, PcNames> = HashMap::default();
     for (&(pc, reg), name) in &vn.read_reg {
-        expand_aliases(reg, name, true, &mut by_pc.entry(pc).or_default().read);
+        let size = vn.size_of.get(name).copied().unwrap_or(8);
+        expand_aliases(
+            reg,
+            name,
+            size,
+            true,
+            &mut by_pc.entry(pc).or_default().read,
+        );
     }
     for (&(pc, reg), name) in &vn.write_reg {
-        expand_aliases(reg, name, false, &mut by_pc.entry(pc).or_default().write);
+        expand_aliases(reg, name, 8, false, &mut by_pc.entry(pc).or_default().write);
     }
     for line in lines.iter_mut() {
         let pc = match line.source_addr {
@@ -1082,8 +1205,12 @@ pub fn apply_names(lines: &mut [crate::analysis::decompiler::PseudoLine], rv: &R
 }
 
 fn rewrite_line(text: &str, pn: &PcNames) -> String {
-    if let Some(eq) = text.find(" = ") {
-        let (lhs, rest) = text.split_at(eq);
+    let (code, comment) = match text.find("//") {
+        Some(i) => text.split_at(i),
+        None => (text, ""),
+    };
+    let mut out = if let Some(eq) = code.find(" = ") {
+        let (lhs, rest) = code.split_at(eq);
         let rhs = &rest[3..];
         let plain_target = lhs.bytes().all(|c| is_ident_char(c) || c == b' ');
         let new_lhs = if plain_target {
@@ -1091,11 +1218,12 @@ fn rewrite_line(text: &str, pn: &PcNames) -> String {
         } else {
             rewrite_idents(lhs, &pn.read, false)
         };
-        let new_rhs = rewrite_idents(rhs, &pn.read, false);
-        format!("{} = {}", new_lhs, new_rhs)
+        format!("{} = {}", new_lhs, rewrite_idents(rhs, &pn.read, false))
     } else {
-        rewrite_idents(text, &pn.read, false)
-    }
+        rewrite_idents(code, &pn.read, false)
+    };
+    out.push_str(comment);
+    out
 }
 
 fn is_ident_start(c: u8) -> bool { c.is_ascii_alphabetic() || c == b'_' }
@@ -1160,8 +1288,11 @@ mod tests {
     #[test]
     fn rewrite_line_splits_on_assignment() {
         let mut pn = PcNames::default();
-        expand_aliases("rcx", "param_1", true, &mut pn.read);
-        assert_eq!(rewrite_line("rax = ecx + 1", &pn), "rax = param_1 + 1");
+        expand_aliases("rcx", "param_1", 8, true, &mut pn.read);
+        assert_eq!(
+            rewrite_line("rax = ecx + 1", &pn),
+            "rax = (uint32_t)param_1 + 1"
+        );
         assert_eq!(rewrite_line("*(int32_t *)(rcx + 8) = 5", &pn), "*(int32_t *)(param_1 + 8) = 5");
         assert_eq!(rewrite_line("rax = cl", &pn), "rax = (uint8_t)param_1");
     }
@@ -1229,7 +1360,7 @@ mod tests {
 
     #[test]
     fn ms_params_are_positional_and_gaps_are_filled() {
-        let p = build_reg_params(Abi::MsX64, &usage_of(&["rdx", "xmm2"]));
+        let p = build_reg_params(Abi::MsX64, &usage_of(&["rdx", "xmm2"]), false);
         let names: Vec<(&str, &str)> = p.iter().map(|x| (x.name.as_str(), x.reg)).collect();
         assert_eq!(names, vec![("param_1", "rcx"), ("param_2", "rdx"), ("param_3", "xmm2")]);
         assert!(p[0].synthetic && !p[1].synthetic);
@@ -1238,10 +1369,54 @@ mod tests {
 
     #[test]
     fn sysv_params_use_integer_positions_then_xmm() {
-        let p = build_reg_params(Abi::SysV64, &usage_of(&["rsi", "xmm0"]));
+        let p = build_reg_params(Abi::SysV64, &usage_of(&["rsi", "xmm0"]), false);
         let names: Vec<&str> = p.iter().map(|x| x.name.as_str()).collect();
         assert_eq!(names, vec!["param_1", "param_2", "param_3"]);
         assert_eq!(p[2].reg, "xmm0");
+    }
+
+    #[test]
+    fn stack_params_force_full_register_prefix() {
+        let p = build_reg_params(Abi::SysV64, &usage_of(&["rdi"]), true);
+        assert_eq!(p.len(), 6);
+        assert!(p[1..].iter().all(|x| x.synthetic));
+        assert_eq!(
+            build_reg_params(Abi::MsX64, &usage_of(&[]), true).len(),
+            4
+        );
+    }
+
+    #[test]
+    fn sysv_float_gaps_are_filled() {
+        let p = build_reg_params(Abi::SysV64, &usage_of(&["xmm1"]), false);
+        let regs: Vec<&str> = p.iter().map(|x| x.reg).collect();
+        assert_eq!(regs, ["xmm0", "xmm1"]);
+    }
+
+    #[test]
+    fn alias_casts_depend_on_param_size() {
+        let mut out = Vec::new();
+        expand_aliases("rcx", "param_1", 8, true, &mut out);
+        assert!(out.contains(&("ecx", "(uint32_t)param_1".to_string())));
+        out.clear();
+        expand_aliases("rcx", "param_1", 4, true, &mut out);
+        assert!(out.contains(&("ecx", "param_1".to_string())));
+    }
+
+    #[test]
+    fn odd_sized_undefined_becomes_array() {
+        assert_eq!(VarType::Undefined(6).decl("x"), "uint8_t x[6]");
+        assert_eq!(VarType::Undefined(8).decl("x"), "int64_t x");
+    }
+
+    #[test]
+    fn rewrite_line_ignores_comment() {
+        let mut pn = PcNames::default();
+        expand_aliases("rcx", "param_1", 8, true, &mut pn.read);
+        assert_eq!(
+            rewrite_line("rax = rcx;  // a = rcx", &pn),
+            "rax = param_1;  // a = rcx"
+        );
     }
 
     #[test]

@@ -6,8 +6,27 @@ use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 
-const MAX_CLONE_BLOCKS: usize = 32;
-const MAX_CLONE_LINES: usize = 200;
+const MAX_CLONE_BLOCKS: usize = 16;
+const MAX_CLONE_LINES: usize = 80;
+const MAX_CLONE_DEPTH: u8 = 2;
+const MAX_TINY_CLONE_DEPTH: u8 = 4;
+const TINY_CLONE_BLOCKS: usize = 4;
+const MAX_CLONES_PER_TARGET: u8 = 2;
+const MAX_CLONES_PER_TINY_TARGET: u8 = 6;
+
+thread_local! {
+    static TAIL_CALL: std::cell::Cell<Option<(usize, u32)>> =
+        const { std::cell::Cell::new(None) };
+    static CLONE_FAILED: std::cell::RefCell<HashSet<(usize, usize)>> =
+        std::cell::RefCell::new(HashSet::default());
+    static SWITCH_FAILS: std::cell::RefCell<HashMap<usize, u8>> =
+        std::cell::RefCell::new(HashMap::default());
+    static CLONE_USES: std::cell::RefCell<HashMap<usize, u8>> =
+        std::cell::RefCell::new(HashMap::default());
+    static CLONE_LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BLOCK_ANCHOR: std::cell::RefCell<HashMap<usize, usize>> =
+        std::cell::RefCell::new(HashMap::default());
+}
 
 pub(crate) fn compute_dowhile(
     cfg: &CFG,
@@ -18,7 +37,37 @@ pub(crate) fn compute_dowhile(
     hints: &TypeHints,
 ) -> HashSet<usize> {
     let mut out = HashSet::default();
+    if back_edges.is_empty() {
+        return out;
+    }
+    let n = cfg.blocks.len();
+    let entry = cfg.block_at.get(&cfg.func_entry).copied().unwrap_or(0);
+    let succs: Vec<Vec<usize>> = cfg
+        .blocks
+        .iter()
+        .map(|b| {
+            b.successors
+                .iter()
+                .map(|e| e.target)
+                .filter(|&t| t < n)
+                .collect()
+        })
+        .collect();
+    let idom = compute_idoms(&succs, entry);
     for (header, latch) in back_edges {
+        let latch_count = cfg.blocks.get(*header).map_or(0, |b| {
+            if b.predecessors.is_empty() {
+                1
+            } else {
+                b.predecessors
+                    .iter()
+                    .filter(|&&p| dominates(&idom, *header, p))
+                    .count()
+            }
+        });
+        if latch_count != 1 {
+            continue;
+        }
         let hconsts = block_consts.get(*header).cloned().unwrap_or_default();
         if recover_condition(cfg, bops, imap, *header, &hconsts, Some(hints)) != "cond" {
             continue;
@@ -56,6 +105,25 @@ impl Postdom {
             if blk.successors.is_empty() {
                 rev[exit].push(b);
             }
+        }
+        let mut reaches = vec![false; n + 1];
+        let mut work = vec![exit];
+        reaches[exit] = true;
+        loop {
+            while let Some(x) = work.pop() {
+                for &y in &rev[x] {
+                    if !reaches[y] {
+                        reaches[y] = true;
+                        work.push(y);
+                    }
+                }
+            }
+            let Some(orphan) = (0..n).find(|&b| !reaches[b]) else {
+                break;
+            };
+            rev[exit].push(orphan);
+            reaches[orphan] = true;
+            work.push(orphan);
         }
         let idom = compute_idoms(&rev, exit);
         Self {
@@ -180,12 +248,14 @@ pub(crate) struct LoopInfo {
     pub(crate) header: usize,
     pub(crate) body: HashSet<usize>,
     pub(crate) exits: HashSet<usize>,
+    pub(crate) designated_exit: Option<usize>,
 }
 
 
 
 pub(crate) struct Loops {
     infos: HashMap<usize, LoopInfo>,
+    by_block: Vec<Vec<usize>>,
 }
 
 impl Loops {
@@ -224,6 +294,7 @@ impl Loops {
                 header,
                 body: HashSet::default(),
                 exits: HashSet::default(),
+                designated_exit: None,
             });
             info.body.extend(body);
         }
@@ -238,38 +309,56 @@ impl Loops {
                 }
             }
             info.exits = exits;
+            let designated = info.exit_edge(cfg).map(|(t, _)| t).or_else(|| {
+                let mut hits: HashMap<usize, usize> = HashMap::default();
+                for &b in &info.body {
+                    for e in &cfg.blocks[b].successors {
+                        if e.target < n && !info.body.contains(&e.target) {
+                            *hits.entry(e.target).or_default() += 1;
+                        }
+                    }
+                }
+                info.exits
+                    .iter()
+                    .copied()
+                    .max_by_key(|t| (hits.get(t).copied().unwrap_or(0), std::cmp::Reverse(*t)))
+            });
+            info.designated_exit = designated;
         }
 
-        Self { infos }
+        let mut by_block: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for info in infos.values() {
+            for &b in &info.body {
+                if b < n {
+                    by_block[b].push(info.header);
+                }
+            }
+        }
+        for headers in by_block.iter_mut() {
+            headers.sort_by_key(|h| (infos[h].body.len(), *h));
+        }
+        Self { infos, by_block }
     }
 
     pub(crate) fn get(&self, header: usize) -> Option<&LoopInfo> {
         self.infos.get(&header)
     }
 
-    
     pub(crate) fn enclosing(&self, block: usize) -> Vec<usize> {
-        let mut out: Vec<usize> = self
-            .infos
-            .values()
-            .filter(|info| info.body.contains(&block))
-            .map(|info| info.header)
-            .collect();
-        out.sort_by_key(|h| self.infos[h].body.len());
-        out
+        self.by_block.get(block).cloned().unwrap_or_default()
     }
 
     pub(crate) fn edge_action(&self, from: usize, target: usize) -> Option<EdgeAction> {
-        for h in self.enclosing(from) {
-            let Some(info) = self.infos.get(&h) else {
-                continue;
-            };
-            if target == h {
-                return Some(EdgeAction::Continue);
-            }
-            if info.exits.contains(&target) {
-                return Some(EdgeAction::Break);
-            }
+        let h = self.enclosing(from).into_iter().next()?;
+        let info = self.infos.get(&h)?;
+        if target == h {
+            return Some(EdgeAction::Continue);
+        }
+        if info.body.contains(&target) {
+            return None;
+        }
+        if info.designated_exit == Some(target) {
+            return Some(EdgeAction::Break);
         }
         None
     }
@@ -389,59 +478,506 @@ pub(crate) struct WalkCtx<'a> {
 
 
 
-fn clone_terminal_region(
+
+fn is_keyword(text: &str, kw: &str) -> bool {
+    text.strip_prefix(kw)
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+fn is_case_label(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("case ") || t.starts_with("default:")
+}
+
+fn parse_label_addr(name: &str) -> Option<u64> {
+    u64::from_str_radix(name.strip_prefix("LAB_")?, 16).ok()
+}
+
+fn block_by_start(cfg: &CFG, addr: u64) -> Option<usize> {
+    cfg.block_at
+        .get(&addr)
+        .copied()
+        .filter(|&b| b < cfg.blocks.len() && cfg.blocks[b].start == addr)
+        .or_else(|| cfg.blocks.iter().position(|b| b.start == addr))
+}
+
+fn collect_dangling(lines: &[PseudoLine]) -> Vec<u64> {
+    let defined: HashSet<&str> = lines.iter().filter_map(|l| label_of(&l.text)).collect();
+    let mut seen: HashSet<u64> = HashSet::default();
+    let mut out = Vec::new();
+    for l in lines {
+        if let Some(t) = goto_target(&l.text)
+            && !defined.contains(t)
+            && let Some(addr) = parse_label_addr(t)
+            && seen.insert(addr)
+        {
+            out.push(addr);
+        }
+    }
+    out
+}
+
+fn insert_missing_labels(cfg: &CFG, lines: &mut Vec<PseudoLine>) {
+    let mut inserts: Vec<(usize, u64)> = Vec::new();
+    for addr in collect_dangling(lines) {
+        let Some(b) = block_by_start(cfg, addr) else {
+            continue;
+        };
+        let (s, e) = (cfg.blocks[b].start, cfg.blocks[b].end);
+        let anchor = lines
+            .iter()
+            .position(|l| {
+                !is_case_label(&l.text)
+                    && l.kind != LineKind::Label
+                    && l.source_addr.is_some_and(|a| a >= s && a < e)
+            })
+            .or_else(|| {
+                BLOCK_ANCHOR.with(|m| m.borrow().get(&b).copied())
+                    .filter(|&i| i <= lines.len())
+            });
+        if let Some(idx) = anchor {
+            inserts.push((idx, s));
+        }
+    }
+    inserts.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (idx, s) in inserts {
+        lines.insert(
+            idx,
+            PseudoLine {
+                indent: 0,
+                text: format!("LAB_{:X}:", s),
+                kind: LineKind::Label,
+                source_addr: Some(s),
+            },
+        );
+        anchor_shift_from(idx);
+    }
+}
+
+fn repair_dangling_gotos(
+    ctx: &WalkCtx<'_>,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+) {
+    let n = ctx.cfg.blocks.len();
+    let mut attempted: HashSet<usize> = HashSet::default();
+    for _ in 0..=n {
+        insert_missing_labels(ctx.cfg, lines);
+        let mut progressed = false;
+        for addr in collect_dangling(lines) {
+            let Some(b) = block_by_start(ctx.cfg, addr) else {
+                continue;
+            };
+            if !attempted.insert(b) {
+                continue;
+            }
+            if visited.contains(&b) {
+                let blk = &ctx.cfg.blocks[b];
+                if let [edge] = blk.successors.as_slice()
+                    && edge.target < n
+                {
+                    lines.push(PseudoLine {
+                        indent: 0,
+                        text: format!("LAB_{:X}:", blk.start),
+                        kind: LineKind::Label,
+                        source_addr: Some(blk.start),
+                    });
+                    lines.push(PseudoLine {
+                        indent,
+                        text: format!("goto LAB_{:X};", ctx.cfg.blocks[edge.target].start),
+                        kind: LineKind::Branch,
+                        source_addr: None,
+                    });
+                    progressed = true;
+                }
+                continue;
+            }
+            let start_idx = lines.len();
+            walk_region(ctx, b, visited, lines, indent, 1, &[]);
+            let name = format!("LAB_{:X}:", ctx.cfg.blocks[b].start);
+            let has_label = lines[start_idx..]
+                .iter()
+                .any(|l| l.kind == LineKind::Label && l.text.trim() == name);
+            if !has_label {
+                lines.insert(
+                    start_idx,
+                    PseudoLine {
+                        indent: 0,
+                        text: name,
+                        kind: LineKind::Label,
+                        source_addr: Some(ctx.cfg.blocks[b].start),
+                    },
+                );
+                anchor_shift_from(start_idx);
+            }
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    insert_missing_labels(ctx.cfg, lines);
+}
+
+fn switch_range_has_blocking_goto(cfg: &CFG, slice: &[PseudoLine]) -> bool {
+    for l in slice {
+        if !l.text.contains("goto ") {
+            continue;
+        }
+        let Some(b) = goto_target(&l.text)
+            .and_then(parse_label_addr)
+            .and_then(|addr| block_by_start(cfg, addr))
+        else {
+            return true;
+        };
+        let (s, e) = (cfg.blocks[b].start, cfg.blocks[b].end);
+        let internal = slice.iter().any(|x| {
+            !is_case_label(&x.text)
+                && !x.text.contains("goto ")
+                && x.source_addr.is_some_and(|a| a >= s && a < e)
+        });
+        if internal {
+            return true;
+        }
+    }
+    false
+}
+
+fn innermost_breakable_is_switch(lines: &[PseudoLine]) -> bool {
+    let mut depth = 0i32;
+    for line in lines.iter().rev() {
+        let code = code_part(&line.text);
+        for ch in code.chars().rev() {
+            match ch {
+                '}' => depth += 1,
+                '{' => {
+                    if depth == 0 {
+                        let t = line.text.trim_start();
+                        if is_keyword(t, "switch") {
+                            return true;
+                        }
+                        if is_keyword(t, "while") || is_keyword(t, "do") || is_keyword(t, "for") {
+                            return false;
+                        }
+                    } else {
+                        depth -= 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+fn closing_brace_ends_if_scope(lines: &[PseudoLine], close: usize) -> bool {
+    let mut depth = 0i32;
+    for k in (0..=close).rev() {
+        let code = code_part(&lines[k].text);
+        for ch in code.chars().rev() {
+            match ch {
+                '}' => depth += 1,
+                '{' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let t = lines[k].text.trim_start();
+                        return is_keyword(t, "if")
+                            || t.starts_with("} else")
+                            || is_keyword(t, "else");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+fn hoist_labels_past_closing_braces(lines: &mut Vec<PseudoLine>) {
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].kind != LineKind::Label || label_of(&lines[i].text).is_none() {
+            i += 1;
+            continue;
+        }
+        let mut pos = i;
+        while let Some(j) =
+            (pos + 1..lines.len()).find(|&k| !lines[k].text.trim().is_empty())
+        {
+            if lines[j].text.trim() != "}" || lines[j].kind == LineKind::CloseBrace {
+                break;
+            }
+            if !closing_brace_ends_if_scope(lines, j) {
+                break;
+            }
+            let label = lines.remove(pos);
+            lines.insert(j, label);
+            pos = j;
+        }
+        i += 1;
+    }
+}
+
+fn reg_live_after_block(ctx: &WalkCtx<'_>, block_id: usize, reg: &'static str) -> bool {
+    const LIMIT: usize = 96;
+    let Some(block) = ctx.cfg.blocks.get(block_id) else {
+        return true;
+    };
+    let mut seen: HashSet<usize> = HashSet::default();
+    let mut stack: Vec<usize> = block.successors.iter().map(|e| e.target).collect();
+    while let Some(b) = stack.pop() {
+        if b >= ctx.bops.len() || b >= ctx.cfg.blocks.len() || !seen.insert(b) {
+            continue;
+        }
+        if seen.len() > LIMIT {
+            return true;
+        }
+        let mut killed = false;
+        for (_, op) in &ctx.bops[b] {
+            if reads_regs(op).into_iter().any(|r| r == reg) {
+                return true;
+            }
+            if written_reg(op) == Some(reg) {
+                killed = true;
+                break;
+            }
+        }
+        if !killed {
+            stack.extend(ctx.cfg.blocks[b].successors.iter().map(|e| e.target));
+        }
+    }
+    false
+}
+
+fn walk_or_jump(
     ctx: &WalkCtx<'_>,
     target: usize,
-    visited: &HashSet<usize>,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
     indent: u32,
     depth: usize,
     stops: &[usize],
-) -> Option<Vec<PseudoLine>> {
-    if ctx.clone_depth >= 2
-        || target >= ctx.cfg.blocks.len()
-        || !ctx.postdom.reaches_exit(target)
-        || ctx.loops.get(target).is_some()
-        || !ctx.loops.enclosing(target).is_empty()
-    {
-        return None;
+) {
+    if target >= ctx.cfg.blocks.len() || stops.contains(&target) {
+        return;
     }
+    if !visited.contains(&target) {
+        walk_region(ctx, target, visited, lines, indent, depth + 1, stops);
+        return;
+    }
+    if let Some(cloned) = clone_terminal_region(ctx, target, visited, indent, depth, stops) {
+        lines.extend(cloned);
+    } else {
+        lines.push(PseudoLine {
+            indent,
+            text: format!("goto LAB_{:X};", ctx.cfg.blocks[target].start),
+            kind: LineKind::Branch,
+            source_addr: None,
+        });
+    }
+}
+
+
+fn memo_clear() {
+    CLONE_FAILED.with(|s| s.borrow_mut().clear());
+    SWITCH_FAILS.with(|s| s.borrow_mut().clear());
+    CLONE_USES.with(|s| s.borrow_mut().clear());
+    CLONE_LINES.with(|c| c.set(0));
+    BLOCK_ANCHOR.with(|m| m.borrow_mut().clear());
+}
+
+fn clone_total_budget(ctx: &WalkCtx<'_>) -> usize {
+    (ctx.cfg.blocks.len() * 3).clamp(120, 1500)
+}
+
+fn clone_allowed(ctx: &WalkCtx<'_>, target: usize, region_blocks: usize) -> bool {
+    let limit = if region_blocks <= TINY_CLONE_BLOCKS {
+        MAX_CLONES_PER_TINY_TARGET
+    } else {
+        MAX_CLONES_PER_TARGET
+    };
+    let used = CLONE_USES.with(|m| m.borrow().get(&target).copied().unwrap_or(0));
+    used < limit && CLONE_LINES.with(|c| c.get()) < clone_total_budget(ctx)
+}
+
+fn clone_commit(ctx: &WalkCtx<'_>, target: usize, lines: usize) {
+    if ctx.clone_depth != 0 {
+        return;
+    }
+    CLONE_USES.with(|m| {
+        let mut m = m.borrow_mut();
+        let e = m.entry(target).or_insert(0);
+        *e = e.saturating_add(1);
+    });
+    CLONE_LINES.with(|c| c.set(c.get() + lines));
+}
+
+fn anchor_snapshot() -> HashMap<usize, usize> {
+    BLOCK_ANCHOR.with(|m| m.borrow().clone())
+}
+
+fn anchor_restore(saved: HashMap<usize, usize>) {
+    BLOCK_ANCHOR.with(|m| *m.borrow_mut() = saved);
+}
+
+fn anchor_shift_from(idx: usize) {
+    BLOCK_ANCHOR.with(|m| {
+        for v in m.borrow_mut().values_mut() {
+            if *v >= idx {
+                *v += 1;
+            }
+        }
+    });
+}
+
+fn clone_known_bad(ctx: &WalkCtx<'_>, key: (usize, usize)) -> bool {
+    ctx.clone_depth == 0 && CLONE_FAILED.with(|s| s.borrow().contains(&key))
+}
+
+fn clone_mark_bad(ctx: &WalkCtx<'_>, key: (usize, usize)) {
+    if ctx.clone_depth == 0 {
+        CLONE_FAILED.with(|s| {
+            s.borrow_mut().insert(key);
+        });
+    }
+}
+
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GotoClass {
+    SharedTail,
+    Backward,
+    Irreducible,
+}
+
+#[allow(dead_code)]
+pub(crate) fn classify_gotos(lines: &[PseudoLine]) -> Vec<(usize, GotoClass)> {
+    let mut label_at: HashMap<&str, usize> = HashMap::default();
+    for (i, l) in lines.iter().enumerate() {
+        if let Some(name) = label_of(&l.text) {
+            label_at.insert(name, i);
+        }
+    }
+    let mut out = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let Some(target) = goto_target(&l.text) else {
+            continue;
+        };
+        let class = match label_at.get(target) {
+            None => GotoClass::Irreducible,
+            Some(&li) if li < i => GotoClass::Backward,
+            Some(&li) => {
+                let end = lines[li + 1..]
+                    .iter()
+                    .position(|p| label_of(&p.text).is_some())
+                    .map(|p| li + 1 + p)
+                    .unwrap_or(lines.len());
+                if terminal_return_body(lines, li + 1, end, None, &mut HashSet::default(), 0)
+                    .is_some()
+                {
+                    GotoClass::SharedTail
+                } else {
+                    GotoClass::Irreducible
+                }
+            }
+        };
+        out.push((i, class));
+    }
+    out
+}
+
+
+fn clone_budget(ctx: &WalkCtx<'_>, target: usize) -> (usize, usize) {
+    let preds = ctx
+        .cfg
+        .blocks
+        .get(target)
+        .map_or(0, |b| b.predecessors.len());
+    let k = preds.saturating_sub(1).clamp(1, 3);
+    (MAX_CLONE_BLOCKS * k, MAX_CLONE_LINES * k)
+}
+
+fn collect_clone_region(
+    ctx: &WalkCtx<'_>,
+    target: usize,
+    stop: Option<usize>,
+    stops: &[usize],
+    max_blocks: usize,
+) -> Option<(HashSet<usize>, bool)> {
+    let n = ctx.cfg.blocks.len();
+    let in_loop = |b: usize| ctx.loops.get(b).is_some() || !ctx.loops.enclosing(b).is_empty();
     let mut region: HashSet<usize> = HashSet::default();
     let mut queue = vec![target];
+    let mut reaches_stop = false;
     while let Some(b) = queue.pop() {
+        if Some(b) == stop {
+            reaches_stop = true;
+            continue;
+        }
+        if b >= n || stops.contains(&b) || in_loop(b) {
+            return None;
+        }
         if !region.insert(b) {
             continue;
         }
-        if region.len() > MAX_CLONE_BLOCKS {
+        if region.len() > max_blocks {
             return None;
         }
         for edge in &ctx.cfg.blocks[b].successors {
-            let t = edge.target;
-            if t >= ctx.cfg.blocks.len()
-                || ctx.loops.get(t).is_some()
-                || !ctx.loops.enclosing(t).is_empty()
-            {
-                return None;
-            }
-            if t <= b {
-                return None;
-            }
-            queue.push(t);
+            queue.push(edge.target);
         }
     }
-    let mut cv = visited.clone();
-    for b in &region {
-        cv.remove(b);
+    let mut color: HashMap<usize, u8> = HashMap::default();
+    for &first in &region {
+        if color.contains_key(&first) {
+            continue;
+        }
+        color.insert(first, 1);
+        let mut stack: Vec<(usize, usize)> = vec![(first, 0)];
+        while let Some(top) = stack.last_mut() {
+            let (b, i) = *top;
+            match ctx.cfg.blocks[b].successors.get(i).map(|e| e.target) {
+                Some(t) => {
+                    top.1 += 1;
+                    if !region.contains(&t) {
+                        continue;
+                    }
+                    match color.get(&t).copied() {
+                        Some(1) => return None,
+                        Some(_) => {}
+                        None => {
+                            color.insert(t, 1);
+                            stack.push((t, 0));
+                        }
+                    }
+                }
+                None => {
+                    color.insert(b, 2);
+                    stack.pop();
+                }
+            }
+        }
     }
-    let bytes_before = ctx.hints.out_bytes.get();
-    let clone_ctx = WalkCtx {
-        clone: true,
-        clone_depth: ctx.clone_depth + 1,
-        ..*ctx
-    };
-    let mut out = Vec::new();
-    walk_region(&clone_ctx, target, &mut cv, &mut out, indent, depth + 1, stops);
-    let text = out.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+    Some((region, reaches_stop))
+}
+
+fn finish_clone(
+    ctx: &WalkCtx<'_>,
+    out: Vec<PseudoLine>,
+    bytes_before: usize,
+    truncated_before: bool,
+    max_lines: usize,
+    key: (usize, usize),
+) -> Option<Vec<PseudoLine>> {
+    let text = out
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut balance = 0i32;
+    let mut balanced = true;
     for ch in text.chars() {
         match ch {
             '{' => balance += 1,
@@ -449,29 +985,77 @@ fn clone_terminal_region(
             _ => {}
         }
         if balance < 0 {
-            ctx.hints.out_bytes.set(bytes_before);
-            return None;
+            balanced = false;
+            break;
         }
     }
-    if out.is_empty()
-        || out.len() > MAX_CLONE_LINES
+    let has_switch = out
+        .iter()
+        .any(|l| l.text.trim_start().starts_with("switch "));
+    if !balanced
         || balance != 0
+        || out.is_empty()
+        || out.len() > max_lines
         || text.contains("LAB_")
         || text.contains("goto ")
-        || text.contains("break;")
         || text.contains("continue;")
+        || (!has_switch && text.contains("break;"))
         || text.contains("WARNING")
         || text.contains("truncated")
     {
         ctx.hints.out_bytes.set(bytes_before);
+        ctx.hints.out_truncated.set(truncated_before);
+        clone_mark_bad(ctx, key);
         return None;
     }
+    clone_commit(ctx, key.0, out.len());
     Some(out)
 }
 
-
-
-
+fn clone_terminal_region(
+    ctx: &WalkCtx<'_>,
+    target: usize,
+    visited: &HashSet<usize>,
+    indent: u32,
+    depth: usize,
+    _stops: &[usize],
+) -> Option<Vec<PseudoLine>> {
+    if ctx.clone_depth >= MAX_TINY_CLONE_DEPTH
+        || target >= ctx.cfg.blocks.len()
+        || !ctx.postdom.reaches_exit(target)
+    {
+        return None;
+    }
+    let key = (target, usize::MAX);
+    if clone_known_bad(ctx, key) {
+        return None;
+    }
+    let (max_blocks, max_lines) = clone_budget(ctx, target);
+    let Some((region, _)) = collect_clone_region(ctx, target, None, &[], max_blocks) else {
+        clone_mark_bad(ctx, key);
+        return None;
+    };
+    if ctx.clone_depth >= MAX_CLONE_DEPTH && region.len() > TINY_CLONE_BLOCKS {
+        return None;
+    }
+    if !clone_allowed(ctx, target, region.len()) {
+        return None;
+    }
+    let mut cv = visited.clone();
+    for b in &region {
+        cv.remove(b);
+    }
+    let bytes_before = ctx.hints.out_bytes.get();
+    let truncated_before = ctx.hints.out_truncated.get();
+    let clone_ctx = WalkCtx {
+        clone: true,
+        clone_depth: ctx.clone_depth + 1,
+        ..*ctx
+    };
+    let mut out = Vec::new();
+    walk_region(&clone_ctx, target, &mut cv, &mut out, indent, depth + 1, &[]);
+    finish_clone(ctx, out, bytes_before, truncated_before, max_lines, key)
+}
 
 fn clone_arm_region(
     ctx: &WalkCtx<'_>,
@@ -482,50 +1066,27 @@ fn clone_arm_region(
     depth: usize,
     stops: &[usize],
 ) -> Option<Vec<PseudoLine>> {
-    if ctx.clone_depth >= 2
+    if ctx.clone_depth >= MAX_TINY_CLONE_DEPTH
         || target >= ctx.cfg.blocks.len()
         || target == stop
         || stops.contains(&target)
-        || ctx.loops.get(target).is_some()
-        || !ctx.loops.enclosing(target).is_empty()
     {
         return None;
     }
-    let mut region: HashSet<usize> = HashSet::default();
-    let mut queue = vec![target];
-    let mut reaches_stop = false;
-    while let Some(b) = queue.pop() {
-        if b == stop {
-            reaches_stop = true;
-            continue;
-        }
-        if stops.contains(&b) {
-            return None;
-        }
-        if !region.insert(b) {
-            continue;
-        }
-        if region.len() > MAX_CLONE_BLOCKS {
-            return None;
-        }
-        for edge in &ctx.cfg.blocks[b].successors {
-            let t = edge.target;
-            if t == stop {
-                reaches_stop = true;
-                continue;
-            }
-            if stops.contains(&t)
-                || t >= ctx.cfg.blocks.len()
-                || ctx.loops.get(t).is_some()
-                || !ctx.loops.enclosing(t).is_empty()
-                || t <= b
-            {
-                return None;
-            }
-            queue.push(t);
-        }
+    let key = (target, stop);
+    if clone_known_bad(ctx, key) {
+        return None;
     }
+    let (max_blocks, max_lines) = clone_budget(ctx, target);
+    let (region, reaches_stop) =
+        collect_clone_region(ctx, target, Some(stop), stops, max_blocks)?;
     if !reaches_stop {
+        return None;
+    }
+    if ctx.clone_depth >= MAX_CLONE_DEPTH && region.len() > TINY_CLONE_BLOCKS {
+        return None;
+    }
+    if !clone_allowed(ctx, target, region.len()) {
         return None;
     }
     let mut cv = visited.clone();
@@ -533,6 +1094,7 @@ fn clone_arm_region(
         cv.remove(b);
     }
     let bytes_before = ctx.hints.out_bytes.get();
+    let truncated_before = ctx.hints.out_truncated.get();
     let clone_ctx = WalkCtx {
         clone: true,
         clone_depth: ctx.clone_depth + 1,
@@ -548,33 +1110,7 @@ fn clone_arm_region(
         depth + 1,
         &[stop],
     );
-    let text = out.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
-    let mut balance = 0i32;
-    for ch in text.chars() {
-        match ch {
-            '{' => balance += 1,
-            '}' => balance -= 1,
-            _ => {}
-        }
-        if balance < 0 {
-            ctx.hints.out_bytes.set(bytes_before);
-            return None;
-        }
-    }
-    if out.is_empty()
-        || out.len() > MAX_CLONE_LINES
-        || balance != 0
-        || text.contains("LAB_")
-        || text.contains("goto ")
-        || text.contains("break;")
-        || text.contains("continue;")
-        || text.contains("WARNING")
-        || text.contains("truncated")
-    {
-        ctx.hints.out_bytes.set(bytes_before);
-        return None;
-    }
-    Some(out)
+    finish_clone(ctx, out, bytes_before, truncated_before, max_lines, key)
 }
 
 pub(crate) fn walk_block(
@@ -585,7 +1121,15 @@ pub(crate) fn walk_block(
     indent: u32,
     depth: usize,
 ) {
+    let top_level = !ctx.clone && ctx.clone_depth == 0;
+    if top_level {
+        memo_clear();
+    }
     walk_region(ctx, block_id, visited, lines, indent, depth, &[]);
+    if top_level {
+        repair_dangling_gotos(ctx, visited, lines, indent);
+        memo_clear();
+    }
 }
 
 fn indirect_index(var: &PVar) -> String {
@@ -640,6 +1184,43 @@ struct CompareChain {
 
 type SwitchGroup = (u64, Vec<usize>, Option<u64>);
 
+fn fallthrough_group_of(
+    cfg: &CFG,
+    start: usize,
+    targets: &[usize],
+    join: Option<usize>,
+) -> Option<usize> {
+    const LIMIT: usize = 32;
+    let mut seen: HashSet<usize> = HashSet::default();
+    let mut stack = vec![start];
+    let mut hit: Option<usize> = None;
+    while let Some(cur) = stack.pop() {
+        if cur != start
+            && let Some(group) = targets.iter().position(|&t| t == cur)
+        {
+            match hit {
+                None => hit = Some(group),
+                Some(h) if h == group => {}
+                Some(_) => return None,
+            }
+            continue;
+        }
+        if join == Some(cur) || cur >= cfg.blocks.len() {
+            return None;
+        }
+        if !seen.insert(cur) {
+            continue;
+        }
+        if seen.len() > LIMIT {
+            return None;
+        }
+        for e in &cfg.blocks[cur].successors {
+            stack.push(e.target);
+        }
+    }
+    hit
+}
+
 fn switch_fallthrough_order(
     cfg: &CFG,
     groups: &[(u64, Vec<usize>)],
@@ -654,28 +1235,7 @@ fn switch_fallthrough_order(
     }
     let mut next_group: Vec<Option<usize>> = vec![None; groups.len()];
     for (index, &start) in targets.iter().enumerate() {
-        let mut cur = start;
-        let mut seen: HashSet<usize> = HashSet::default();
-        for _ in 0..16 {
-            if !seen.insert(cur) {
-                return None;
-            }
-            let block = cfg.blocks.get(cur)?;
-            if block.successors.len() != 1 {
-                break;
-            }
-            let next = block.successors[0].target;
-            if join == Some(next) || next >= cfg.blocks.len() {
-                break;
-            }
-            if let Some(target_index) = targets.iter().position(|target| *target == next) {
-                if target_index != index {
-                    next_group[index] = Some(target_index);
-                }
-                break;
-            }
-            cur = next;
-        }
+        next_group[index] = fallthrough_group_of(cfg, start, &targets, join);
     }
     let mut state = vec![0u8; groups.len()];
     let mut order: Vec<usize> = Vec::with_capacity(groups.len());
@@ -778,6 +1338,9 @@ fn detect_compare_chain(ctx: &WalkCtx<'_>, start: usize, join: usize) -> Option<
 
     for _ in 0..64 {
         if cur >= n || !seen.insert(cur) || !dispatch_block_is_pure(ctx, cur) {
+            break;
+        }
+        if cur != start && ctx.cfg.blocks[cur].predecessors.len() != 1 {
             break;
         }
         let block = &ctx.cfg.blocks[cur];
@@ -911,7 +1474,7 @@ fn switch_case_ends_terminally(lines: &[PseudoLine], start: usize) -> bool {
         .find(|l| l.kind != LineKind::Comment && !l.text.trim().is_empty())
         .is_some_and(|l| {
             let text = l.text.trim();
-            text.starts_with("return")
+            is_keyword(text, "return")
                 || text.starts_with("goto ")
                 || text == "break;"
                 || text == "continue;"
@@ -944,7 +1507,12 @@ fn try_render_compare_switch(
     }
 
     let saved_visited = visited.clone();
+    let saved_anchor = anchor_snapshot();
+    if SWITCH_FAILS.with(|s| s.borrow().get(&block_id).copied().unwrap_or(0)) >= 2 {
+        return false;
+    }
     let saved_bytes = ctx.hints.out_bytes.get();
+    let saved_trunc = ctx.hints.out_truncated.get();
     let start_lines = lines.len();
     for check in &chain.checks {
         visited.insert(*check);
@@ -967,7 +1535,6 @@ fn try_render_compare_switch(
 
     let case_ctx = WalkCtx {
         clone: true,
-        clone_depth: ctx.clone_depth + 1,
         ..*ctx
     };
 
@@ -1066,6 +1633,7 @@ fn try_render_compare_switch(
         kind: LineKind::Branch,
         source_addr: None,
     });
+    let switch_end = lines.len();
     if !visited.contains(&join) && !stops.contains(&join) {
         let join_needs_label = ctx.cfg.blocks[join].predecessors.iter().any(|p| {
             !chain.checks.contains(p)
@@ -1084,19 +1652,23 @@ fn try_render_compare_switch(
         );
     }
 
-    let rendered = lines[start_lines..]
+    let rendered = lines[start_lines..switch_end]
         .iter()
         .map(|l| l.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    if rendered.contains("goto ")
-        || rendered.contains("LAB_")
-        || rendered.contains("WARNING")
+    if rendered.contains("WARNING")
         || rendered.contains("truncated")
+        || switch_range_has_blocking_goto(ctx.cfg, &lines[start_lines..switch_end])
     {
         lines.truncate(start_lines);
         *visited = saved_visited;
+        anchor_restore(saved_anchor);
         ctx.hints.out_bytes.set(saved_bytes);
+        ctx.hints.out_truncated.set(saved_trunc);
+        SWITCH_FAILS.with(|s| {
+            *s.borrow_mut().entry(block_id).or_insert(0) += 1;
+        });
         return false;
     }
 
@@ -1109,6 +1681,25 @@ fn try_render_compare_switch(
 }
 
 fn walk_region(
+    ctx: &WalkCtx<'_>,
+    block_id: usize,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    depth: usize,
+    stops: &[usize],
+) {
+    let mut current = (block_id, indent);
+    loop {
+        walk_region_step(ctx, current.0, visited, lines, current.1, depth, stops);
+        match TAIL_CALL.with(|t| t.take()) {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+}
+
+fn walk_region_step(
     ctx: &WalkCtx<'_>,
     block_id: usize,
     visited: &mut HashSet<usize>,
@@ -1138,6 +1729,7 @@ fn walk_region(
         ..
     } = *ctx;
     if depth > 5_000 {
+        hints.out_truncated.set(true);
         return;
     }
     if visited.contains(&block_id) {
@@ -1175,6 +1767,7 @@ fn walk_region(
     };
     let mut loop_exit: Option<usize> = None;
     let mut loop_body_entry: Option<usize> = None;
+    let mut loop_after: Option<usize> = None;
 
     if is_dowhile {
         lines.push(PseudoLine {
@@ -1184,6 +1777,7 @@ fn walk_region(
             source_addr: Some(block.start),
         });
     } else if let Some(info) = loop_info {
+        loop_after = info.designated_exit;
         if let Some((exit, kind)) = info.exit_edge(cfg) {
             let consts = block_consts.get(block_id).cloned().unwrap_or_default();
             let base = recover_condition(cfg, bops, imap, block_id, &consts, Some(hints));
@@ -1218,14 +1812,29 @@ fn walk_region(
             source_addr: Some(block.start),
         });
     }
+    if ctx.clone_depth == 0 {
+        BLOCK_ANCHOR.with(|m| {
+            m.borrow_mut().entry(block_id).or_insert(lines.len());
+        });
+    }
 
     
     
+    let mut loop_stops: Vec<usize> = stops.to_vec();
+    if is_loop_header
+        && !is_dowhile
+        && let Some(after) = loop_after
+        && !loop_stops.contains(&after)
+    {
+        loop_stops.push(after);
+    }
     let loop_indent = indent;
     macro_rules! finish {
         () => {{
             if is_dowhile {
                 close_dowhile(ctx, block_id, visited, lines, loop_indent, depth, stops);
+            } else if is_loop_header {
+                close_while_scope(ctx, visited, lines, loop_indent, loop_after, depth, stops);
             }
             return;
         }};
@@ -1273,6 +1882,7 @@ fn walk_region(
     let lines_before = lines.len();
     let mut cse_map: HashMap<String, (&'static str, Vec<&'static str>)> = HashMap::default();
     let mut push_args: Vec<PVal> = Vec::new();
+    let mut deep_live: HashMap<&'static str, bool> = HashMap::default();
 
     for (i, (addr, op)) in ops.iter().enumerate() {
         
@@ -1286,7 +1896,12 @@ fn walk_region(
             let dead_local = last_use.get(dst_reg).map(|&u| u <= i).unwrap_or(true);
             let removable = !block_has_jcc || !sets_flags(op);
             if removable && dead_local && !live_out.contains(dst_reg) {
-                continue;
+                let live = *deep_live
+                    .entry(dst_reg)
+                    .or_insert_with(|| reg_live_after_block(ctx, block_id, dst_reg));
+                if !live {
+                    continue;
+                }
             }
         }
         if dead.contains(&(block_id, i)) {
@@ -1353,11 +1968,23 @@ fn walk_region(
     let emitted: usize = lines[lines_before..].iter().map(|l| l.text.len() + 8).sum();
     hints.out_bytes.set(hints.out_bytes.get() + emitted);
     let succs = &block.successors;
-    if is_loop_header && !is_dowhile {
+    if is_loop_header
+        && !is_dowhile
+        && !switch_active
+        && (loop_exit.is_some() || succs.len() <= 1)
+    {
         if let Some(entry) = loop_body_entry
             && !visited.contains(&entry)
         {
-            walk_region(ctx, entry, visited, lines, body_indent, depth + 1, stops);
+            walk_region(
+                ctx,
+                entry,
+                visited,
+                lines,
+                body_indent,
+                depth + 1,
+                &loop_stops,
+            );
         }
         lines.push(PseudoLine {
             indent,
@@ -1365,15 +1992,19 @@ fn walk_region(
             kind: LineKind::Branch,
             source_addr: None,
         });
-        if let Some(exit) = loop_exit
-            && !visited.contains(&exit)
-            && !stops.contains(&exit)
-        {
-            walk_region(ctx, exit, visited, lines, indent, depth + 1, stops);
+        if let Some(exit) = loop_after {
+            walk_or_jump(ctx, exit, visited, lines, indent, depth, stops);
         }
         return;
     }
     if switch_active {
+        let outer_stops = stops;
+        let stops: &[usize] = if is_loop_header && !is_dowhile {
+            &loop_stops[..]
+        } else {
+            stops
+        };
+        let indent = body_indent;
         let table = switch_table.expect("switch_active requires a table");
         let groups = switch_groups.as_ref().expect("switch_active requires groups");
         let ordered = switch_fallthrough_order(cfg, groups, switch_join).unwrap_or_else(|| {
@@ -1383,7 +2014,9 @@ fn walk_region(
                 .collect()
         });
         let saved_visited = visited.clone();
+        let saved_anchor = anchor_snapshot();
         let saved_bytes = hints.out_bytes.get();
+        let saved_trunc = hints.out_truncated.get();
         let switch_start = lines.len();
         let mut case_stops = stops.to_vec();
         if let Some(join) = switch_join
@@ -1393,7 +2026,6 @@ fn walk_region(
         }
         let case_ctx = WalkCtx {
             clone: true,
-            clone_depth: ctx.clone_depth + 1,
             ..*ctx
         };
         lines.push(PseudoLine {
@@ -1464,21 +2096,24 @@ fn walk_region(
             kind: LineKind::Branch,
             source_addr: None,
         });
+        let switch_end = lines.len();
         if let Some(join) = switch_join
             && !visited.contains(&join)
             && !stops.contains(&join)
         {
             walk_region(ctx, join, visited, lines, indent, depth + 1, stops);
         }
-        let rendered = lines[switch_start..]
+        let rendered = lines[switch_start..switch_end]
             .iter()
             .map(|l| l.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        if rendered.contains("goto ") || rendered.contains("LAB_") || rendered.contains("WARNING") {
+        if rendered.contains("WARNING") || rendered.contains("truncated") {
             lines.truncate(switch_start);
             hints.out_bytes.set(saved_bytes);
+            hints.out_truncated.set(saved_trunc);
             *visited = saved_visited;
+            anchor_restore(saved_anchor);
             let fallback = ops.iter().rev().find_map(|(addr, op)| match op {
                 POp::BranchInd { .. } => render_op(
                     op,
@@ -1500,10 +2135,41 @@ fn walk_region(
                     source_addr: Some(addr),
                 });
             }
+            for (target, _, _) in &ordered {
+                if let Some(&cb) = cfg.block_at.get(target)
+                    && cb != block_id
+                    && !visited.contains(&cb)
+                    && !stops.contains(&cb)
+                {
+                    walk_region(ctx, cb, visited, lines, indent, depth + 1, stops);
+                }
+            }
+            if let Some(join) = switch_join
+                && !visited.contains(&join)
+                && !stops.contains(&join)
+            {
+                walk_region(ctx, join, visited, lines, indent, depth + 1, stops);
+            }
+        }
+        if is_dowhile {
+            close_dowhile(ctx, block_id, visited, lines, loop_indent, depth, outer_stops);
+        } else if is_loop_header {
+            lines.push(PseudoLine {
+                indent: loop_indent,
+                text: "}".into(),
+                kind: LineKind::Branch,
+                source_addr: None,
+            });
+            if let Some(exit) = loop_after {
+                walk_or_jump(ctx, exit, visited, lines, loop_indent, depth, outer_stops);
+            }
         }
         return;
     }
-    if try_render_compare_switch(ctx, block_id, visited, lines, indent, depth, stops) {
+    if !is_loop_header
+        && !is_dowhile
+        && try_render_compare_switch(ctx, block_id, visited, lines, indent, depth, stops)
+    {
         return;
     }
     if let Some(&last_addr) = addrs.last()
@@ -1577,7 +2243,7 @@ fn walk_region(
     } else if succs.len() == 1 {
         let edge = &succs[0];
         if let Some(action) = loop_action(loops, visited, block_id, edge.target) {
-            push_edge_action(lines, indent, action);
+            push_edge_action(lines, indent, action, cfg, edge.target);
         } else {
             match edge.kind {
                 EdgeKind::Jump => {
@@ -1585,17 +2251,22 @@ fn walk_region(
                         
                     } else if !visited.contains(&edge.target)
                         && (cfg.blocks[edge.target].predecessors.len() == 1
-                            || loops.get(edge.target).is_some())
+                            || loops.get(edge.target).is_some()
+                            || ctx.clone)
                     {
-                        walk_region(
-                            ctx,
-                            edge.target,
-                            visited,
-                            lines,
-                            body_indent,
-                            depth + 1,
-                            stops,
-                        );
+                        if is_dowhile || is_loop_header {
+                            walk_region(
+                                ctx,
+                                edge.target,
+                                visited,
+                                lines,
+                                body_indent,
+                                depth + 1,
+                                stops,
+                            );
+                        } else {
+                            TAIL_CALL.with(|t| t.set(Some((edge.target, body_indent))));
+                        }
                     } else if let Some(cloned) =
                         clone_terminal_region(ctx, edge.target, visited, indent, depth, stops)
                     {
@@ -1610,17 +2281,15 @@ fn walk_region(
                     }
                 }
                 _ => {
-                    if !visited.contains(&edge.target) {
-                        walk_region(
-                            ctx,
-                            edge.target,
-                            visited,
-                            lines,
-                            body_indent,
-                            depth + 1,
-                            stops,
-                        );
-                    }
+                    walk_or_jump(
+                        ctx,
+                        edge.target,
+                        visited,
+                        lines,
+                        body_indent,
+                        depth,
+                        stops,
+                    );
                 }
             }
         }
@@ -1628,13 +2297,18 @@ fn walk_region(
         
         
         let indent = body_indent;
+        let stops: &[usize] = if is_loop_header && !is_dowhile {
+            &loop_stops[..]
+        } else {
+            stops
+        };
         let true_edge = succs.iter().find(|e| e.kind == EdgeKind::BranchTrue);
         let false_edge = succs.iter().find(|e| e.kind == EdgeKind::BranchFalse);
 
         if let (Some(t), Some(f)) = (true_edge, false_edge) {
             let enclosing = loops.enclosing(block_id);
-            let t_loops_back = enclosing.contains(&t.target);
-            let f_loops_back = enclosing.contains(&f.target);
+            let t_loops_back = enclosing.first() == Some(&t.target);
+            let f_loops_back = enclosing.first() == Some(&f.target);
 
             
             
@@ -1659,14 +2333,14 @@ fn walk_region(
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        push_edge_action(lines, indent + 1, ta);
+                        push_edge_action(lines, indent + 1, ta, cfg, t.target);
                         lines.push(PseudoLine {
                             indent,
                             text: "} else {".into(),
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        push_edge_action(lines, indent + 1, fa);
+                        push_edge_action(lines, indent + 1, fa, cfg, f.target);
                         lines.push(PseudoLine {
                             indent,
                             text: "}".into(),
@@ -1681,16 +2355,14 @@ fn walk_region(
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        push_edge_action(lines, indent + 1, ta);
+                        push_edge_action(lines, indent + 1, ta, cfg, t.target);
                         lines.push(PseudoLine {
                             indent,
                             text: "}".into(),
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        if !visited.contains(&f.target) {
-                            walk_region(ctx, f.target, visited, lines, indent, depth + 1, stops);
-                        }
+                        walk_or_jump(ctx, f.target, visited, lines, indent, depth, stops);
                     }
                     (None, Some(fa)) => {
                         cond = negate_cond(&cond);
@@ -1700,16 +2372,14 @@ fn walk_region(
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        push_edge_action(lines, indent + 1, fa);
+                        push_edge_action(lines, indent + 1, fa, cfg, f.target);
                         lines.push(PseudoLine {
                             indent,
                             text: "}".into(),
                             kind: LineKind::Branch,
                             source_addr: None,
                         });
-                        if !visited.contains(&t.target) {
-                            walk_region(ctx, t.target, visited, lines, indent, depth + 1, stops);
-                        }
+                        walk_or_jump(ctx, t.target, visited, lines, indent, depth, stops);
                     }
                     (None, None) => {}
                 }
@@ -1898,9 +2568,7 @@ fn walk_region(
                     kind: LineKind::Branch,
                     source_addr: None,
                 });
-                if !visited.contains(&cont) {
-                    walk_region(ctx, cont, visited, lines, indent, depth + 1, stops);
-                }
+                walk_or_jump(ctx, cont, visited, lines, indent, depth, stops);
                 finish!();
             }
 
@@ -1964,6 +2632,29 @@ fn walk_region(
             kind: LineKind::Branch,
             source_addr: None,
         });
+        if let Some(exit) = loop_after {
+            walk_or_jump(ctx, exit, visited, lines, indent, depth, stops);
+        }
+    }
+}
+
+fn close_while_scope(
+    ctx: &WalkCtx<'_>,
+    visited: &mut HashSet<usize>,
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    loop_after: Option<usize>,
+    depth: usize,
+    stops: &[usize],
+) {
+    lines.push(PseudoLine {
+        indent,
+        text: "}".into(),
+        kind: LineKind::Branch,
+        source_addr: None,
+    });
+    if let Some(exit) = loop_after {
+        walk_or_jump(ctx, exit, visited, lines, indent, depth, stops);
     }
 }
 
@@ -2012,11 +2703,8 @@ fn close_dowhile(
         source_addr: None,
     });
     for e in &cfg.blocks[latch].successors {
-        if e.target != block_id
-            && !visited.contains(&e.target)
-            && !stops.contains(&e.target)
-        {
-            walk_region(ctx, e.target, visited, lines, indent, depth + 1, stops);
+        if e.target != block_id {
+            walk_or_jump(ctx, e.target, visited, lines, indent, depth, stops);
         }
     }
 }
@@ -2063,7 +2751,7 @@ fn walk_arm(
 fn reaches_only_exit(cfg: &CFG, start: usize, avoid: &[usize]) -> bool {
     let mut seen: HashSet<usize> = HashSet::default();
     let mut stack = vec![start];
-    let mut terminal = false;
+    let mut terminals: Vec<usize> = Vec::new();
     while let Some(b) = stack.pop() {
         if avoid.contains(&b) {
             return false;
@@ -2075,14 +2763,37 @@ fn reaches_only_exit(cfg: &CFG, start: usize, avoid: &[usize]) -> bool {
             continue;
         };
         if block.successors.is_empty() {
-            terminal = true;
+            terminals.push(b);
             continue;
         }
         for e in &block.successors {
             stack.push(e.target);
         }
     }
-    terminal
+    if terminals.is_empty() {
+        return false;
+    }
+    let mut preds: HashMap<usize, Vec<usize>> = HashMap::default();
+    for &b in &seen {
+        if let Some(block) = cfg.blocks.get(b) {
+            for e in &block.successors {
+                preds.entry(e.target).or_default().push(b);
+            }
+        }
+    }
+    let mut can_exit: HashSet<usize> = terminals.iter().copied().collect();
+    let mut work = terminals;
+    while let Some(b) = work.pop() {
+        if let Some(ps) = preds.get(&b) {
+            for &p in ps {
+                if can_exit.insert(p) {
+                    work.push(p);
+                }
+            }
+        }
+    }
+    seen.iter()
+        .all(|b| can_exit.contains(b) || cfg.blocks.get(*b).is_none())
 }
 
 
@@ -2101,13 +2812,24 @@ fn loop_action(
     loops.edge_action(from, target)
 }
 
-fn push_edge_action(lines: &mut Vec<PseudoLine>, indent: u32, action: EdgeAction) {
+fn push_edge_action(
+    lines: &mut Vec<PseudoLine>,
+    indent: u32,
+    action: EdgeAction,
+    cfg: &CFG,
+    target: usize,
+) {
+    let text = match action {
+        EdgeAction::Break if innermost_breakable_is_switch(lines) => {
+            let start = cfg.blocks.get(target).map(|b| b.start).unwrap_or(0);
+            format!("goto LAB_{:X};", start)
+        }
+        EdgeAction::Break => "break;".to_string(),
+        EdgeAction::Continue => "continue;".to_string(),
+    };
     lines.push(PseudoLine {
         indent,
-        text: match action {
-            EdgeAction::Break => "break;".into(),
-            EdgeAction::Continue => "continue;".into(),
-        },
+        text,
         kind: LineKind::Branch,
         source_addr: None,
     });
@@ -2249,7 +2971,7 @@ fn terminal_return_body(
         if t.is_empty() {
             continue;
         }
-        if t.starts_with("return") {
+        if is_keyword(t, "return") {
             out.push((line.text.clone(), line.kind, line.source_addr, line.indent));
             return Some(out);
         }
@@ -2274,16 +2996,15 @@ fn terminal_return_body(
         if t == "{" || t.starts_with('}') || label_of(t).is_some() {
             return None;
         }
-        if t.starts_with("if ")
-            || t.starts_with("if(")
-            || t.starts_with("while")
-            || t.starts_with("do")
-            || t.starts_with("for")
-            || t.starts_with("switch")
+        if is_keyword(t, "if")
+            || is_keyword(t, "while")
+            || is_keyword(t, "do")
+            || is_keyword(t, "for")
+            || is_keyword(t, "switch")
             || t.starts_with("goto ")
             || t.starts_with("break;")
             || t.starts_with("continue;")
-            || t.starts_with("else")
+            || is_keyword(t, "else")
         {
             return None;
         }
@@ -2298,54 +3019,57 @@ fn terminal_return_body(
 
 pub(crate) fn prune_unreachable_returns(lines: &mut Vec<PseudoLine>) {
     loop {
-        let mut refs: HashSet<String> = HashSet::default();
-        for l in lines.iter() {
-            if let Some(t) = goto_target(&l.text) {
-                refs.insert(t.to_string());
-            }
-        }
-        let mut remove: Option<(usize, usize)> = None;
-        for (i, l) in lines.iter().enumerate() {
-            let Some(name) = label_of(&l.text) else {
-                continue;
+        let n = lines.len();
+        let refs: HashSet<&str> = lines.iter().filter_map(|l| goto_target(&l.text)).collect();
+        let mut next_label_at = vec![n; n + 1];
+        for i in (0..n).rev() {
+            next_label_at[i] = if label_of(&lines[i].text).is_some() {
+                i
+            } else {
+                next_label_at[i + 1]
             };
-            if refs.contains(name) {
-                continue;
-            }
-            let prev = lines[..i].iter().rposition(|p| !p.text.trim().is_empty());
-            let unreachable = prev.is_some_and(|p| {
+        }
+        let mut removals: Vec<(usize, usize)> = Vec::new();
+        let mut last_nonempty: Option<usize> = None;
+        let mut skip_until = 0usize;
+        for i in 0..n {
+            if i >= skip_until
+                && let Some(name) = label_of(&lines[i].text)
+                && !refs.contains(name)
+                && let Some(p) = last_nonempty
+            {
                 let t = lines[p].text.trim();
-                t.starts_with("return")
+                let unreachable = is_keyword(t, "return")
                     || t.starts_with("goto ")
                     || t == "break;"
-                    || t == "continue;"
-            });
-            if !unreachable {
-                continue;
+                    || t == "continue;";
+                let next_label = next_label_at[i + 1];
+                if unreachable
+                    && terminal_return_body(
+                        lines,
+                        i + 1,
+                        next_label,
+                        None,
+                        &mut HashSet::default(),
+                        0,
+                    )
+                    .is_some()
+                    && let Some(ret_idx) = (i + 1..next_label)
+                        .find(|&j| is_keyword(lines[j].text.trim(), "return"))
+                {
+                    removals.push((i, ret_idx + 1));
+                    skip_until = ret_idx + 1;
+                }
             }
-            let next_label = lines[i + 1..]
-                .iter()
-                .position(|p| label_of(&p.text).is_some())
-                .map(|p| i + 1 + p)
-                .unwrap_or(lines.len());
-            if terminal_return_body(
-                lines,
-                i + 1,
-                next_label,
-                None,
-                &mut HashSet::default(),
-                0,
-            )
-            .is_some()
-            {
-                remove = Some((i, next_label));
-                break;
+            if !lines[i].text.trim().is_empty() {
+                last_nonempty = Some(i);
             }
         }
-        if let Some((start, end)) = remove {
-            lines.drain(start..end);
-        } else {
+        if removals.is_empty() {
             break;
+        }
+        for (start, end) in removals.into_iter().rev() {
+            lines.drain(start..end);
         }
     }
 }
@@ -2353,34 +3077,49 @@ pub(crate) fn prune_unreachable_returns(lines: &mut Vec<PseudoLine>) {
 
 
 pub(crate) fn cleanup_labels(lines: &mut Vec<PseudoLine>) {
+    hoist_labels_past_closing_braces(lines);
     loop {
-        let mut refs: HashSet<String> = HashSet::default();
-        for l in lines.iter() {
-            if let Some(t) = goto_target(&l.text) {
-                refs.insert(t.to_string());
-            }
+        let n = lines.len();
+        let refs: HashSet<String> = lines
+            .iter()
+            .filter_map(|l| goto_target(&l.text))
+            .map(str::to_string)
+            .collect();
+        let mut next_nonempty = vec![n; n + 1];
+        for i in (0..n).rev() {
+            next_nonempty[i] = if lines[i].text.trim().is_empty() {
+                next_nonempty[i + 1]
+            } else {
+                i
+            };
         }
-        let before = lines.len();
-        lines.retain(|l| {
-            l.kind != LineKind::Label || label_of(&l.text).is_some_and(|name| refs.contains(name))
-        });
-        let mut i = 0;
-        while i < lines.len() {
-            let target = goto_target(&lines[i].text).map(str::to_string);
-            if let Some(target) = target {
-                let next = lines[i + 1..].iter().find(|l| !l.text.trim().is_empty());
-                if next.is_some_and(|l| {
-                    l.kind == LineKind::Label && label_of(&l.text) == Some(target.as_str())
-                }) {
-                    lines.remove(i);
-                    continue;
+        let mut drop_idx: HashSet<usize> = HashSet::default();
+        for i in 0..n {
+            if lines[i].kind == LineKind::Label
+                && !label_of(&lines[i].text).is_some_and(|name| refs.contains(name))
+            {
+                drop_idx.insert(i);
+                continue;
+            }
+            if let Some(target) = goto_target(&lines[i].text) {
+                let j = next_nonempty[i + 1];
+                if j < n
+                    && lines[j].kind == LineKind::Label
+                    && label_of(&lines[j].text) == Some(target)
+                {
+                    drop_idx.insert(i);
                 }
             }
-            i += 1;
         }
-        if lines.len() == before {
+        if drop_idx.is_empty() {
             break;
         }
+        let mut idx = 0usize;
+        lines.retain(|_| {
+            let keep = !drop_idx.contains(&idx);
+            idx += 1;
+            keep
+        });
     }
     drop_redundant_continues(lines);
 }
@@ -2394,10 +3133,10 @@ fn drop_redundant_continues(lines: &mut Vec<PseudoLine>) {
     for (i, l) in lines.iter().enumerate() {
         let code = l.text.split("//").next().unwrap_or("");
         let t = l.text.trim_start();
-        let mut open_is_loop = t.starts_with("while")
-            || t.starts_with("do")
-            || t.starts_with("for")
-            || t.starts_with("loop");
+        let mut open_is_loop = is_keyword(t, "while")
+            || is_keyword(t, "do")
+            || is_keyword(t, "for")
+            || is_keyword(t, "loop");
         if t.starts_with("} else") {
             open_is_loop = false;
         }
@@ -2481,6 +3220,53 @@ pub(crate) fn squash_empty_branches(lines: &mut Vec<PseudoLine>) {
     }
 }
 
+pub(crate) fn elide_else_after_terminal(lines: &mut Vec<PseudoLine>) {
+    let mut i = 0;
+    while i < lines.len() {
+        if !is_if_open(&lines[i].text) {
+            i += 1;
+            continue;
+        }
+        let Some(then_close) = find_block_close(lines, i, false) else {
+            i += 1;
+            continue;
+        };
+        if lines[then_close].text.trim() != "} else {" {
+            i += 1;
+            continue;
+        }
+        let ends_terminal = lines[i + 1..then_close]
+            .iter()
+            .rev()
+            .find(|l| l.kind != LineKind::Comment && !l.text.trim().is_empty())
+            .is_some_and(|l| {
+                let t = l.text.trim();
+                is_keyword(t, "return")
+                    || t == "break;"
+                    || t == "continue;"
+                    || t.starts_with("goto ")
+            });
+        if !ends_terminal {
+            i += 1;
+            continue;
+        }
+        let Some(else_close) = find_block_close(lines, then_close, true) else {
+            i += 1;
+            continue;
+        };
+        if lines[else_close].text.trim() != "}" {
+            i += 1;
+            continue;
+        }
+        lines[then_close].text = "}".into();
+        for l in &mut lines[then_close + 1..else_close] {
+            l.indent = l.indent.saturating_sub(1);
+        }
+        lines.remove(else_close);
+        i += 1;
+    }
+}
+
 fn is_if_open(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("if (") && t.ends_with('{')
@@ -2543,7 +3329,7 @@ fn find_block_close(lines: &[PseudoLine], start: usize, after_else: bool) -> Opt
 }
 
 
-fn code_part(text: &str) -> String {
+pub(crate) fn code_part(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut quote: Option<char> = None;
     let mut chars = text.chars().peekable();
@@ -2719,6 +3505,172 @@ mod cleanup_tests {
         assert_eq!(
             lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
             vec!["// WARNING: missing branch", "y = 2;"]
+        );
+    }
+
+    fn test_cfg(spec: Vec<Vec<usize>>) -> crate::analysis::cfg::CFG {
+        use crate::analysis::cfg::{BasicBlock, CFG, Edge, EdgeKind};
+        let mut blocks: Vec<BasicBlock> = spec
+            .into_iter()
+            .enumerate()
+            .map(|(id, succ)| BasicBlock {
+                id,
+                start: 0x1000 + id as u64 * 0x10,
+                end: 0x1000 + id as u64 * 0x10 + 0x10,
+                instr_indices: id..id + 1,
+                successors: succ
+                    .into_iter()
+                    .map(|target| Edge {
+                        target,
+                        kind: EdgeKind::Jump,
+                    })
+                    .collect(),
+                predecessors: vec![],
+            })
+            .collect();
+        for source in 0..blocks.len() {
+            for e in blocks[source].successors.clone() {
+                blocks[e.target].predecessors.push(source);
+            }
+        }
+        CFG {
+            func_entry: 0x1000,
+            blocks,
+            block_at: Default::default(),
+        }
+    }
+
+    #[test]
+    fn keyword_matching_ignores_identifier_prefixes() {
+        assert!(is_keyword("return;", "return"));
+        assert!(is_keyword("return rax;", "return"));
+        assert!(is_keyword("do {", "do"));
+        assert!(is_keyword("if (x) {", "if"));
+        assert!(!is_keyword("returned = 1;", "return"));
+        assert!(!is_keyword("download();", "do"));
+        assert!(!is_keyword("format(x);", "for"));
+    }
+
+    #[test]
+    fn prune_unreachable_return_keeps_closing_braces() {
+        let mut lines = vec![
+            line("if (x) {", LineKind::Branch),
+            line("return 1;", LineKind::Return),
+            line("LAB_10:", LineKind::Label),
+            line("return 2;", LineKind::Return),
+            line("}", LineKind::Branch),
+            line("}", LineKind::CloseBrace),
+        ];
+        prune_unreachable_returns(&mut lines);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, vec!["if (x) {", "return 1;", "}", "}"]);
+    }
+
+    #[test]
+    fn break_inside_switch_is_detected() {
+        let mut lines = vec![
+            line("while (1) {", LineKind::Branch),
+            line("switch (a) {", LineKind::Branch),
+            line("case 1:", LineKind::Branch),
+            line("if (c) {", LineKind::Branch),
+        ];
+        assert!(innermost_breakable_is_switch(&lines));
+        lines.push(line("}", LineKind::Branch));
+        assert!(innermost_breakable_is_switch(&lines));
+        lines.push(line("break;", LineKind::Branch));
+        lines.push(line("}", LineKind::Branch));
+        assert!(!innermost_breakable_is_switch(&lines));
+    }
+
+    #[test]
+    fn missing_labels_are_inserted_before_the_first_line_of_the_block() {
+        let cfg = test_cfg(vec![vec![1], vec![]]);
+        let mut lines = vec![
+            line("goto LAB_1010;", LineKind::Branch),
+            PseudoLine {
+                indent: 1,
+                text: "rax = 1;".into(),
+                kind: LineKind::Assignment,
+                source_addr: Some(0x1010),
+            },
+        ];
+        insert_missing_labels(&cfg, &mut lines);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1].text, "LAB_1010:");
+        assert!(lines[1].kind == LineKind::Label);
+    }
+
+    #[test]
+    fn label_before_closing_if_brace_moves_past_it() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("goto LAB_10;", LineKind::Branch),
+            line("LAB_10:", LineKind::Label),
+            line("}", LineKind::Branch),
+            line("x = 1;", LineKind::Assignment),
+        ];
+        hoist_labels_past_closing_braces(&mut lines);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, vec!["if (a) {", "goto LAB_10;", "}", "LAB_10:", "x = 1;"]);
+    }
+
+    #[test]
+    fn only_the_designated_loop_exit_becomes_a_break() {
+        let cfg = test_cfg(vec![vec![1, 3], vec![2, 4], vec![0], vec![], vec![]]);
+        let loops = Loops::compute(&cfg, 0, &[(0, 2)]);
+        assert_eq!(loops.edge_action(2, 0), Some(EdgeAction::Continue));
+        assert_eq!(loops.edge_action(1, 3), Some(EdgeAction::Break));
+        assert_eq!(loops.edge_action(1, 4), None);
+    }
+
+    #[test]
+    fn postdom_connects_infinite_loops_to_the_exit() {
+        let cfg = test_cfg(vec![vec![1], vec![1]]);
+        let pd = Postdom::compute(&cfg);
+        assert!(pd.reaches_exit(0));
+        assert!(pd.reaches_exit(1));
+    }
+
+    #[test]
+    fn reaches_only_exit_rejects_regions_with_an_exitless_cycle() {
+        let cfg = test_cfg(vec![vec![1], vec![2, 3], vec![], vec![3]]);
+        assert!(!reaches_only_exit(&cfg, 1, &[]));
+        assert!(reaches_only_exit(&cfg, 2, &[]));
+    }
+
+    #[test]
+    fn case_with_a_conditional_falls_through_into_the_next_case() {
+        let mut cfg = test_cfg(vec![vec![1, 2], vec![3, 2], vec![], vec![]]);
+        for b in 0..cfg.blocks.len() {
+            let start = cfg.blocks[b].start;
+            cfg.block_at.insert(start, b);
+        }
+        let groups = vec![(0x1010u64, vec![0usize]), (0x1020u64, vec![1usize])];
+        let order = switch_fallthrough_order(&cfg, &groups, None).expect("order");
+        assert_eq!(order[0].0, 0x1010);
+        assert_eq!(order[0].2, Some(0x1020));
+        assert_eq!(order[1].2, None);
+    }
+
+    #[test]
+    fn gotos_are_classified_by_shape() {
+        let lines = vec![
+            line("goto LAB_2;", LineKind::Branch),
+            line("LAB_1:", LineKind::Label),
+            line("x = 1;", LineKind::Assignment),
+            line("goto LAB_1;", LineKind::Branch),
+            line("LAB_2:", LineKind::Label),
+            line("return;", LineKind::Return),
+            line("goto LAB_9;", LineKind::Branch),
+        ];
+        let classes = classify_gotos(&lines);
+        assert_eq!(
+            classes,
+            vec![
+                (0, GotoClass::SharedTail),
+                (3, GotoClass::Backward),
+                (6, GotoClass::Irreducible)
+            ]
         );
     }
 
@@ -3292,6 +4244,109 @@ mod cleanup_tests {
         assert!(text.contains("continue;"), "{text}");
         assert!(!text.contains("goto "), "{text}");
         assert!(!text.contains("LAB_"), "{text}");
+    }
+
+    #[test]
+    fn while_true_loop_with_conditional_header_keeps_braces_balanced() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        let spec: Vec<Vec<(usize, EdgeKind)>> = vec![
+            vec![(1, EdgeKind::Jump)],
+            vec![(1, EdgeKind::BranchTrue), (2, EdgeKind::BranchFalse)],
+            vec![(1, EdgeKind::Jump)],
+        ];
+        let mut blocks: Vec<BasicBlock> = spec
+            .into_iter()
+            .enumerate()
+            .map(|(id, succ)| BasicBlock {
+                id,
+                start: 0x1000 + id as u64 * 0x10,
+                end: 0x1010 + id as u64 * 0x10,
+                instr_indices: id..id + 1,
+                successors: succ
+                    .into_iter()
+                    .map(|(target, kind)| Edge { target, kind })
+                    .collect(),
+                predecessors: vec![],
+            })
+            .collect();
+        for source in 0..blocks.len() {
+            for e in blocks[source].successors.clone() {
+                blocks[e.target].predecessors.push(source);
+            }
+        }
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks,
+            block_at: Default::default(),
+        };
+        let bops: Vec<Vec<(u64, &POp)>> = vec![vec![], vec![], vec![]];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> =
+            (0..3).map(|_| HashMap::default()).collect();
+        let func_lookup = HashMap::default();
+        let back_edges = HashMap::default();
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[(1, 1), (1, 2)]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &[],
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            switches: &[],
+            clone: false,
+            clone_depth: 0,
+        };
+        let mut visited: HashSet<usize> = HashSet::default();
+        let mut lines = Vec::new();
+        walk_block(&ctx, 0, &mut visited, &mut lines, 0, 0);
+        let text = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(text.matches('{').count(), text.matches('}').count(), "{text}");
+    }
+
+    #[test]
+    fn else_after_terminal_then_branch_is_flattened() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("return 1;", LineKind::Return),
+            line("} else {", LineKind::Branch),
+            line("x = 1;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+        ];
+        lines[3].indent = 1;
+        elide_else_after_terminal(&mut lines);
+        assert_eq!(
+            lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["if (a) {", "return 1;", "}", "x = 1;"]
+        );
+        assert_eq!(lines[3].indent, 0);
+    }
+
+    #[test]
+    fn else_after_non_terminal_then_branch_is_kept() {
+        let mut lines = vec![
+            line("if (a) {", LineKind::Branch),
+            line("y = 2;", LineKind::Assignment),
+            line("} else {", LineKind::Branch),
+            line("x = 1;", LineKind::Assignment),
+            line("}", LineKind::Branch),
+        ];
+        elide_else_after_terminal(&mut lines);
+        assert_eq!(lines.len(), 5);
     }
 
     #[test]

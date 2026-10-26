@@ -1,8 +1,10 @@
-use super::printing::*;
+﻿use super::printing::*;
 use super::structure::{
-    Loops, Postdom, WalkCtx, cleanup_labels, compute_dowhile, inline_terminal_gotos,
+    GotoClass, Loops, Postdom, WalkCtx, classify_gotos, cleanup_labels, code_part,
+    compute_dowhile, elide_else_after_terminal, inline_terminal_gotos,
     prune_unreachable_returns, retarget_goto_chains, squash_empty_branches, walk_block,
 };
+use super::state_machine;
 use super::*;
 use super::alias;
 use crate::analysis::flow::cfg::CFG;
@@ -22,6 +24,8 @@ use std::time::{Duration, Instant};
 type Env = HashMap<&'static str, Lattice>;
 
 const MAX_HINT_PASSES: usize = 8;
+
+const STATE_MACHINE_UNTHREAD: bool = false;
 
 pub struct LiftInput<'a> {
     pub cfg: &'a CFG,
@@ -44,6 +48,7 @@ pub struct DecompStats {
     pub blocks: usize,
     pub back_edges: usize,
     pub dead_ops: usize,
+    pub expr_overflows: usize,
     pub unmodeled_instrs: usize,
     pub emitted_lines: usize,
     pub output_bytes: usize,
@@ -60,11 +65,12 @@ impl std::fmt::Display for DecompStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "blocks={} back_edges={} dead_ops={} unmodeled={} lines={} bytes={} \
+            "blocks={} back_edges={} dead_ops={} expr_overflows={} unmodeled={} lines={} bytes={} \
              hints={:.1?} dataflow={:.1?} structure={:.1?} total={:.1?}",
             self.blocks,
             self.back_edges,
             self.dead_ops,
+            self.expr_overflows,
             self.unmodeled_instrs,
             self.emitted_lines,
             self.output_bytes,
@@ -118,7 +124,7 @@ fn finish_cancelled(cfg: &CFG, func_name: &str, mut lines: Vec<PseudoLine>) -> P
 fn function_struct_hints(cfg: &CFG, pinstrs: &[PInstr]) -> HashMap<String, StructHint> {
     use crate::analysis::type_reconstruction::TypeReconstructor;
     let entry = cfg.func_entry;
-    let end = cfg.blocks.last().map(|b| b.end).unwrap_or(entry);
+    let end = cfg.blocks.iter().map(|b| b.end).max().unwrap_or(entry);
     if end <= entry {
         return HashMap::default();
     }
@@ -136,6 +142,37 @@ fn fmt_frame_slot(base_reg: &str, off: i64) -> String {
     } else {
         format!("[{}+{:#x}]", base_reg, off)
     }
+}
+
+fn is_stack_bookkeeping(text: &str, bp_is_frame: bool) -> bool {
+    let t = text
+        .split("//")
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    let Some((lhs, rhs)) = t.split_once(" = ") else {
+        return false;
+    };
+    let (lhs, rhs) = (lhs.trim(), rhs.trim());
+    let is_sp = |s: &str| matches!(s, "rsp" | "esp");
+    let is_bp = |s: &str| matches!(s, "rbp" | "ebp");
+    if !(is_sp(lhs) || (bp_is_frame && is_bp(lhs))) {
+        return false;
+    }
+    if rhs == lhs || is_sp(rhs) || is_bp(rhs) {
+        return true;
+    }
+    let Some(rest) = rhs.strip_prefix(lhs) else {
+        return false;
+    };
+    let Some(num) = rest.trim_start().strip_prefix(['+', '-']) else {
+        return false;
+    };
+    let n = num.trim();
+    n.strip_prefix("0x")
+        .map_or_else(|| n.parse::<i64>().is_ok(), |h| i64::from_str_radix(h, 16).is_ok())
 }
 
 
@@ -169,16 +206,32 @@ fn is_float_mnemonic(mn: &str) -> bool {
             | "fsubrp" | "fmul" | "fmulp" | "fdiv" | "fdivp" | "fdivr" | "fdivrp"
             | "fcom" | "fcomp" | "fcompp" | "fucom" | "fucomp" | "fucompp" | "fcomi"
             | "fcomip" | "fucomi" | "fucomip" | "fchs" | "fabs" | "fsqrt" | "fxch"
+            | "xorps" | "xorpd" | "shufps" | "shufpd" | "unpcklps" | "unpcklpd"
+            | "movhps" | "movlps" | "movhpd" | "movlpd" | "movlhps" | "movhlps"
+            | "maxps" | "maxpd" | "minps" | "minpd" | "cvtps2pd" | "cvtpd2ps"
+            | "rsqrtss" | "rcpss" | "fild" | "fist" | "fistp" | "fisttp" | "fld1" | "fldz"
     )
 }
 
 fn is_fp_reg(tok: &str) -> bool {
-    let b = tok.as_bytes();
-    let has_prefix = |p: &str| b.len() >= p.len() && b[..p.len()].eq_ignore_ascii_case(p.as_bytes());
-    if has_prefix("xmm") || has_prefix("ymm") || has_prefix("zmm") {
-        return true;
+    let t = tok.trim();
+    let has = |p: &str| {
+        t.len() >= p.len()
+            && t.is_char_boundary(p.len())
+            && t[..p.len()].eq_ignore_ascii_case(p)
+    };
+    for p in ["xmm", "ymm", "zmm"] {
+        if has(p) {
+            let r = &t[p.len()..];
+            let d = r.bytes().take_while(u8::is_ascii_digit).count();
+            return (1..=2).contains(&d)
+                && !r[d..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        }
     }
-    has_prefix("st") && (b.len() == 2 || b[2] == b'(' || b[2].is_ascii_digit())
+    has("st") && {
+        let r = &t[2..];
+        r.is_empty() || r.starts_with('(') || (r.len() == 1 && r.as_bytes()[0].is_ascii_digit())
+    }
 }
 
 struct TypeScan {
@@ -194,6 +247,14 @@ struct ByValueParam {
     size: usize,
     is_union: bool,
     fields: Vec<(i64, usize, String)>,
+}
+
+fn struct_is_union(ds: &DebugStruct) -> bool {
+    ds.fields
+        .iter()
+        .filter(|f| f.offset == 0 && f.bitfield.is_none())
+        .count()
+        > 1
 }
 
 fn flattened_struct_fields(
@@ -216,10 +277,15 @@ fn flattened_struct_fields(
             if ty.ends_with('*') || ty.contains('[') {
                 continue;
             }
-            let name = ty
-                .trim_start_matches("struct ")
-                .trim_start_matches("union ")
-                .trim();
+            let mut name = ty;
+            while let Some(rest) = name
+                .strip_prefix("const ")
+                .or_else(|| name.strip_prefix("volatile "))
+                .or_else(|| name.strip_prefix("struct "))
+                .or_else(|| name.strip_prefix("union "))
+            {
+                name = rest.trim_start();
+            }
             let Some(sub) = dbg.struct_named(name) else {
                 continue;
             };
@@ -255,6 +321,12 @@ fn flattened_struct_fields(
     out
 }
 
+fn mark_slot(set: &mut HashSet<i64>, v: &PVar) {
+    if let PVar::StackSlot { off, .. } = v {
+        set.insert(*off);
+    }
+}
+
 fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeScan {
     let mut floats: HashSet<String> = HashSet::default();
     let mut float_slots: HashSet<i64> = HashSet::default();
@@ -263,7 +335,7 @@ fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeSca
             continue;
         }
         for tok in di.ops().split(',') {
-            let t = tok.trim();
+            let t = tok.split_whitespace().next().unwrap_or("");
             if is_fp_reg(t) {
                 floats.insert(t.to_ascii_lowercase());
             }
@@ -272,75 +344,65 @@ fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeSca
 
     let mut read_pos_slots: HashSet<i64> = HashSet::default();
     let mut written_pos_slots: HashSet<i64> = HashSet::default();
+    for pi in pinstrs_in_func {
+        for op in &pi.ops {
+            match op {
+                POp::Copy { src, .. } => mark_slot(&mut read_pos_slots, src),
+                POp::Load { addr, .. } => mark_slot(&mut read_pos_slots, addr),
+                POp::Push { src, .. } => mark_slot(&mut read_pos_slots, src),
+                POp::Store {
+                    addr: PVar::StackSlot { off, .. },
+                    ..
+                } if *off >= 0 => {
+                    written_pos_slots.insert(*off);
+                }
+                POp::FloatBinop { a, b, .. }
+                | POp::Cmp { a, b, .. }
+                | POp::Test { a, b, .. }
+                | POp::FloatCmp { a, b, .. }
+                | POp::IntAdd { a, b, .. }
+                | POp::IntSub { a, b, .. }
+                | POp::IntMul { a, b, .. }
+                | POp::IntAnd { a, b, .. }
+                | POp::IntOr { a, b, .. }
+                | POp::IntXor { a, b, .. }
+                | POp::IntLeft { a, b, .. }
+                | POp::IntShr { a, b, .. }
+                | POp::IntSar { a, b, .. }
+                | POp::IntDiv { a, b, .. }
+                | POp::IntSDiv { a, b, .. } => {
+                    mark_slot(&mut read_pos_slots, a);
+                    mark_slot(&mut read_pos_slots, b);
+                }
+                _ => {}
+            }
+        }
+    }
+
     for _ in 0..MAX_HINT_PASSES {
         let before = (floats.len(), float_slots.len());
         for pi in pinstrs_in_func {
             for op in &pi.ops {
                 match op {
-                    POp::Copy { dst, src, .. } => {
-                        if floats.contains(&fmt_var(src)) {
-                            floats.insert(fmt_var(dst));
-                        }
-                        if let PVar::StackSlot { off: o, .. } = src {
-                            read_pos_slots.insert(*o);
-                        }
+                    POp::Copy { dst, src, .. } if floats.contains(&fmt_var(src)) => {
+                        floats.insert(fmt_var(dst));
                     }
-                    POp::Cvt { kind, dst, .. } => {
-                        if kind == "i2f" || kind == "f2f" {
-                            floats.insert(fmt_var(dst));
-                        }
+                    POp::Cvt { kind, dst, .. } if kind == "i2f" || kind == "f2f" => {
+                        floats.insert(fmt_var(dst));
                     }
-                    POp::Load { dst, addr, .. } => {
-                        if let PVar::StackSlot { off: o, .. } = addr {
-                            read_pos_slots.insert(*o);
-                        }
-                        if matches!(addr, PVar::StackSlot { off: o, .. } if float_slots.contains(o))
-                        {
-                            floats.insert(fmt_var(dst));
-                        }
-                    }
-                    POp::Store { addr, src, .. } => {
-                        if floats.contains(&fmt_var(src))
-                            && let PVar::StackSlot { off: o, .. } = addr {
-                                float_slots.insert(*o);
-                            }
-                        if let PVar::StackSlot { off: o, .. } = addr
-                            && *o >= 0 {
-                                written_pos_slots.insert(*o);
-                            }
-                    }
-                    POp::FloatBinop { a, b, .. }
-                    | POp::Cmp { a, b, .. }
-                    | POp::Test { a, b, .. }
-                    | POp::FloatCmp { a, b, .. } => {
-                        for v in [a, b] {
-                            if let PVar::StackSlot { off: o, .. } = v {
-                                read_pos_slots.insert(*o);
-                            }
-                        }
-                    }
-                    POp::IntAdd { a, b, .. }
-                    | POp::IntSub { a, b, .. }
-                    | POp::IntMul { a, b, .. }
-                    | POp::IntAnd { a, b, .. }
-                    | POp::IntOr { a, b, .. }
-                    | POp::IntXor { a, b, .. }
-                    | POp::IntLeft { a, b, .. }
-                    | POp::IntShr { a, b, .. }
-                    | POp::IntSar { a, b, .. }
-                    | POp::IntDiv { a, b, .. }
-                    | POp::IntSDiv { a, b, .. } => {
-                        for v in [a, b] {
-                            if let PVar::StackSlot { off: o, .. } = v {
-                                read_pos_slots.insert(*o);
-                            }
-                        }
-                    }
-                    POp::Push {
-                        src: PVar::StackSlot { off: o, .. },
+                    POp::Load {
+                        dst,
+                        addr: PVar::StackSlot { off, .. },
                         ..
-                    } => {
-                        read_pos_slots.insert(*o);
+                    } if float_slots.contains(off) => {
+                        floats.insert(fmt_var(dst));
+                    }
+                    POp::Store {
+                        addr: PVar::StackSlot { off, .. },
+                        src,
+                        ..
+                    } if floats.contains(&fmt_var(src)) => {
+                        float_slots.insert(*off);
                     }
                     _ => {}
                 }
@@ -357,7 +419,6 @@ fn scan_types(imap: &[DisasmInstruction], pinstrs_in_func: &[PInstr]) -> TypeSca
         written_pos_slots,
     }
 }
-
 
 pub fn decompile(input: LiftInput<'_>) -> Pseudocode {
     decompile_with_stats(input).0
@@ -397,6 +458,31 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         stats.t_total = t_total.elapsed();
         return (make_pseudocode(cfg, func_name, lines), stats);
     }
+    if cfg.blocks.is_empty() {
+        let lines = vec![
+            PseudoLine {
+                indent: 0,
+                text: format!("void {}(void)", func_name),
+                kind: LineKind::Signature,
+                source_addr: None,
+            },
+            PseudoLine {
+                indent: 0,
+                text: "{".into(),
+                kind: LineKind::OpenBrace,
+                source_addr: None,
+            },
+            PseudoLine {
+                indent: 0,
+                text: "}".into(),
+                kind: LineKind::CloseBrace,
+                source_addr: None,
+            },
+        ];
+        stats.emitted_lines = lines.len();
+        stats.t_total = t_total.elapsed();
+        return (make_pseudocode(cfg, func_name, lines), stats);
+    }
     EXPR_OVERFLOWS.with(|c| c.set(0));
     let mut lines = Vec::new();
     let sp = if is64 { "rsp" } else { "esp" };
@@ -409,40 +495,28 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         read_pos_slots,
         written_pos_slots,
     } = scan_types(imap, pinstrs_in_func);
+    let bops = build_block_ops_from_slice(cfg, pinstrs_in_func);
+    debug_state_candidates(func_name, &bops);
     let recovery = if imap.is_empty() {
         None
     } else {
-        Some(variables::recover(cfg, pinstrs_in_func, imap, is64))
+        Some(variables::recover_with_ops(
+            cfg,
+            &bops,
+            is64,
+            if !is64 {
+                variables::Abi::Auto
+            } else if is_win64 {
+                variables::Abi::MsX64
+            } else {
+                variables::Abi::SysV64
+            },
+        ))
     };
     let mut recovery = recovery;
     let debug = debug_types.map(|a| a.as_ref());
     let debug_sig = debug.and_then(|d| d.function(cfg.func_entry));
-    let mut callee_params: HashMap<u64, Vec<bool>> = debug
-        .map(|d| {
-            d.functions
-                .iter()
-                .map(|(&addr, f)| {
-                    (
-                        addr,
-                        f.params
-                            .iter()
-                            .map(|p| param_is_float(&p.type_name))
-                            .collect(),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    for (&addr, name) in imports {
-        if let Some(n) = known_import_param_count(name) {
-            callee_params.entry(addr).or_insert_with(|| vec![false; n]);
-        }
-    }
-    for (&from, &to) in thunk_targets {
-        if let Some(sig) = callee_params.get(&to).cloned() {
-            callee_params.insert(from, sig);
-        }
-    }
+    let callee_params = build_callee_params(debug, imports, thunk_targets);
     let param_names: HashSet<String> = debug_sig
         .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
         .unwrap_or_default();
@@ -461,7 +535,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         .as_ref()
         .map(|rv| rv.vars.iter().map(|v| v.name.clone()).collect())
         .unwrap_or_default();
-    if let (Some(sig), Some(rv)) = (debug_sig, recovery.as_mut()) {
+    if let (Some(sig), Some(rv)) = (debug_sig, recovery.as_mut())
+        && rv.params.len() == sig.params.len()
+    {
         for (i, &id) in rv.params.iter().enumerate() {
             let Some(dp) = sig.params.get(i) else {
                 break;
@@ -489,7 +565,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     dbg.struct_named(sname).map(|ds| ByValueParam {
                         type_name: dp.type_name.clone(),
                         size: ds.size,
-                        is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
+                        is_union: struct_is_union(ds),
                         fields: flattened_struct_fields(dbg, ds),
                     })
                 })
@@ -528,6 +604,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             }
         }
     }
+
+    let final_param_names: HashSet<String> = recovery
+        .as_ref()
+        .map(|rv| {
+            rv.params
+                .iter()
+                .map(|&id| rv.vars[id as usize].name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut structs = function_struct_hints(cfg, pinstrs_in_func);
     if let Some(dbg) = debug {
@@ -592,6 +678,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     }
                 }
             }
+            let mut clobbered: HashSet<&'static str> = HashSet::default();
             for pi in pinstrs_in_func {
                 for op in &pi.ops {
                     if let POp::Store {
@@ -599,6 +686,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         src: PVar::Reg(reg),
                         ..
                     } = op
+                        && !clobbered.contains(reg)
                         && let Some(hint) = hint_by_reg.get(reg)
                     {
                         let b = match base {
@@ -615,6 +703,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             }
                             value_structs.insert(name.clone(), h);
                         }
+                    }
+                    if let Some(w) = written_reg(op) {
+                        clobbered.insert(w);
                     }
                 }
             }
@@ -651,6 +742,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 }
             }
         }
+        let mut clobbered: HashSet<&'static str> = HashSet::default();
         for pi in pinstrs_in_func {
             for op in &pi.ops {
                 if let POp::Store {
@@ -658,6 +750,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     src: PVar::Reg(reg),
                     ..
                 } = op
+                    && !clobbered.contains(reg)
                 {
                     let b = match base {
                         StackBase::Rbp => 0u8,
@@ -687,6 +780,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         local_types.insert(name.clone(), ty.clone());
                     }
                 }
+                if let Some(w) = written_reg(op) {
+                    clobbered.insert(w);
+                }
             }
         }
     }
@@ -703,7 +799,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         let ptr = if is64 { 8 } else { 4 };
         
         
-        let rsp_body = rv.rsp_at.values().copied().min().unwrap_or(0);
+        let rsp_body = {
+            let mut freq: HashMap<i64, usize> = HashMap::default();
+            for &d in rv.rsp_at.values() {
+                *freq.entry(d).or_default() += 1;
+            }
+            freq.into_iter()
+                .max_by_key(|&(d, c)| (c, std::cmp::Reverse(d)))
+                .map(|(d, _)| d)
+                .unwrap_or(0)
+        };
         for local in &sig.locals {
             let target_norm = match local.base {
                 DebugBase::Cfa => {
@@ -726,9 +831,16 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 _ => continue,
             };
             let old_name = v.name.clone();
-            let is_param_spill = sig.params.iter().any(|p| p.name == local.name);
+            let is_param_spill = param_names.contains(&local.name);
             if is_param_spill {
                 hidden_locals.insert(old_name.clone());
+                let display = sig
+                    .params
+                    .iter()
+                    .position(|p| p.name == local.name)
+                    .and_then(|i| rv.params.get(i))
+                    .map(|&id| rv.vars[id as usize].name.clone())
+                    .unwrap_or_else(|| sanitize_param_name(&local.name, &old_name));
                 if let Some(sname) = local.struct_name.as_deref()
                     && let Some(ds) = dbg.struct_named(sname)
                 {
@@ -738,7 +850,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             old_name.clone(),
                             StructHint {
                                 fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
-                                owner: Some(local.name.clone()),
+                                owner: Some(display.clone()),
                             },
                         );
                     } else {
@@ -746,14 +858,15 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             base_reg: b,
                             base: raw_off,
                             base_norm: target_norm,
-                            base_display: Some(local.name.clone()),
+                            base_display: Some(display.clone()),
                             size: local.size,
-                            is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
+                            is_union: struct_is_union(ds),
                             fields: flat,
                         });
                     }
                 }
-                stack_names.insert(target_norm, (local.name.clone(), local.size));
+                local_types.insert(old_name.clone(), normalize_type(&local.type_name));
+                stack_names.insert(target_norm, (display, local.size));
                 continue;
             }
             let mut new_name = sanitize_param_name(&local.name, &old_name);
@@ -767,7 +880,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 used_names.insert(new_name.clone());
                 param_renames.insert(old_name.clone(), new_name.clone());
             }
-            local_types.insert(old_name.clone(), local.type_name.clone());
+            local_types.insert(old_name.clone(), normalize_type(&local.type_name));
             stack_names.insert(target_norm, (new_name.clone(), local.size));
             if let Some(sname) = local.struct_name.as_deref()
                 && let Some(ds) = dbg.struct_named(sname)
@@ -788,7 +901,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         base_norm: target_norm,
                         base_display: None,
                         size: local.size,
-                        is_union: ds.fields.iter().filter(|f| f.offset == 0).count() > 1,
+                        is_union: struct_is_union(ds),
                         fields: flat,
                     });
                     for other in &rv.vars {
@@ -811,11 +924,19 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         for e in &dbg.enums {
             enum_variants.insert(e.name.clone(), e.variants.clone());
         }
+        let mut ambiguous: HashSet<String> = HashSet::default();
         for st in &dbg.structs {
             for f in &st.fields {
                 let ty = f.type_name.trim().trim_start_matches("enum ").trim();
                 if enum_variants.contains_key(ty) {
-                    enum_fields.insert(f.name.clone(), ty.to_string());
+                    match enum_fields.get(&f.name) {
+                        Some(prev) if prev != ty => {
+                            ambiguous.insert(f.name.clone());
+                        }
+                        _ => {
+                            enum_fields.insert(f.name.clone(), ty.to_string());
+                        }
+                    }
                 }
             }
             let mut first_by_off: HashMap<usize, String> = HashMap::default();
@@ -824,13 +945,22 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             }
             for f in &st.fields {
                 if let Some((bit, width)) = f.bitfield
-                    && bit > 0
                     && let Some(first) = first_by_off.get(&f.offset)
                 {
                     bitfields.push((first.clone(), bit, width, f.name.clone()));
                 }
             }
         }
+        enum_fields.retain(|k, _| !ambiguous.contains(k));
+        let used: HashSet<&str> = structs
+            .values()
+            .chain(value_structs.values())
+            .flat_map(|h| h.fields.iter().map(|(_, n)| n.as_str()))
+            .chain(stack_structs.iter().flat_map(|s| s.fields.iter().map(|(_, _, n)| n.as_str())))
+            .map(|n| n.rsplit('.').next().unwrap_or(n))
+            .collect();
+        enum_fields.retain(|k, _| used.contains(k.as_str()));
+        bitfields.retain(|(base, ..)| used.contains(base.as_str()));
     }
     let hints = TypeHints {
         floats,
@@ -942,25 +1072,20 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             if hints.hidden_locals.contains(&v.name) {
                 continue;
             }
-            let off = match v.storage {
+            let comment = match v.storage {
                 variables::Loc::Stack { base, off } => {
                     let reg = if base == 0 { bp } else { sp };
-                    fmt_frame_slot(reg, off)
+                    format!("  // {}", fmt_frame_slot(reg, off))
                 }
                 _ => String::new(),
             };
+            let decl = match hints.local_types.get(&v.name) {
+                Some(t) => fmt_decl(t, &v.name),
+                None => v.ty.decl(&v.name),
+            };
             lines.push(PseudoLine {
                 indent: 1,
-                text: format!(
-                    "{} {};  // {}",
-                    hints
-                        .local_types
-                        .get(&v.name)
-                        .map(String::as_str)
-                        .unwrap_or_else(|| v.ty.c_str()),
-                    v.name,
-                    off
-                ),
+                text: format!("{};{}", decl, comment),
                 kind: LineKind::Declaration,
                 source_addr: None,
             });
@@ -974,17 +1099,13 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 && v.keep
                 && v.use_count > 1
             {
+                let decl = match hints.local_types.get(&v.name) {
+                    Some(t) => fmt_decl(t, &v.name),
+                    None => v.ty.decl(&v.name),
+                };
                 lines.push(PseudoLine {
                     indent: 1,
-                    text: format!(
-                        "{} {};",
-                        hints
-                            .local_types
-                            .get(&v.name)
-                            .map(String::as_str)
-                            .unwrap_or_else(|| v.ty.c_str()),
-                        v.name
-                    ),
+                    text: format!("{};", decl),
                     kind: LineKind::Declaration,
                     source_addr: None,
                 });
@@ -1019,7 +1140,11 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             };
             lines.push(PseudoLine {
                 indent: 1,
-                text: format!("{} {};  // {}", ty, v.name, fmt_frame_slot(base, v.offset)),
+                text: format!(
+                    "{};  // {}",
+                    fmt_decl(&ty, &v.name),
+                    fmt_frame_slot(base, v.offset)
+                ),
                 kind: LineKind::Declaration,
                 source_addr: None,
             });
@@ -1038,13 +1163,18 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     }
 
     let t_phase = Instant::now();
+    let unthreaded: Option<CFG> = if STATE_MACHINE_UNTHREAD {
+        state_machine::unthread(cfg, &bops, imap)
+    } else {
+        None
+    };
+    let cfg: &CFG = unthreaded.as_ref().unwrap_or(cfg);
     let graph = GraphView::from_cfg(cfg);
-    let bops = build_block_ops_from_slice(cfg, pinstrs_in_func);
 
     let entry_id = entry_block(cfg);
     let back_edge_list = graph.back_edge_list(entry_id);
     let back_edges: HashMap<usize, usize> = back_edge_list.iter().copied().collect();
-    stats.back_edges = back_edges.len();
+    stats.back_edges = back_edge_list.len();
 
     let param_seed: HashMap<&'static str, String> = recovery
         .as_ref()
@@ -1070,7 +1200,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let dowhile = compute_dowhile(cfg, &bops, imap, &back_edges, &block_consts, &hints);
     let postdom = Postdom::compute(cfg);
     let loops = Loops::compute(cfg, entry_id, &back_edge_list);
-    let dead = compute_dead_ops_g(&graph, &bops, cancel);
+    let dead = compute_dead_ops_g(&graph, entry_id, &bops, cancel);
     stats.dead_ops = dead.len();
     stats.t_dataflow = t_phase.elapsed();
     if is_cancelled(cancel) {
@@ -1100,7 +1230,14 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         clone_depth: 0,
     };
     walk_block(&ctx, entry_id, &mut visited, &mut lines, 1, 0);
+    debug_check_braces("walk_block", func_name, &lines, 1);
     stats.t_structure = t_phase.elapsed();
+    stats.expr_overflows = EXPR_OVERFLOWS.with(|c| c.get()) as usize;
+    if is_cancelled(cancel) {
+        stats.cancelled = true;
+        stats.t_total = t_total.elapsed();
+        return (finish_cancelled(cfg, func_name, lines), stats);
+    }
 
     let mut unmodeled = 0usize;
     let mut first_unmodeled: Option<String> = None;
@@ -1118,7 +1255,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     stats.unmodeled_instrs = unmodeled;
     if unmodeled > 0 {
         lines.push(PseudoLine {
-            indent: 0,
+            indent: 1,
             text: format!(
                 "// [{} instruction(s) not modeled by the lifter were omitted; first: {}]",
                 unmodeled,
@@ -1127,6 +1264,15 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             kind: LineKind::Comment,
             source_addr: None,
         });
+    }
+
+    if let Some(rv) = &recovery {
+        variables::apply_names(&mut lines, rv);
+    }
+    if !param_renames.is_empty() {
+        for line in lines.iter_mut() {
+            line.text = rename_identifiers(&line.text, &param_renames);
+        }
     }
 
     if !is64 {
@@ -1145,42 +1291,21 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
-    if let Some(rv) = &recovery {
-        variables::apply_names(&mut lines, rv);
-    }
-    if !param_renames.is_empty() {
-        for line in lines.iter_mut() {
-            line.text = rename_identifiers(&line.text, &param_renames);
-        }
-    }
-
     
     
     
-fn is_stack_bookkeeping(text: &str) -> bool {
-        let t = text.trim().strip_suffix(';').unwrap_or(text.trim());
-        let Some((lhs, rhs)) = t.split_once('=') else {
-            return false;
-        };
-        let lhs = lhs.trim();
-        let rhs = rhs.trim();
-        let is_sp = |s: &str| matches!(s, "rsp" | "esp" | "rbp" | "ebp");
-        if !is_sp(lhs) {
-            return false;
-        }
-        if rhs == lhs || is_sp(rhs) {
-            return true;
-        }
-        if let Some(rest) = rhs.strip_prefix(lhs) {
-            let rest = rest.trim_start();
-            if rest.starts_with('+') || rest.starts_with('-') {
-                return true;
-            }
-        }
-        false
-    }
     drop_stack_canary(&mut lines);
-    lines.retain(|l| !is_stack_bookkeeping(&l.text));
+    debug_check_braces("drop_stack_canary", func_name, &lines, 1);
+    let bp_is_frame = recovery.as_ref().is_none_or(|rv| {
+        rv.vars.iter().any(|v| {
+            matches!(
+                v.storage,
+                variables::Loc::Stack { base: 0, .. }
+            )
+        })
+    });
+    lines.retain(|l| !is_stack_bookkeeping(&l.text, bp_is_frame));
+    drop_save_restore_comments(&mut lines);
     alias::propagate_aliases(&mut lines);
     alias::cse_repeated_expressions(&mut lines);
     alias::propagate_aliases(&mut lines);
@@ -1189,16 +1314,20 @@ fn is_stack_bookkeeping(text: &str) -> bool {
     alias::drop_self_assignments(&mut lines);
     alias::propagate_aliases(&mut lines);
     alias::reuse_assigned_subexpressions(&mut lines);
+    debug_check_braces("alias", func_name, &lines, 1);
     substitute_enum_values(&mut lines, &hints);
     fold_bitfield_accesses(&mut lines, &hints);
+    debug_check_braces("enum+bitfield", func_name, &lines, 1);
     squash_empty_branches(&mut lines);
-    drop_call_arg_setups(&mut lines);
-    drop_hidden_local_spills(&mut lines, &hints.hidden_locals, &param_names);
+    debug_check_braces("squash_empty_branches", func_name, &lines, 1);
+    drop_call_arg_setups(&mut lines, is64, is_win64);
+    drop_hidden_local_spills(&mut lines, &hints.hidden_locals, &final_param_names);
+    debug_check_braces("tail passes", func_name, &lines, 1);
 
     if hints.out_truncated.get() {
         stats.truncated = true;
         lines.push(PseudoLine {
-            indent: 0,
+            indent: 1,
             text: format!(
                 "// ... truncated: output budget reached, {} of {} blocks not emitted; use disassemble_function for the rest",
                 cfg.blocks.len().saturating_sub(visited.len()),
@@ -1207,15 +1336,6 @@ fn is_stack_bookkeeping(text: &str) -> bool {
             kind: LineKind::Comment,
             source_addr: None,
         });
-    }
-    let total_bytes: usize = lines.iter().map(|l| l.text.len()).sum();
-    if total_bytes > (1 << 20) {
-        eprintln!(
-            "[decompiler] {}: {} lines, {} bytes",
-            func_name,
-            lines.len(),
-            total_bytes
-        );
     }
     lines.push(PseudoLine {
         indent: 0,
@@ -1228,11 +1348,19 @@ fn is_stack_bookkeeping(text: &str) -> bool {
     inline_terminal_gotos(&mut lines);
     retarget_goto_chains(&mut lines);
     inline_terminal_gotos(&mut lines);
+    debug_check_braces("inline_terminal_gotos", func_name, &lines, 0);
     prune_unreachable_returns(&mut lines);
+    debug_check_braces("prune_unreachable_returns", func_name, &lines, 0);
+    elide_else_after_terminal(&mut lines);
+    debug_check_braces("elide_else", func_name, &lines, 0);
     cleanup_labels(&mut lines);
+    debug_check_braces("cleanup_labels", func_name, &lines, 0);
+    debug_goto_classes(func_name, &lines);
+    debug_line_histogram(func_name, &lines);
+    debug_other_shapes(func_name, &lines);
 
     stats.emitted_lines = lines.len();
-    stats.output_bytes = total_bytes;
+    stats.output_bytes = lines.iter().map(|l| l.text.len()).sum();
     stats.t_total = t_total.elapsed();
     (make_pseudocode(cfg, func_name, lines), stats)
 }
@@ -1241,104 +1369,131 @@ fn is_stack_bookkeeping(text: &str) -> bool {
 
 
 
+fn parse_c_int(s: &str) -> Option<i64> {
+    let (neg, s) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s),
+    };
+    let v = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        i64::from_str_radix(h, 16).ok()?
+    } else {
+        s.parse::<i64>().ok()?
+    };
+    Some(if neg { -v } else { v })
+}
+
 fn substitute_enum_values(lines: &mut [PseudoLine], hints: &TypeHints) {
     if hints.enum_fields.is_empty() || hints.enum_variants.is_empty() {
         return;
     }
+    let by_value: HashMap<&str, HashMap<i64, &str>> = hints
+        .enum_variants
+        .iter()
+        .map(|(e, vs)| (e.as_str(), vs.iter().map(|(n, v)| (*v, n.as_str())).collect()))
+        .collect();
+    const OPS: [&str; 7] = [" >= ", " <= ", " == ", " != ", " > ", " < ", " = "];
+
     for line in lines.iter_mut() {
-        let mut text = line.text.clone();
-        for (field, enum_name) in &hints.enum_fields {
-            let Some(variants) = hints.enum_variants.get(enum_name) else {
+        if !line.text.contains('.') {
+            continue;
+        }
+        let text = line.text.as_str();
+        let bytes = text.as_bytes();
+        let mut out = String::new();
+        let mut copied = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] != b'.' {
+                i += 1;
+                continue;
+            }
+            let fs = i + 1;
+            let mut fe = fs;
+            while fe < bytes.len() && (bytes[fe].is_ascii_alphanumeric() || bytes[fe] == b'_') {
+                fe += 1;
+            }
+            i = fe.max(fs);
+            let Some(enum_name) = hints.enum_fields.get(&text[fs..fe]) else {
                 continue;
             };
-            for (name, value) in variants {
-                let forms = [value.to_string(), format!("{:#x}", value), format!("0x{:X}", value)];
-                for form in forms {
-                    for op in [" = ", " == ", " != ", " > ", " < ", " >= ", " <= "] {
-                        let from = format!(".{field}{op}{form}");
-                        let to = format!(".{field}{op}{name}");
-                        if text.contains(&from) {
-                            text = text.replace(&from, &to);
-                        }
+            let Some(op) = OPS.iter().find(|op| text[fe..].starts_with(**op)) else {
+                continue;
+            };
+            let vs = fe + op.len();
+            let mut ve = vs;
+            while ve < bytes.len() && (bytes[ve].is_ascii_alphanumeric() || bytes[ve] == b'-') {
+                ve += 1;
+            }
+            let Some(val) = parse_c_int(&text[vs..ve]) else {
+                continue;
+            };
+            let Some(name) = by_value.get(enum_name.as_str()).and_then(|m| m.get(&val)) else {
+                continue;
+            };
+            out.push_str(&text[copied..vs]);
+            out.push_str(name);
+            copied = ve;
+        }
+        if copied > 0 {
+            out.push_str(&text[copied..]);
+            line.text = out;
+        }
+    }
+}
+
+fn fold_bitfield_accesses(lines: &mut [PseudoLine], hints: &TypeHints) {
+    struct Pat<'a> {
+        needle: String,
+        tails: Vec<String>,
+        name: &'a str,
+    }
+    let pats: Vec<Pat> = hints
+        .bitfields
+        .iter()
+        .filter(|(_, bit, width, _)| *width > 0 && *bit as u32 + *width as u32 <= 32)
+        .map(|(base, bit, width, name)| {
+            let mask = (1u64 << *width) - 1;
+            let mut forms = vec![format!("{:#x}", mask)];
+            let upper = format!("0x{:X}", mask);
+            if upper != forms[0] {
+                forms.push(upper);
+            }
+            Pat {
+                needle: format!(".{base}"),
+                tails: forms.iter().map(|f| format!(" >> {} & {}", bit, f)).collect(),
+                name: name.as_str(),
+            }
+        })
+        .collect();
+    if pats.is_empty() {
+        return;
+    }
+    for line in lines.iter_mut() {
+        let mut text = std::mem::take(&mut line.text);
+        for p in &pats {
+            if !text.contains(&p.needle) {
+                continue;
+            }
+            for tail in &p.tails {
+                let mut from = 0;
+                while let Some(rel) = text[from..].find(&p.needle) {
+                    let at = from + rel;
+                    let after = at + p.needle.len();
+                    if text[after..].starts_with(tail.as_str())
+                        && !text[after + tail.len()..]
+                            .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                        && let Some(start) = field_expr_start(&text, at)
+                    {
+                        let repl = format!("{}.{}", &text[start..at], p.name);
+                        text.replace_range(start..after + tail.len(), &repl);
+                        from = start + repl.len();
+                    } else {
+                        from = after;
                     }
                 }
             }
         }
         line.text = text;
-    }
-}
-
-fn fold_bitfield_accesses(lines: &mut [PseudoLine], hints: &TypeHints) {
-    if hints.bitfields.is_empty() {
-        return;
-    }
-    for i in 0..lines.len() {
-        let mut text = lines[i].text.clone();
-        for (base, bit, width, name) in &hints.bitfields {
-            let mask = (1u64 << (*width as u32).min(63)) - 1;
-            let storage_mask = (!(mask << *bit)) & 0xFFFF_FFFF;
-            let forms = [
-                fmt_const(storage_mask as i64),
-                format!("{:#x}", storage_mask),
-                format!("0x{:X}", storage_mask),
-            ];
-            let mask_forms = [format!("{:#x}", mask), format!("0x{:X}", mask)];
-            
-            for form in &mask_forms {
-                let tail = format!(" >> {} & {}", bit, form);
-                let needle = format!(".{base}");
-                if let Some(rel) = text.find(&needle) {
-                    let at = rel;
-                    let after = at + needle.len();
-                    if text[after..].starts_with(&tail)
-                        && let Some(start) = field_expr_start(&text, at)
-                    {
-                        let base_expr = text[start..at].trim().to_string();
-                        let end = after + tail.len();
-                        text.replace_range(start..end, &format!("{}.{}", base_expr, name));
-                    }
-                }
-            }
-            let rhs_match = forms
-                .iter()
-                .any(|m| text.contains(&format!(".{base} & {m}")));
-            if !rhs_match {
-                continue;
-            }
-            let Some((lhs, _)) = text.split_once(" = ") else {
-                continue;
-            };
-            if lhs.contains(&format!(".{base}")) {
-                if let Some(at) = text.find(&format!(".{base}"))
-                    && let Some(start) = field_expr_start(&text, at)
-                {
-                    let base_expr = text[start..at].trim().to_string();
-                    text.replace_range(
-                        start..at + 1 + base.len(),
-                        &format!("{}.{}", base_expr, name),
-                    );
-                }
-            } else if i + 1 < lines.len() {
-                
-                
-                let tmp = lhs.trim().to_string();
-                let next = lines[i + 1].text.clone();
-                let needle = format!(".{base} = {tmp}");
-                if let Some(at) = next.find(&needle)
-                    && let Some(start) = field_expr_start(&next, at)
-                {
-                    let base_expr = next[start..at].trim().to_string();
-                    lines[i + 1].text = format!(
-                        "{}{}.{}{}",
-                        &next[..start],
-                        base_expr,
-                        name,
-                        &next[start + base_expr.len() + 1 + base.len()..]
-                    );
-                }
-            }
-        }
-        lines[i].text = text;
     }
 }
 
@@ -1357,49 +1512,288 @@ fn field_expr_start(text: &str, dot: usize) -> Option<usize> {
     (first.is_ascii_alphabetic() || first == '_').then_some(start)
 }
 
-fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
-let mut remove: HashSet<usize> = HashSet::default();
-let mut canary_locals: HashSet<String> = HashSet::default();
-for i in 0..lines.len() {
-    let t = lines[i].text.trim();
-    let is_canary_load = (t.contains("*(fs:") || t.contains("*(gs:"))
-        && (t.contains("+ 0x28") || t.contains("+ 0x14"));
-    if !is_canary_load {
-        continue;
+fn debug_check_braces(stage: &str, name: &str, lines: &[PseudoLine], expected: i32) {
+    if std::env::var_os("RDDB_DEBUG_BRACES").is_none() {
+        return;
     }
-    remove.insert(i);
-    let Some((dest, _)) = t.split_once(" = ") else {
-        continue;
-    };
-    let dest = dest.trim();
-    if dest.starts_with("local_") || dest.starts_with("tmp_") || dest.starts_with("stk_") {
-        canary_locals.insert(dest.to_string());
+    let (mut depth, mut min) = (0i32, 0i32);
+    for l in lines {
+        for ch in code_part(&l.text).chars() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    min = min.min(depth);
+                }
+                _ => {}
+            }
+        }
     }
-    let Some(j) = (i + 1..lines.len()).find(|&j| !lines[j].text.trim().is_empty()) else {
-        continue;
-    };
-    let Some((lhs, rhs)) = lines[j].text.split_once(" = ") else {
-        continue;
-    };
-    let rhs = rhs
-        .split("//")
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_end_matches(';')
-        .trim();
-    let lhs = lhs.trim();
-    let same_cookie = rhs.contains("*(fs:") || rhs.contains("*(gs:");
-    if (rhs == dest || same_cookie)
-        && (lhs.starts_with("local_") || lhs.starts_with("tmp_") || lhs.starts_with("stk_"))
-    {
-        canary_locals.insert(lhs.to_string());
-        remove.insert(j);
+    if depth != expected || min < 0 {
+        eprintln!("[braces] {name}: after {stage}: depth={depth} (expected {expected}) min={min}");
     }
 }
-if !remove.is_empty() {
+
+fn debug_goto_classes(name: &str, lines: &[PseudoLine]) {
+    if std::env::var_os("RDDB_DEBUG_GOTOS").is_none() {
+        return;
+    }
+    let (mut tail, mut back, mut irr) = (0usize, 0usize, 0usize);
+    let mut back_targets: HashMap<String, usize> = HashMap::default();
+    for (i, class) in classify_gotos(lines) {
+        match class {
+            GotoClass::SharedTail => tail += 1,
+            GotoClass::Backward => {
+                back += 1;
+                if let Some(t) = lines[i].text.trim().strip_prefix("goto ") {
+                    *back_targets
+                        .entry(t.trim_end_matches(';').to_string())
+                        .or_default() += 1;
+                }
+            }
+            GotoClass::Irreducible => irr += 1,
+        }
+    }
+    if tail + back + irr > 0 {
+        let mut top: Vec<(&String, &usize)> = back_targets.iter().collect();
+        top.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        let top: Vec<String> = top
+            .iter()
+            .take(5)
+            .map(|&(k, v)| format!("{k}x{v}"))
+            .collect();
+        eprintln!(
+            "[gotos] {name}: shared_tail={tail} backward={back} irreducible={irr} backward_targets={} top=[{}]",
+            back_targets.len(),
+            top.join(",")
+        );
+    }
+}
+
+fn debug_line_histogram(name: &str, lines: &[PseudoLine]) {
+    if std::env::var_os("RDDB_DEBUG_HIST").is_none() {
+        return;
+    }
+    let (mut blank, mut comments, mut braces, mut gotos, mut labels, mut decls, mut other) =
+        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    for l in lines {
+        let t = l.text.trim();
+        if t.is_empty() {
+            blank += 1;
+        } else if t.starts_with("//") {
+            comments += 1;
+        } else if t == "}" || t == "} else {" || t == "{" {
+            braces += 1;
+        } else if t.starts_with("goto ") {
+            gotos += 1;
+        } else if t.starts_with("LAB_") && t.ends_with(':') {
+            labels += 1;
+        } else if l.kind == LineKind::Declaration {
+            decls += 1;
+        } else {
+            other += 1;
+        }
+    }
+    eprintln!(
+        "[hist] {name}: total={} decl={decls} comment={comments} brace={braces} goto={gotos} label={labels} blank={blank} other={other}",
+        lines.len()
+    );
+}
+
+fn debug_state_candidates(name: &str, bops: &[Vec<(u64, &POp)>]) {
+    if std::env::var_os("RDDB_DEBUG_SM").is_none() {
+        return;
+    }
+    use super::state_machine::{StateSlot, const_value, slot_of, state_write};
+    let mut writes: HashMap<StateSlot, HashSet<usize>> = HashMap::default();
+    let mut cmps: HashMap<StateSlot, HashSet<usize>> = HashMap::default();
+    for (blk, ops) in bops.iter().enumerate() {
+        let mut loaded: HashMap<String, StateSlot> = HashMap::default();
+        for &(_, op) in ops {
+            match op {
+                POp::Load { dst, addr, .. } => {
+                    if let Some(slot) = slot_of(addr) {
+                        loaded.insert(fmt_var(dst), slot);
+                    }
+                }
+                POp::Copy { dst, src, .. } => {
+                    if !matches!(dst, PVar::Reg(_) | PVar::Tmp(_)) {
+                        continue;
+                    }
+                    if let Some(slot) = slot_of(src) {
+                        loaded.insert(fmt_var(dst), slot);
+                    } else if let Some(slot) = loaded.get(&fmt_var(src)).cloned() {
+                        loaded.insert(fmt_var(dst), slot);
+                    }
+                }
+                POp::Cmp { a, b, .. } => {
+                    if const_value(b).is_some()
+                        && let Some(slot) = loaded.get(&fmt_var(a))
+                    {
+                        cmps.entry(slot.clone()).or_default().insert(blk);
+                    }
+                }
+                _ => {}
+            }
+            if let Some((slot, src, _)) = state_write(op)
+                && const_value(src).is_some()
+            {
+                writes.entry(slot).or_default().insert(blk);
+            }
+        }
+    }
+    let mut best: Vec<(StateSlot, usize, usize)> = writes
+        .iter()
+        .map(|(k, w)| (k.clone(), w.len(), cmps.get(k).map_or(0, |c| c.len())))
+        .collect();
+    best.sort_by_key(|(k, w, c)| (std::cmp::Reverse((*w).min(*c)), format!("{k:?}")));
+    for (k, w, c) in best.into_iter().take(3) {
+        if w.min(c) >= 4 {
+            eprintln!("[sm] {name}: slot={k:?} const_write_blocks={w} cmp_blocks={c}");
+        } else if bops.len() > 50 {
+            eprintln!("[sm-top] {name}: slot={k:?} const_write_blocks={w} cmp_blocks={c}");
+        }
+    }
+}
+
+fn line_shape(t: &str) -> String {
+    let b = t.as_bytes();
+    let mut out = String::with_capacity(t.len());
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let word = &t[s..i];
+            if matches!(
+                word,
+                "if" | "while" | "switch" | "return" | "else" | "break" | "continue"
+            ) {
+                out.push_str(word);
+            } else if b.get(i) == Some(&b'(') {
+                out.push('F');
+            } else {
+                out.push('v');
+            }
+        } else if c.is_ascii_digit() {
+            while i < b.len() && b[i].is_ascii_alphanumeric() {
+                i += 1;
+            }
+            out.push('N');
+        } else {
+            let ch = t[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn debug_other_shapes(name: &str, lines: &[PseudoLine]) {
+    if std::env::var_os("RDDB_DEBUG_SHAPES").is_none() || lines.len() < 500 {
+        return;
+    }
+    let mut shapes: HashMap<String, usize> = HashMap::default();
+    for l in lines {
+        let t = l.text.trim();
+        if t.is_empty()
+            || t.starts_with("//")
+            || t == "}"
+            || t == "} else {"
+            || t == "{"
+            || t.starts_with("goto ")
+            || (t.starts_with("LAB_") && t.ends_with(':'))
+            || l.kind == LineKind::Declaration
+        {
+            continue;
+        }
+        *shapes.entry(line_shape(t)).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> = shapes.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    for (shape, count) in v.into_iter().take(12) {
+        eprintln!("[shapes] {name}: {count:>5}  {shape}");
+    }
+}
+
+const HIDE_SAVE_RESTORE_COMMENTS: bool = true;
+
+fn drop_save_restore_comments(lines: &mut Vec<PseudoLine>) {
+    if !HIDE_SAVE_RESTORE_COMMENTS {
+        return;
+    }
+    lines.retain(|l| {
+        if l.kind != LineKind::Comment {
+            return true;
+        }
+        let t = l.text.trim();
+        let Some(rest) = t
+            .strip_prefix("// push ")
+            .or_else(|| t.strip_prefix("// pop "))
+        else {
+            return true;
+        };
+        let rest = rest.trim();
+        let is_reg = !rest.is_empty()
+            && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        !is_reg
+    });
+}
+
+fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
+    let mut remove: HashSet<usize> = HashSet::default();
+    let mut canary_locals: HashSet<String> = HashSet::default();
+    for i in 0..lines.len() {
+        let t = lines[i].text.trim();
+        let is_canary_load = (t.contains("*(fs:") || t.contains("*(gs:"))
+            && (t.contains("+ 0x28") || t.contains("+ 0x14"));
+        if !is_canary_load {
+            continue;
+        }
+        remove.insert(i);
+        let Some((dest, _)) = t.split_once(" = ") else {
+            continue;
+        };
+        let dest = dest.trim();
+        if dest.starts_with("local_") || dest.starts_with("tmp_") || dest.starts_with("stk_") {
+            canary_locals.insert(dest.to_string());
+        }
+        let Some(j) = (i + 1..lines.len()).find(|&j| !lines[j].text.trim().is_empty()) else {
+            continue;
+        };
+        let Some((lhs, rhs)) = lines[j].text.split_once(" = ") else {
+            continue;
+        };
+        let rhs = rhs
+            .split("//")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        let lhs = lhs.trim();
+        let same_cookie = rhs.contains("*(fs:") || rhs.contains("*(gs:");
+        if (rhs == dest || same_cookie)
+            && (lhs.starts_with("local_") || lhs.starts_with("tmp_") || lhs.starts_with("stk_"))
+        {
+            canary_locals.insert(lhs.to_string());
+            remove.insert(j);
+        }
+    }
+    if remove.is_empty() {
+        return;
+    }
     for (i, line) in lines.iter().enumerate() {
-        if line.text.contains("__stack_chk_fail") {
+        if line.text.contains(['{', '}']) {
+            continue;
+        }
+        if line.text.contains("__stack_chk_fail")
+            || line.text.contains("__security_check_cookie")
+            || line.text.contains("__security_cookie")
+        {
             remove.insert(i);
         }
     }
@@ -1407,7 +1801,7 @@ if !remove.is_empty() {
         let t = line.text.split("//").next().unwrap_or("").trim();
         if line.kind == LineKind::Declaration
             && t.split_whitespace()
-                .nth(1)
+                .last()
                 .is_some_and(|w| canary_locals.contains(w.trim_end_matches(';')))
         {
             remove.insert(i);
@@ -1422,18 +1816,28 @@ if !remove.is_empty() {
             remove.insert(i);
         }
         if canary_locals.contains(rhs) && lhs != rhs {
-            
             remove.insert(i);
         }
     }
-    let mut idx: Vec<usize> = remove.into_iter().collect();
-    idx.sort_unstable();
-    for i in idx.into_iter().rev() {
-        lines.remove(i);
-    }
-}
+    let mut idx = 0usize;
+    lines.retain(|_| {
+        let keep = !remove.contains(&idx);
+        idx += 1;
+        keep
+    });
 }
 
+
+fn fmt_decl(ty: &str, name: &str) -> String {
+    let ty = normalize_type(ty);
+    if let Some(p) = ty.find("(*)") {
+        format!("{}(*{}){}", &ty[..p], name, &ty[p + 3..])
+    } else if let Some(p) = ty.find('[') {
+        format!("{} {}{}", ty[..p].trim_end(), name, &ty[p..])
+    } else {
+        format!("{} {}", ty, name)
+    }
+}
 
 fn normalize_type(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -1464,9 +1868,12 @@ fn sanitize_param_name(name: &str, fallback: &str) -> String {
             out.push('_');
         }
     }
-    let out = out.trim_matches('_').to_string();
+    let mut out = out.trim_matches('_').to_string();
     if out.is_empty() {
         return fallback.to_string();
+    }
+    if out.as_bytes()[0].is_ascii_digit() {
+        out.insert(0, '_');
     }
     if is_c_keyword(&out) {
         format!("p_{}", out)
@@ -1512,6 +1919,13 @@ fn is_c_keyword(s: &str) -> bool {
             | "void"
             | "volatile"
             | "while"
+            | "_Bool"
+            | "bool"
+            | "true"
+            | "false"
+            | "NULL"
+            | "_Atomic"
+            | "_Noreturn"
     )
 }
 
@@ -1521,7 +1935,7 @@ fn rename_identifiers(text: &str, map: &HashMap<String, String>) -> String {
     }
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
-    let mut i = 0;
+    let (mut i, mut copied) = (0usize, 0usize);
     while i < bytes.len() {
         let c = bytes[i];
         if c.is_ascii_alphabetic() || c == b'_' {
@@ -1530,38 +1944,100 @@ fn rename_identifiers(text: &str, map: &HashMap<String, String>) -> String {
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            let token = &text[start..i];
-            if let Some(replacement) = map.get(token) {
-                out.push_str(replacement);
-            } else {
-                out.push_str(token);
+            if let Some(rep) = map.get(&text[start..i]) {
+                out.push_str(&text[copied..start]);
+                out.push_str(rep);
+                copied = i;
+            }
+        } else if c.is_ascii_digit() {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
             }
         } else {
-            out.push(c as char);
             i += 1;
         }
     }
+    out.push_str(&text[copied..]);
     out
 }
 
 fn param_is_float(type_name: &str) -> bool {
     let t = type_name.trim();
-    !t.contains('*')
-        && !t.ends_with("[]")
-        && (t.contains("float") || t.contains("double") || t.contains("_Float"))
+    if t.contains('*') || t.contains('[') || t.contains("long double") {
+        return false;
+    }
+    t.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|tok| {
+            matches!(
+                tok,
+                "float" | "double" | "_Float16" | "_Float32" | "_Float64" | "FLOAT" | "DOUBLE"
+            )
+        })
+}
+
+fn build_callee_params(
+    debug: Option<&DebugTypes>,
+    imports: &HashMap<u64, String>,
+    thunk_targets: &HashMap<u64, u64>,
+) -> HashMap<u64, Vec<bool>> {
+    let mut map: HashMap<u64, Vec<bool>> = debug
+        .map(|d| {
+            d.functions
+                .iter()
+                .map(|(&a, f)| {
+                    (
+                        a,
+                        f.params
+                            .iter()
+                            .map(|p| param_is_float(&p.type_name))
+                            .collect(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (&addr, name) in imports {
+        if let Some(n) = known_import_param_count(name) {
+            map.entry(addr).or_insert_with(|| vec![false; n]);
+        }
+    }
+    for &from in thunk_targets.keys() {
+        let mut to = from;
+        for _ in 0..8 {
+            match thunk_targets.get(&to) {
+                Some(&t) if t != to => to = t,
+                _ => break,
+            }
+        }
+        if to != from
+            && let Some(sig) = map.get(&to).cloned()
+        {
+            map.insert(from, sig);
+        }
+    }
+    map
 }
 
 fn known_import_param_count(name: &str) -> Option<usize> {
     let base = name.rsplit('!').next().unwrap_or(name);
     let base = base.trim_start_matches("__imp_").to_ascii_lowercase();
+    if let Some((_, n)) = base.rsplit_once('@')
+        && let Ok(bytes) = n.parse::<usize>()
+        && bytes % 4 == 0
+    {
+        return Some(bytes / 4);
+    }
     match base.as_str() {
         "__stack_chk_fail" | "__stack_chk_fail_local" => Some(0),
         "abort" => Some(0),
         "getlasterror" | "getprocessid" | "getcurrentprocessid" => Some(0),
         "free" | "malloc" | "strlen" | "puts" | "exit" | "_exit" | "sleep"
-        | "closehandle" | "exitprocess" => Some(1),
-        "memcpy" | "memmove" | "memset" => Some(3),
-        "strcpy" | "strcmp" => Some(2),
+        | "closehandle" | "exitprocess" | "fclose" | "close" | "loadlibrarya"
+        | "loadlibraryw" | "getmodulehandlea" | "getmodulehandlew" => Some(1),
+        "memcpy" | "memmove" | "memset" | "strncmp" | "strncpy" | "heapalloc"
+        | "heapfree" | "read" | "write" => Some(3),
+        "strcpy" | "strcmp" | "calloc" | "realloc" | "strcat" | "fopen"
+        | "getprocaddress" => Some(2),
         _ => None,
     }
 }
@@ -1586,39 +2062,48 @@ fn drop_hidden_local_spills(
     });
 }
 
-fn drop_call_arg_setups(lines: &mut Vec<PseudoLine>) {
-    let mut i = 0;
-    while i < lines.len() {
+fn drop_call_arg_setups(lines: &mut Vec<PseudoLine>, is64: bool, is_win64: bool) {
+    if !is64 {
+        return;
+    }
+    let is_arg = |reg: &str| {
+        if is_win64 {
+            WIN64_ARG_REGS.contains(&reg) || matches!(reg, "xmm0" | "xmm1" | "xmm2" | "xmm3")
+        } else {
+            ABI_ARG_REGS.contains(&reg) || SSE_ARG_REGS.contains(&reg)
+        }
+    };
+    let mut drop = vec![false; lines.len()];
+    for i in 0..lines.len() {
         if lines[i].kind != LineKind::Call {
-            i += 1;
             continue;
         }
         let mut j = i;
         while j > 0 {
             j -= 1;
+            if drop[j] {
+                continue;
+            }
             let t = lines[j].text.trim();
             if t.is_empty() || t.starts_with("//") {
                 continue;
             }
-            let Some((lhs, _)) = t
-                .split_once(" = ")
-                .map(|(l, r)| (l.trim(), r.trim()))
-            else {
+            let Some((lhs, _)) = t.split_once(" = ") else {
                 break;
             };
-            let reg = canonical_reg(lhs);
-            if ABI_ARG_REGS.contains(&reg)
-                || WIN64_ARG_REGS.contains(&reg)
-                || SSE_ARG_REGS.contains(&reg)
-            {
-                lines.remove(j);
-                i = i.saturating_sub(1);
-                continue;
+            if is_arg(canonical_reg(lhs.trim())) {
+                drop[j] = true;
+            } else {
+                break;
             }
-            break;
         }
-        i += 1;
     }
+    let mut k = 0;
+    lines.retain(|_| {
+        let keep = !drop[k];
+        k += 1;
+        keep
+    });
 }
 
 fn entry_block(cfg: &CFG) -> usize {
@@ -1647,15 +2132,26 @@ impl GraphView {
         Self::from_succs(succs)
     }
 
-    fn from_succs(succs: Vec<Vec<usize>>) -> Self {
+    fn from_succs(mut succs: Vec<Vec<usize>>) -> Self {
+        for ss in succs.iter_mut() {
+            match ss.len() {
+                0 | 1 => {}
+                2 => {
+                    if ss[0] == ss[1] {
+                        ss.pop();
+                    }
+                }
+                _ => {
+                    let mut seen: HashSet<usize> = HashSet::default();
+                    ss.retain(|s| seen.insert(*s));
+                }
+            }
+        }
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); succs.len()];
         for (b, ss) in succs.iter().enumerate() {
             for &s in ss {
                 preds[s].push(b);
             }
-        }
-        for p in preds.iter_mut() {
-            p.dedup();
         }
         Self { succs, preds }
     }
@@ -1698,6 +2194,7 @@ impl GraphView {
         (post, back)
     }
 
+    #[allow(dead_code)]
     fn back_edges(&self, entry: usize) -> HashMap<usize, usize> {
         self.dfs(entry).1.into_iter().collect()
     }
@@ -1713,22 +2210,14 @@ impl GraphView {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn compute_back_edges(cfg: &CFG, entry: usize) -> HashMap<usize, usize> {
-    GraphView::from_cfg(cfg).back_edges(entry)
-}
-
-#[allow(dead_code)]
-pub(crate) fn compute_back_edge_list(cfg: &CFG, entry: usize) -> Vec<(usize, usize)> {
-    GraphView::from_cfg(cfg).dfs(entry).1
-}
-
 pub(crate) fn build_block_ops_from_slice<'a>(
     cfg: &CFG,
     pinstrs: &'a [PInstr],
 ) -> Vec<Vec<(u64, &'a POp)>> {
     let mut order: Vec<&'a PInstr> = pinstrs.iter().collect();
-    order.sort_by_key(|p| p.address);
+    if !order.is_sorted_by_key(|p| p.address) {
+        order.sort_by_key(|p| p.address);
+    }
     let mut table: Vec<Vec<(u64, &'a POp)>> = Vec::with_capacity(cfg.blocks.len());
     for block in &cfg.blocks {
         let lo = order.partition_point(|p| p.address < block.start);
@@ -1743,30 +2232,6 @@ pub(crate) fn build_block_ops_from_slice<'a>(
     }
     table
 }
-
-#[allow(dead_code)]
-pub(crate) fn build_block_ops_table<'a>(
-    cfg: &CFG,
-    pmap: &'a HashMap<u64, &PInstr>,
-) -> Vec<Vec<(u64, &'a POp)>> {
-    let mut sorted: Vec<(u64, &'a PInstr)> = pmap.iter().map(|(&a, &p)| (a, p)).collect();
-    sorted.sort_unstable_by_key(|x| x.0);
-    let mut table: Vec<Vec<(u64, &'a POp)>> = Vec::with_capacity(cfg.blocks.len());
-    for block in &cfg.blocks {
-        let lo = sorted.partition_point(|x| x.0 < block.start);
-        let hi = sorted.partition_point(|x| x.0 < block.end).max(lo);
-        let mut ops = Vec::new();
-        for &(addr, pi) in &sorted[lo..hi] {
-            for op in &pi.ops {
-                ops.push((addr, op));
-            }
-        }
-        table.push(ops);
-    }
-    table
-}
-
-
 fn intern(s: &str) -> &'static str {
     static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
     let mut pool = POOL
@@ -1811,24 +2276,6 @@ fn meet_env(acc: &mut Env, other: &Env) {
         None => false,
     });
 }
-
-#[allow(dead_code)]
-pub(crate) fn compute_block_consts(
-    cfg: &CFG,
-    bops: &[Vec<(u64, &POp)>],
-    is64: bool,
-    param_seed: &HashMap<&'static str, String>,
-) -> Vec<HashMap<&'static str, Lattice>> {
-    compute_block_consts_cancellable(
-        &GraphView::from_cfg(cfg),
-        entry_block(cfg),
-        bops,
-        is64,
-        param_seed,
-        None,
-    )
-}
-
 pub(crate) fn compute_block_consts_cancellable(
     graph: &GraphView,
     entry: usize,
@@ -1936,6 +2383,24 @@ fn same_reg(a: &PVar, b: &PVar) -> bool {
     matches!((a, b), (PVar::Reg(x), PVar::Reg(y)) if x == y)
 }
 
+fn wrap(v: i64, size: u32) -> i64 {
+    match size {
+        1 => v as u8 as i64,
+        2 => v as u16 as i64,
+        4 => v as u32 as i64,
+        _ => v,
+    }
+}
+
+fn sext(v: i64, size: u32) -> i64 {
+    match size {
+        1 => v as i8 as i64,
+        2 => v as i16 as i64,
+        4 => v as i32 as i64,
+        _ => v,
+    }
+}
+
 pub(crate) fn transfer(op: &POp, env: &mut HashMap<&'static str, Lattice>) {
     match op {
         POp::Copy { dst, src, .. } => {
@@ -1948,18 +2413,18 @@ pub(crate) fn transfer(op: &POp, env: &mut HashMap<&'static str, Lattice>) {
             };
             set_reg(env, dst, v);
         }
-        POp::IntAdd { dst, a, b, .. } => {
+        POp::IntAdd { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x.wrapping_add(y)),
+                (Some(x), Some(y)) => Lattice::Const(wrap(x.wrapping_add(y), *size)),
                 (None, Some(0)) => var_of(a, env).map_or(Lattice::Top, Lattice::Var),
                 (Some(0), None) => var_of(b, env).map_or(Lattice::Top, Lattice::Var),
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntSub { dst, a, b, .. } => {
+        POp::IntSub { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x.wrapping_sub(y)),
+                (Some(x), Some(y)) => Lattice::Const(wrap(x.wrapping_sub(y), *size)),
                 (None, Some(0)) => var_of(a, env).map_or(Lattice::Top, Lattice::Var),
                 _ if same_reg(a, b) => Lattice::Const(0),
                 _ => match (var_of(a, env), var_of(b, env)) {
@@ -1969,71 +2434,88 @@ pub(crate) fn transfer(op: &POp, env: &mut HashMap<&'static str, Lattice>) {
             };
             set_reg(env, dst, v);
         }
-        POp::IntMul { dst, a, b, .. } => {
+        POp::IntMul { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x.wrapping_mul(y)),
+                (Some(x), Some(y)) => Lattice::Const(wrap(x.wrapping_mul(y), *size)),
                 (Some(0), _) | (_, Some(0)) => Lattice::Const(0),
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntAnd { dst, a, b, .. } => {
+        POp::IntAnd { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x & y),
+                (Some(x), Some(y)) => Lattice::Const(wrap(x & y, *size)),
                 (Some(0), _) | (_, Some(0)) => Lattice::Const(0),
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntOr { dst, a, b, .. } => {
+        POp::IntOr { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x | y),
+                (Some(x), Some(y)) => Lattice::Const(wrap(x | y, *size)),
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntXor { dst, a, b, .. } => {
+        POp::IntXor { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x ^ y),
+                (Some(x), Some(y)) => Lattice::Const(wrap(x ^ y, *size)),
                 _ if same_reg(a, b) => Lattice::Const(0),
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntLeft { dst, a, b, .. } => {
-            let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x.wrapping_shl((y as u32) & 63)),
-                _ => Lattice::Top,
-            };
-            set_reg(env, dst, v);
-        }
-        POp::IntShr { dst, a, b, .. } => {
+        POp::IntLeft { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
                 (Some(x), Some(y)) => {
-                    Lattice::Const(((x as u64).wrapping_shr((y as u32) & 63)) as i64)
+                    let bits = (*size * 8).max(1);
+                    Lattice::Const(wrap(x.wrapping_shl((y as u32) & (bits - 1)), *size))
                 }
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntSar { dst, a, b, .. } => {
+        POp::IntShr { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) => Lattice::Const(x.wrapping_shr((y as u32) & 63)),
+                (Some(x), Some(y)) => {
+                    let bits = (*size * 8).max(1);
+                    Lattice::Const(wrap(
+                        ((x as u64).wrapping_shr((y as u32) & (bits - 1))) as i64,
+                        *size,
+                    ))
+                }
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntDiv { dst, a, b, .. } => {
+        POp::IntSar { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
-                (Some(x), Some(y)) if y != 0 => Lattice::Const(((x as u64) / (y as u64)) as i64),
+                (Some(x), Some(y)) => {
+                    let bits = (*size * 8).max(1);
+                    Lattice::Const(wrap(
+                        sext(x, *size).wrapping_shr((y as u32) & (bits - 1)),
+                        *size,
+                    ))
+                }
                 _ => Lattice::Top,
             };
             set_reg(env, dst, v);
         }
-        POp::IntSDiv { dst, a, b, .. } => {
+        POp::IntDiv { dst, a, b, size } => {
+            let v = match (const_of(a, env), const_of(b, env)) {
+                (Some(x), Some(y)) if y != 0 => {
+                    let x = wrap(x, *size) as u64;
+                    let y = wrap(y, *size) as u64;
+                    Lattice::Const(wrap((x / y) as i64, *size))
+                }
+                _ => Lattice::Top,
+            };
+            set_reg(env, dst, v);
+        }
+        POp::IntSDiv { dst, a, b, size } => {
             let v = match (const_of(a, env), const_of(b, env)) {
                 (Some(x), Some(y)) if y != 0 && !(x == i64::MIN && y == -1) => {
-                    Lattice::Const(x.wrapping_div(y))
+                    Lattice::Const(wrap(sext(x, *size).wrapping_div(sext(y, *size)), *size))
                 }
                 _ => Lattice::Top,
             };
@@ -2101,11 +2583,18 @@ fn solve_liveness(
     uses: &[Vec<u64>],
     defs: &[Vec<u64>],
     words: usize,
+    entry: usize,
     cancel: Option<&AtomicBool>,
 ) -> Option<Vec<Vec<u64>>> {
     let n = graph.len();
     let mut live_in = vec![vec![0u64; words]; n];
-    let mut queue: VecDeque<usize> = (0..n).rev().collect();
+    let mut order = graph.dfs(entry).0;
+    let mut seen = vec![false; n];
+    for &b in &order {
+        seen[b] = true;
+    }
+    order.extend((0..n).filter(|&b| !seen[b]));
+    let mut queue: VecDeque<usize> = order.into();
     let mut queued = vec![true; n];
     let mut out = vec![0u64; words];
     let mut steps = 0usize;
@@ -2140,18 +2629,9 @@ fn solve_liveness(
     }
     Some(live_in)
 }
-
-#[allow(dead_code)]
-pub(crate) fn compute_dead_ops(
-    cfg: &CFG,
-    bops: &[Vec<(u64, &POp)>],
-    cancel: Option<&AtomicBool>,
-) -> HashSet<(usize, usize)> {
-    compute_dead_ops_g(&GraphView::from_cfg(cfg), bops, cancel)
-}
-
 pub(crate) fn compute_dead_ops_g(
     graph: &GraphView,
+    entry: usize,
     bops: &[Vec<(u64, &POp)>],
     cancel: Option<&AtomicBool>,
 ) -> HashSet<(usize, usize)> {
@@ -2160,48 +2640,64 @@ pub(crate) fn compute_dead_ops_g(
     if n == 0 {
         return dead;
     }
+    struct OpRw {
+        r0: u32,
+        r1: u32,
+        w: u32,
+        pure: bool,
+    }
+    const NO_W: u32 = u32::MAX;
 
     let mut ids: HashMap<&'static str, usize> = HashMap::default();
-    for ops in bops.iter().take(n) {
-        for (_, op) in ops {
-            for r in reads_regs(op) {
-                reg_id(&mut ids, r);
-            }
-            if let Some(w) = written_reg(op) {
-                reg_id(&mut ids, w);
-            }
-        }
-    }
-    let words = ids.len().div_ceil(64).max(1);
+    let mut arena: Vec<usize> = Vec::new();
+    let mut guarded = vec![false; n];
+    let rw: Vec<Vec<OpRw>> = bops
+        .iter()
+        .take(n)
+        .enumerate()
+        .map(|(b, ops)| {
+            ops.iter()
+                .map(|(_, op)| {
+                    if matches!(op, POp::CBranch { .. }) {
+                        guarded[b] = true;
+                    }
+                    let r0 = arena.len() as u32;
+                    for r in reads_regs(op) {
+                        arena.push(reg_id(&mut ids, r));
+                    }
+                    let r1 = arena.len() as u32;
+                    let w = written_reg(op).map_or(NO_W, |w| reg_id(&mut ids, w) as u32);
+                    OpRw {
+                        r0,
+                        r1,
+                        w,
+                        pure: is_pure(op),
+                    }
+                })
+                .collect()
+        })
+        .collect();
 
+    let words = ids.len().div_ceil(64).max(1);
     let mut uses = vec![vec![0u64; words]; n];
     let mut defs = vec![vec![0u64; words]; n];
-    let mut guarded = vec![false; n];
-    for (b, ops) in bops.iter().enumerate().take(n) {
-        for (_, op) in ops {
-            if matches!(op, POp::CBranch { .. }) {
-                guarded[b] = true;
-            }
-            for r in reads_regs(op) {
-                let id = reg_id(&mut ids, r);
+    for (b, ops) in rw.iter().enumerate() {
+        for o in ops {
+            for &id in &arena[o.r0 as usize..o.r1 as usize] {
                 if !bit_test(&defs[b], id) {
                     bit_set(&mut uses[b], id);
                 }
             }
-            if let Some(w) = written_reg(op) {
-                let id = reg_id(&mut ids, w);
-                bit_set(&mut defs[b], id);
+            if o.w != NO_W {
+                bit_set(&mut defs[b], o.w as usize);
             }
         }
     }
-
-    let live_in = match solve_liveness(graph, &uses, &defs, words, cancel) {
-        Some(l) => l,
-        None => return HashSet::default(),
+    let Some(live_in) = solve_liveness(graph, &uses, &defs, words, entry, cancel) else {
+        return HashSet::default();
     };
-
     let mut live = vec![0u64; words];
-    for (b, ops) in bops.iter().enumerate().take(n) {
+    for (b, ops) in rw.iter().enumerate() {
         if guarded[b] {
             continue;
         }
@@ -2211,40 +2707,22 @@ pub(crate) fn compute_dead_ops_g(
                 *l |= *i;
             }
         }
-        for (i, (_, op)) in ops.iter().enumerate().rev() {
-            if let Some(w) = written_reg(op) {
-                let wid = reg_id(&mut ids, w);
-                if is_pure(op) && !bit_test(&live, wid) {
+        for (i, o) in ops.iter().enumerate().rev() {
+            if o.w != NO_W {
+                let w = o.w as usize;
+                if o.pure && !bit_test(&live, w) {
                     dead.insert((b, i));
                     continue;
                 }
-                bit_clear(&mut live, wid);
+                bit_clear(&mut live, w);
             }
-            for r in reads_regs(op) {
-                let id = reg_id(&mut ids, r);
+            for &id in &arena[o.r0 as usize..o.r1 as usize] {
                 bit_set(&mut live, id);
             }
         }
     }
     dead
 }
-
-#[allow(dead_code)]
-pub(crate) fn live_in_successors(
-    cfg: &CFG,
-    live_in: &[HashSet<&'static str>],
-    bi: usize,
-    out: &mut HashSet<&'static str>,
-) {
-    out.clear();
-    for e in &cfg.blocks[bi].successors {
-        if e.target < live_in.len() {
-            out.extend(live_in[e.target].iter().cloned());
-        }
-    }
-}
-
-
 #[cfg(test)]
 mod graph_tests {
     use super::*;
@@ -2255,6 +2733,15 @@ mod graph_tests {
             succs[a].push(b);
         }
         GraphView::from_succs(succs)
+    }
+
+    fn pl(text: &str, kind: LineKind) -> PseudoLine {
+        PseudoLine {
+            indent: 0,
+            text: text.into(),
+            kind,
+            source_addr: None,
+        }
     }
 
     #[test]
@@ -2317,7 +2804,7 @@ mod graph_tests {
         let mut uses = vec![vec![0u64; 1]; N];
         let defs = vec![vec![0u64; 1]; N];
         bit_set(&mut uses[0], 0);
-        let live = solve_liveness(&g, &uses, &defs, 1, None).unwrap();
+        let live = solve_liveness(&g, &uses, &defs, 1, 0, None).unwrap();
         assert!(bit_test(&live[N - 1], 0));
     }
 
@@ -2328,7 +2815,7 @@ mod graph_tests {
         let mut defs = vec![vec![0u64; 1]; 4];
         bit_set(&mut uses[0], 5);
         bit_set(&mut defs[1], 5);
-        let live = solve_liveness(&g, &uses, &defs, 1, None).unwrap();
+        let live = solve_liveness(&g, &uses, &defs, 1, 0, None).unwrap();
         assert!(bit_test(&live[0], 5));
         assert!(!bit_test(&live[1], 5));
         assert!(!bit_test(&live[3], 5));
@@ -2341,7 +2828,7 @@ mod graph_tests {
         let mut defs = vec![vec![0u64; 1]; 3];
         bit_set(&mut uses[1], 2);
         bit_set(&mut defs[0], 2);
-        let live = solve_liveness(&g, &uses, &defs, 1, None).unwrap();
+        let live = solve_liveness(&g, &uses, &defs, 1, 0, None).unwrap();
         assert!(bit_test(&live[1], 2));
         assert!(bit_test(&live[2], 2));
         assert!(!bit_test(&live[0], 2));
@@ -2362,6 +2849,101 @@ mod graph_tests {
     fn fp_register_detection() {
         assert!(is_fp_reg("xmm0") && is_fp_reg("XMM15") && is_fp_reg("st(1)") && is_fp_reg("st"));
         assert!(!is_fp_reg("stack_ptr") && !is_fp_reg("rax") && !is_fp_reg("dword ptr [rsp]"));
+    }
+
+    #[test]
+    fn fp_reg_rejects_memory_operands() {
+        assert!(!is_fp_reg("xmmword ptr [rsp+0x10]") && !is_fp_reg("ymmword ptr [rax]"));
+        assert!(is_fp_reg("xmm15") && is_fp_reg("st(1)"));
+    }
+
+    #[test]
+    fn sanitize_param_name_cases() {
+        assert_eq!(sanitize_param_name("2d", "p"), "_2d");
+        assert_eq!(sanitize_param_name("<lambda>", "p"), "lambda");
+        assert_eq!(sanitize_param_name("register", "p"), "p_register");
+        assert_eq!(sanitize_param_name("!!!", "p"), "p");
+    }
+
+    #[test]
+    fn rename_identifiers_keeps_utf8_and_numbers() {
+        let mut m: HashMap<String, String> = HashMap::default();
+        m.insert("a".into(), "b".into());
+        assert_eq!(
+            rename_identifiers("a = \"zażółć\" + 0xa;", &m),
+            "b = \"zażółć\" + 0xa;"
+        );
+    }
+
+    #[test]
+    fn enum_substitution_respects_token_boundaries() {
+        let mut hints = TypeHints::default();
+        hints.enum_fields.insert("mode".into(), "Mode".into());
+        hints
+            .enum_variants
+            .insert("Mode".into(), vec![("MODE_A".into(), 1)]);
+        let mut lines = vec![
+            pl("x.mode = 10;", LineKind::Assignment),
+            pl("x.mode = 1;", LineKind::Assignment),
+        ];
+        substitute_enum_values(&mut lines, &hints);
+        assert_eq!(lines[0].text, "x.mode = 10;");
+        assert_eq!(lines[1].text, "x.mode = MODE_A;");
+    }
+
+    #[test]
+    fn rbp_as_gpr_is_not_bookkeeping() {
+        assert!(!is_stack_bookkeeping("rbp = rbp + 1;", false));
+        assert!(is_stack_bookkeeping("rsp = rsp - 0x28;", false));
+        assert!(is_stack_bookkeeping("rbp = rsp;", true));
+    }
+
+    #[test]
+    fn win64_keeps_rsi_before_call() {
+        let mut lines = vec![
+            pl("rsi = rax;", LineKind::Assignment),
+            pl("rcx = rbx;", LineKind::Assignment),
+            pl("foo();", LineKind::Call),
+        ];
+        drop_call_arg_setups(&mut lines, true, true);
+        let out: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(out, ["rsi = rax;", "foo();"]);
+    }
+
+    #[test]
+    fn multi_latch_loop_reports_both_edges() {
+        let g = graph(4, &[(0, 1), (1, 2), (1, 3), (2, 1), (3, 1)]);
+        assert_eq!(g.back_edge_list(0).len(), 2);
+    }
+
+    #[test]
+    fn transfer_wraps_32bit_constants() {
+        let mut env: Env = HashMap::default();
+        transfer(
+            &POp::IntAdd {
+                dst: PVar::Reg("eax"),
+                a: PVar::Const(0xFFFF_FFFF),
+                b: PVar::Const(1),
+                size: 4,
+            },
+            &mut env,
+        );
+        assert_eq!(env.get("eax"), Some(&Lattice::Const(0)));
+    }
+
+    #[test]
+    fn transfer_uses_the_operation_width_for_shifts() {
+        let mut env: Env = HashMap::default();
+        transfer(
+            &POp::IntShr {
+                dst: PVar::Reg("eax"),
+                a: PVar::Const(0x8000_0000),
+                b: PVar::Const(31),
+                size: 4,
+            },
+            &mut env,
+        );
+        assert_eq!(env.get("eax"), Some(&Lattice::Const(1)));
     }
 
     #[test]
@@ -2395,5 +2977,22 @@ mod graph_tests {
         assert!(!out.contains("local_10"), "{out}");
         assert!(!out.contains("__stack_chk_fail"), "{out}");
         assert!(out.contains("return rax;"), "{out}");
+    }
+
+    #[test]
+    fn save_restore_comments_are_dropped() {
+        fn pl(text: &str, kind: LineKind) -> PseudoLine {
+            PseudoLine { indent: 0, text: text.into(), kind, source_addr: None }
+        }
+        let mut lines = vec![
+            pl("// push rbx", LineKind::Comment),
+            pl("rax = 1;", LineKind::Assignment),
+            pl("// pop rbx", LineKind::Comment),
+            pl("// WARNING: something", LineKind::Comment),
+            pl("// push rbx rcx", LineKind::Comment),
+        ];
+        drop_save_restore_comments(&mut lines);
+        let out: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(out, ["rax = 1;", "// WARNING: something", "// push rbx rcx"]);
     }
 }

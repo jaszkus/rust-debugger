@@ -4,6 +4,7 @@ pub mod lifting;
 pub mod pcode;
 pub mod printing;
 pub mod structure;
+mod state_machine;
 
 pub use lifting::{decompile, LiftInput};
 pub use printing::render_pseudocode;
