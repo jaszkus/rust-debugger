@@ -105,6 +105,7 @@ command line, or remotely from AI agents over MCP.
 - Mini-**SSA** expression trees
 - **C-like** output with recovered variables
 - Real **PDB / DWARF** signatures, local variables, call arguments and struct member names
+- **Ghidra-style** types, `uVar`/`in_REG` names, `FUN_` symbols and lowercase `DAT_` labels
 - **SSE / xmm** arguments, enums, bitfields, stack-canary cleanup and terminal CFG region cloning
 
 ### Emulation and live debugging
