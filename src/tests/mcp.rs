@@ -435,6 +435,20 @@ fn mcp_live_tools_error_cleanly_without_debugger() {
 }
 
 #[test]
+fn mcp_process_memory_search_requires_execution_permission() {
+    let (port, mut server, _s) = start_server();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_process_memory","arguments":{"query":"90"}}}"#;
+    let r = rpc(port, body);
+    let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("Allow execution"),
+        "execution gate must run before the debugger check: {}",
+        text
+    );
+    server.stop();
+}
+
+#[test]
 fn mcp_analysis_gated_tools_report_required_state() {
     let (port, mut server, _s) = start_server();
     for (i, (tool, args)) in [

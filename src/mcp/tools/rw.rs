@@ -17,7 +17,17 @@ pub fn dump_section(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value,
             .find(|s| s.name == section_name)
             .ok_or(format!("Section not found: {}", section_name))?;
         let start = sec.offset as usize;
-        let end = (start + sec.size as usize).min(bin.data.len());
+        if start >= bin.data.len() {
+            return Err(format!(
+                "Section '{}' starts at file offset {:#x}, past end of file ({:#x})",
+                sec.name,
+                start,
+                bin.data.len()
+            ));
+        }
+        let end = start
+            .saturating_add(sec.size as usize)
+            .min(bin.data.len());
         (
             bin.data[start..end].to_vec(),
             sec.vaddr,

@@ -482,10 +482,36 @@ pub fn run_async(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, St
     job_enter()?;
 
     let id = format!("job_{:x}_{:04x}", now_ms(), fastrand());
+    let started = now_ms();
+    let tool2 = tool.clone();
+    {
+        let mut map = jobs().lock().map_err(|_| "lock poisoned".to_string())?;
+        while map.len() >= MAX_JOBS {
+            let oldest_done = map
+                .iter()
+                .filter(|(_, j)| j.done)
+                .min_by_key(|(_, j)| j.started_ms)
+                .map(|(k, _)| k.clone());
+            match oldest_done {
+                Some(k) => {
+                    map.remove(&k);
+                }
+                None => break,
+            }
+        }
+        map.insert(
+            id.clone(),
+            Job {
+                tool,
+                started_ms: started,
+                timeout_ms,
+                done: false,
+                result: None,
+            },
+        );
+    }
     let job_id = id.clone();
     let state2 = Arc::clone(state);
-    let tool2 = tool.clone();
-    let started = now_ms();
     if let Err(e) = std::thread::Builder::new()
         .name(format!("mcp-job-{job_id}"))
         .spawn(move || {
@@ -504,34 +530,12 @@ pub fn run_async(args: &Value, state: &Arc<Mutex<AppState>>) -> Result<Value, St
             job_leave();
         })
     {
+        if let Ok(mut map) = jobs().lock() {
+            map.remove(&id);
+        }
         job_leave();
         return Err(format!("Failed to spawn job thread: {}", e));
     }
-
-    let mut map = jobs().lock().map_err(|_| "lock poisoned".to_string())?;
-    while map.len() >= MAX_JOBS {
-        let oldest_done = map
-            .iter()
-            .filter(|(_, j)| j.done)
-            .min_by_key(|(_, j)| j.started_ms)
-            .map(|(k, _)| k.clone());
-        match oldest_done {
-            Some(k) => {
-                map.remove(&k);
-            }
-            None => break,
-        }
-    }
-    map.insert(
-        id.clone(),
-        Job {
-            tool,
-            started_ms: started,
-            timeout_ms,
-            done: false,
-            result: None,
-        },
-    );
 
     Ok(json!({
         "job_id": id,
