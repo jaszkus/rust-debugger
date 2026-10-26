@@ -204,9 +204,9 @@ fn parse_chain(
             break;
         }
         match parse_dispatch_block(&bops[next], imap) {
-            Some(nd) if nd.load.is_none() && nd.lhs == reg && nd.size == size => {
+            Some(follow) if follow.load.is_none() && follow.lhs == reg && follow.size == size => {
                 cur = next;
-                d = nd;
+                d = follow;
             }
             _ => break,
         }
