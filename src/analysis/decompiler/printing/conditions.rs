@@ -361,6 +361,9 @@ pub(crate) fn struct_member_expr(
         (hints.structs.get(*r)?, base_text)
     };
     let field = st.field(off)?;
+    if field.starts_with("field_0x") {
+        return None;
+    }
     Some(format!("{}->{}", display, field))
 }
 
@@ -586,6 +589,7 @@ pub(crate) fn fmt_var_with_hints(v: &PVar, hints: &TypeHints) -> String {
             if let PVar::Reg(r) = &**base
                 && let Some(st) = hints.structs.get(*r)
                 && let Some(field) = st.field(*off)
+                && !field.starts_with("field_0x")
             {
                 return format!("{}->{}", fmt_var(base), field);
             }

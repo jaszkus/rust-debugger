@@ -711,7 +711,7 @@ fn lift_cmov_renders_conditional_select() {
     
     let text = render(&[0x48, 0x83, 0xF8, 0x00, 0x48, 0x0F, 0x45, 0xC1, 0xC3], 0x1000, true);
     assert!(
-        text.contains("?") && text.contains("rcx"),
+        text.contains("?") && text.contains("in_RCX"),
         "cmov must render a select:\n{}",
         text
     );
@@ -734,7 +734,7 @@ fn lift_bts_renders_bit_set() {
     
     let text = render(&[0x48, 0x0F, 0xAB, 0xD8, 0xC3], 0x1000, true);
     assert!(
-        text.contains("1 << rbx") && text.contains('|'),
+        text.contains("1 << in_RBX") && text.contains('|'),
         "bts must render a bit set:\n{}",
         text
     );
@@ -1276,12 +1276,12 @@ fn comiss_jcc_renders_real_comparison_not_cond() {
         out
     );
     assert!(
-        out.contains("xmm2") && out.contains("xmm4"),
+        out.contains("in_XMM2") && out.contains("in_XMM4"),
         "comparison operands missing:\n{}",
         out
     );
     assert!(
-        out.contains("xmm2 > xmm4") || out.contains("xmm2 <= xmm4"),
+        out.contains("in_XMM2 > in_XMM4") || out.contains("in_XMM2 <= in_XMM4"),
         "jbe should map to a real float comparison:\n{}",
         out
     );

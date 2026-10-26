@@ -1370,7 +1370,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     debug_check_braces("elide_else", func_name, &lines, 0);
     cleanup_labels(&mut lines);
     debug_check_braces("cleanup_labels", func_name, &lines, 0);
+    alias::name_remaining_registers(&mut lines);
     ghidra_type_names(&mut lines);
+    ghidra_function_names(&mut lines);
     debug_goto_classes(func_name, &lines);
     debug_line_histogram(func_name, &lines);
     debug_other_shapes(func_name, &lines);
@@ -1422,6 +1424,49 @@ fn ghidra_type_names(lines: &mut [PseudoLine]) {
                 }
                 let word = &code[start..i];
                 out.push_str(ghidra_type_name(word).unwrap_or(word));
+            } else {
+                let ch = code[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+        out.push_str(comment);
+        line.text = out;
+    }
+}
+
+fn ghidra_function_names(lines: &mut [PseudoLine]) {
+    for line in lines.iter_mut() {
+        if line.kind == LineKind::Comment {
+            continue;
+        }
+        let (code, comment) = match line.text.find("//") {
+            Some(i) => line.text.split_at(i),
+            None => (line.text.as_str(), ""),
+        };
+        let bytes = code.as_bytes();
+        let mut out = String::with_capacity(code.len() + 8);
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c.is_ascii_alphabetic() || c == b'_' {
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                let word = &code[start..i];
+                let renamed = word
+                    .strip_prefix("thunk_sub_")
+                    .filter(|hex| !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
+                    .map(|hex| format!("thunk_FUN_{hex}"))
+                    .or_else(|| {
+                        word.strip_prefix("sub_")
+                            .filter(|hex| {
+                                !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())
+                            })
+                            .map(|hex| format!("FUN_{hex}"))
+                    });
+                out.push_str(renamed.as_deref().unwrap_or(word));
             } else {
                 let ch = code[i..].chars().next().unwrap();
                 out.push(ch);
@@ -3041,6 +3086,19 @@ mod graph_tests {
                 "return (short)param_2;"
             ]
         );
+    }
+
+    #[test]
+    fn unnamed_functions_use_ghidra_prefix() {
+        let mut lines = vec![
+            pl("return sub_180001000(param_1);", LineKind::Return),
+            pl("thunk_sub_180002000();", LineKind::Call),
+            pl("// sub_180003000 stays in comments", LineKind::Comment),
+        ];
+        ghidra_function_names(&mut lines);
+        assert_eq!(lines[0].text, "return FUN_180001000(param_1);");
+        assert_eq!(lines[1].text, "thunk_FUN_180002000();");
+        assert!(lines[2].text.contains("sub_180003000"));
     }
 
     #[test]

@@ -773,7 +773,7 @@ fn sse_instructions_lift_without_unimplemented() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("xmm"),
+        text.contains("fVar"),
         "expected xmm names in output: {}",
         text
     );
@@ -996,7 +996,7 @@ fn decompiler_renders_iat_calls_with_import_names() {
     let pinstrs = crate::analysis::pcode::lift_func(&insns, 0x1000, addr);
     let sf = crate::analysis::stack::analyze_stack(&pinstrs, 0x1000, addr, false, 0);
     let lookup = rustc_hash::FxHashMap::default();
-    let imports: rustc_hash::FxHashMap<u64, String> = [(iat, "MessageBoxW".to_string())]
+    let imports: rustc_hash::FxHashMap<u64, String> = [(iat, "USER32.dll!MessageBoxW".to_string())]
         .into_iter()
         .collect::<rustc_hash::FxHashMap<u64, String>>();
     let pc = crate::analysis::decompiler::decompile(crate::analysis::decompiler::LiftInput {
@@ -1019,6 +1019,11 @@ fn decompiler_renders_iat_calls_with_import_names() {
     assert!(
         text.contains("MessageBoxW("),
         "IAT call must render by name:\n{}",
+        text
+    );
+    assert!(
+        !text.contains("USER32.dll!"),
+        "library prefix must not leak into calls:\n{}",
         text
     );
     assert!(
@@ -1693,7 +1698,7 @@ fn dwarf_debug_types_reach_eager_decompilation() {
     assert!(add_text.contains("a.x"), "Point a field:\n{}", add_text);
     assert!(add_text.contains("b.y"), "Point b field:\n{}", add_text);
     assert!(
-        text.contains("add_points(n->pos, rax)"),
+        text.contains("add_points(n->pos, in_RAX)"),
         "two SysV call arguments:\n{}",
         text
     );
@@ -1718,7 +1723,7 @@ fn dwarf_debug_types_reach_eager_decompilation() {
     assert!(main_text.contains("n.pos.y = 2"), "nested field y:\n{}", main_text);
     assert!(!main_text.contains("__stack_chk_fail"), "canary removed:\n{}", main_text);
     assert!(!main_text.contains("fs:64"), "TLS canary load removed:\n{}", main_text);
-    assert!(text.contains("return rax;"), "missing return value:\n{}", text);
+    assert!(text.contains("return in_RAX;"), "missing return value:\n{}", text);
     assert!(
         main_text.contains("compute((rbp - 0x20))"),
         "SysV call argument:\n{}",
@@ -1773,7 +1778,7 @@ fn pdb_float_calls_use_sse_arguments() {
     assert!(main.contains("scale(z)"), "float single arg:\n{}", main);
     let add = text("add");
     assert!(add.contains("double add(double a, double b)"), "float signature:\n{}", add);
-    assert!(add.contains("xmm0 = a + b"), "float body:\n{}", add);
+    assert!(add.contains(" = a + b"), "float body:\n{}", add);
     assert!(add.contains("return sum") || add.contains("return xmm0"), "float return:\n{}", add);
 }
 
@@ -1818,7 +1823,7 @@ fn pdb_enums_and_bitfields_reach_decompilation() {
     assert!(main.contains("Flags f;"), "bitfield local:\n{}", main);
     assert!(main.contains("f.color = GREEN;"), "enum constant:\n{}", main);
     assert!(
-        main.contains("f.a = rax;"),
+        main.contains("f.a = uVar1;"),
         "bitfield storage destination:\n{}",
         main
     );

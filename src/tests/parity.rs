@@ -1262,14 +1262,14 @@ fn decompiler_peephole_identities() {
         b: PVar::Const(0),
         size: 8,
     });
-    assert!(t.contains("rbx"), "x+0:\n{}", t);
+    assert!(t.contains("in_RBX"), "x+0:\n{}", t);
     let t = case(POp::IntAnd {
         dst: PVar::Reg("rax"),
         a: PVar::Reg("rdx"),
         b: PVar::Const(-1),
         size: 8,
     });
-    assert!(t.contains("rdx"), "x&-1:\n{}", t);
+    assert!(t.contains("in_RDX"), "x&-1:\n{}", t);
     assert!(!t.contains("0xffff"), "no residual mask:\n{}", t);
     let t = case(POp::IntSub {
         dst: PVar::Reg("rax"),
@@ -1321,8 +1321,8 @@ fn decompiler_drops_dead_stores() {
         ],
     )];
     let t = decompile_text(&cfg, &pi);
-    assert!(!t.contains("rbx"), "dead rbx dropped:\n{}", t);
-    assert!(t.contains("rcx + 2"), "live value kept:\n{}", t);
+    assert!(!t.contains("in_RBX"), "dead rbx dropped:\n{}", t);
+    assert!(t.contains("in_RCX + 2"), "live value kept:\n{}", t);
 }
 
 #[test]
@@ -1363,14 +1363,15 @@ fn decompiler_cse_reuses_expression() {
         ],
     )];
     let t = decompile_text(&cfg, &pi);
-    assert!(t.contains("r10 = rcx + rdx;"), "first computation:\n{}", t);
-    assert!(
-        !t.contains("r11 = rcx + rdx;"),
+    assert!(t.contains("in_RCX + in_RDX;"), "first computation:\n{}", t);
+    assert_eq!(
+        t.matches("in_RCX + in_RDX;").count(),
+        1,
         "second computation must be reused:\n{}",
         t
     );
     assert!(
-        t.matches("= r10;").count() >= 1,
+        t.matches("= uVar1;").count() >= 1,
         "store reuses the value:\n{}",
         t
     );
@@ -1425,7 +1426,7 @@ fn decompiler_cse_invalidated_by_clobber() {
         "only the pre-clobber definition:\n{}",
         t
     );
-    assert!(t.contains("r10 = rcx + rdx;"), "definition kept:\n{}", t);
+    assert!(t.contains("in_RCX + in_RDX;"), "definition kept:\n{}", t);
 }
 
 fn loop_cfg() -> (CFG, Vec<DisasmInstruction>) {
@@ -1528,7 +1529,7 @@ fn decompiler_bottom_tested_loop_is_dowhile() {
         .join("\n");
     assert!(t.contains("do {"), "do-while:\n{}", t);
     assert!(t.contains("} while"), "close:\n{}", t);
-    assert!(t.contains("rax < 5"), "condition:\n{}", t);
+    assert!(t.contains("in_RAX < 5"), "condition:\n{}", t);
 }
 
 #[test]

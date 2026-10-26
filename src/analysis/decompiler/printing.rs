@@ -53,6 +53,10 @@ pub(crate) fn rewrite_x86_reg_names(text: &str, map: &[(&str, &str)]) -> String 
     out
 }
 
+fn display_symbol(name: &str) -> &str {
+    name.rsplit('!').next().unwrap_or(name)
+}
+
 pub(crate) fn pval_str(v: &PVal) -> String {
     match v {
         PVal::C(c) => fmt_const(*c),
@@ -344,7 +348,7 @@ pub(crate) fn render_op(
             let name = func_lookup
                 .get(&real_target)
                 .or_else(|| func_lookup.get(target))
-                .cloned()
+                .map(|name| display_symbol(name).to_string())
                 .unwrap_or_else(|| format!("FUN_{:X}", real_target));
             let args = if let Some(sig) = hints.callee_params.get(&real_target) {
                 take_call_args_sig(reg_values, is64, hints.is_win64, sig, push_args)
@@ -362,7 +366,7 @@ pub(crate) fn render_op(
         POp::CallInd { target } => {
             let args = take_call_args(reg_values, is64, hints.is_win64, push_args);
             let import_name = match target {
-                PVar::Addr(a) => hints.imports.get(a).cloned(),
+                PVar::Addr(a) => hints.imports.get(a).map(|name| display_symbol(name).to_string()),
                 _ => None,
             };
             let line = if let Some(name) = import_name {
@@ -547,6 +551,10 @@ pub(crate) fn render_op(
                 PVar::Addr(v) => format!("{:#x}", v),
                 _ => pval_str(&resolve_pval(addr, reg_values)),
             };
+            if !*is_store && segment == "gs" && a == "0x60" {
+                track(reg_values, dst, PVal::E("ProcessEnvironmentBlock".into()));
+                return None;
+            }
             if *is_store {
                 Some((
                     format!(
