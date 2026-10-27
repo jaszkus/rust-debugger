@@ -815,7 +815,8 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut owner_by_reg: HashMap<String, String> = HashMap::default();
     let mut param_types_by_reg: HashMap<String, String> = HashMap::default();
     let mut by_value_by_reg: HashMap<String, ByValueParam> = HashMap::default();
-    let mut direct_stack_params: Vec<(u8, i64, ByValueParam)> = Vec::new();
+    let mut by_value_display: HashMap<String, String> = HashMap::default();
+    let mut direct_stack_params: Vec<(u8, i64, i64, ByValueParam)> = Vec::new();
     let mut used_names: HashSet<String> = recovery
         .as_ref()
         .map(|rv| rv.vars.iter().map(|v| v.name.clone()).collect())
@@ -875,6 +876,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             );
                         } else {
                             by_value_by_reg.insert(reg.to_string(), shape);
+                            by_value_display.insert(reg.to_string(), v.name.clone());
                         }
                     }
                 }
@@ -882,7 +884,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     if let Some(shape) = shape
                         && !is_pointer
                     {
-                        direct_stack_params.push((base, off, shape));
+                        direct_stack_params.push((base, off, v.norm_off, shape));
                     }
                 }
                 _ => {}
@@ -1006,13 +1008,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut hidden_locals: HashSet<String> = HashSet::default();
     if let Some(rv) = recovery.as_ref() {
         let mut seen: HashSet<(u8, i64)> = HashSet::default();
-        for (base, off, shape) in &direct_stack_params {
+        for (base, off, norm_off, shape) in &direct_stack_params {
             if seen.insert((*base, *off)) {
-                let base_norm = if *base == 0 {
-                    *off + rv.rbp_delta
-                } else {
-                    *off
-                };
+                let base_norm = *norm_off;
                 stack_structs.push(StackStructHint {
                     base_reg: *base,
                     base: *off,
@@ -3532,8 +3530,8 @@ mod graph_tests {
         let mut m: HashMap<String, String> = HashMap::default();
         m.insert("a".into(), "b".into());
         assert_eq!(
-            rename_identifiers("a = \"zaÃ…Â¼ÃƒÂ³Ã…â€šÃ„â€¡\" + 0xa;", &m),
-            "b = \"zaÃ…Â¼ÃƒÂ³Ã…â€šÃ„â€¡\" + 0xa;"
+            rename_identifiers("a = \"zaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¾ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡\" + 0xa;", &m),
+            "b = \"zaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¾ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡\" + 0xa;"
         );
     }
 
