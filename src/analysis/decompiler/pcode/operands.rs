@@ -234,6 +234,17 @@ pub fn reg_size(r: &str) -> u32 {
     }
 }
 
+pub(crate) fn read_abs_mem(op: &Operand, insn: &DisasmInstruction) -> PVar {
+    if matches!(op, Operand::Mem { .. }) {
+        let addr = to_pvar(op, insn);
+        if let PVar::Addr(a) = addr {
+            return PVar::Mem(Box::new(PVar::Const(a as i64)), 0);
+        }
+        return addr;
+    }
+    to_pvar(op, insn)
+}
+
 pub(crate) fn to_pvar(op: &Operand, insn: &DisasmInstruction) -> PVar {
     match op {
         Operand::Reg(r) => PVar::Reg(canonical_reg(r)),

@@ -2207,3 +2207,69 @@ fn void_return_is_not_claimed_when_a_value_is_returned() {
     );
 }
 
+fn decompile_for_test(
+    insns: &[crate::disasm::DisasmInstruction],
+    entry: u64,
+    end: u64,
+) -> Vec<String> {
+    let cfg = crate::analysis::cfg::build_cfg(insns, entry, end);
+    let pinstrs = crate::analysis::pcode::lift_func(insns, entry, end);
+    let sf = crate::analysis::stack::analyze_stack(&pinstrs, entry, end, false, 0);
+    let pc = crate::analysis::decompiler::decompile(crate::analysis::decompiler::LiftInput {
+        cfg: &cfg,
+        pinstrs_in_func: &pinstrs,
+        imap: insns,
+        stack: &sf,
+        func_name: "t",
+        func_lookup: &rustc_hash::FxHashMap::default(),
+        is64: true,
+        is_win64: true,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
+        imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
+        cancel: None,
+        debug_types: None,
+    });
+    pc.lines.iter().map(|l| l.text.clone()).collect()
+}
+
+#[test]
+fn absolute_memory_compare_dereferences_the_address() {
+    let insns = vec![
+        mk_insn(
+            0x1000,
+            "cmp",
+            &[0x80, 0x3C, 0x25, 0x18, 0x40, 0x10, 0x00, 0x00],
+            "byte ptr [0x104018], 0",
+        ),
+        mk_insn(0x1008, "je", &[0x74, 0x02], "0x100c"),
+        mk_insn(0x100A, "ret", &[0xC3], ""),
+        mk_insn(0x100C, "ret", &[0xC3], ""),
+    ];
+    let text = decompile_for_test(&insns, 0x1000, 0x100D).join("\n");
+    assert!(
+        text.contains("*(0x104018)"),
+        "an absolute memory compare must read memory: {text}"
+    );
+    assert!(
+        !text.contains("if (0x104018"),
+        "the address itself is not the compared value: {text}"
+    );
+}
+
+#[test]
+fn shifted_constant_is_not_rendered_as_a_data_address() {
+    let insns = vec![
+        mk_insn(
+            0x1000,
+            "mov",
+            &[0x49, 0xBB, 0, 0, 0, 0, 3, 0, 0, 0],
+            "r11, 0x300000000",
+        ),
+        mk_insn(0x100A, "or", &[0x4C, 0x09, 0xD8], "rax, r11"),
+        mk_insn(0x100D, "ret", &[0xC3], ""),
+    ];
+    let text = decompile_for_test(&insns, 0x1000, 0x100E).join("\n");
+    assert!(text.contains("0x300000000"), "{text}");
+    assert!(!text.contains("DAT_300000000"), "{text}");
+}

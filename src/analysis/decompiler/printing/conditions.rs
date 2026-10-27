@@ -19,6 +19,10 @@ fn is_small_abs_addr(value: u64) -> bool {
     ADDR_IS_64.with(std::cell::Cell::get) && value <= u32::MAX as u64
 }
 
+fn is_shift_constant(value: u64) -> bool {
+    value > u32::MAX as u64 && value & 0xffff_ffff == 0
+}
+
 pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
     let mut out = Vec::new();
     fn visit(v: &PVar, out: &mut Vec<&'static str>) {
@@ -581,7 +585,7 @@ pub(crate) fn fmt_var(v: &PVar) -> String {
                 format!("*({} - {:#x})", inner, -disp)
             }
         }
-        PVar::Addr(a) if is_small_abs_addr(*a) => fmt_const(*a as i64),
+        PVar::Addr(a) if is_small_abs_addr(*a) || is_shift_constant(*a) => fmt_const(*a as i64),
         PVar::Addr(a) => format!("DAT_{:x}", a),
         PVar::Tmp(i) => format!("tmp_{}", i),
     }

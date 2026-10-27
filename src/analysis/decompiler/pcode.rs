@@ -646,8 +646,8 @@ fn lift_instruction_inner(insn: &DisasmInstruction, ctr: &mut u32) -> PInstr {
         }
         "cmp" | "test" => {
             if let [pa, pb] = parsed.as_slice() {
-                let a = to_pvar(pa, insn);
-                let b = to_pvar(pb, insn);
+                let a = read_abs_mem(pa, insn);
+                let b = read_abs_mem(pb, insn);
                 let size = op_size(pa, pb);
                 ops.push(if m == "cmp" {
                     POp::Cmp { a, b, size }
