@@ -1,0 +1,431 @@
+{
+  "schema": 1,
+  "archive": "crt",
+  "version": "ucrt-10.0.26100-public",
+  "module": "ucrtbase",
+  "source": "hand-curated from the public C standard library and Microsoft UCRT documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "malloc": { "ret": "void *", "cc": "cdecl", "params": [{ "name": "size", "type": "size_t" }] },
+    "calloc": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "count", "type": "size_t" },
+        { "name": "size", "type": "size_t" }
+      ]
+    },
+    "realloc": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "memblock", "type": "void *" },
+        { "name": "size", "type": "size_t" }
+      ]
+    },
+    "free": { "ret": "void", "cc": "cdecl", "params": [{ "name": "memblock", "type": "void *" }] },
+    "memcpy": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "dest", "type": "void *" },
+        { "name": "src", "type": "const void *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "memmove": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "dest", "type": "void *" },
+        { "name": "src", "type": "const void *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "memset": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "dest", "type": "void *" },
+        { "name": "c", "type": "int" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "memcmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer1", "type": "const void *" },
+        { "name": "buffer2", "type": "const void *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "memchr": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "const void *" },
+        { "name": "c", "type": "int" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "strlen": { "ret": "size_t", "cc": "cdecl", "params": [{ "name": "string", "type": "const char *" }] },
+    "strnlen": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "strcmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const char *" },
+        { "name": "string2", "type": "const char *" }
+      ]
+    },
+    "strncmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const char *" },
+        { "name": "string2", "type": "const char *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "strcpy": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "destination", "type": "char *" },
+        { "name": "source", "type": "const char *" }
+      ]
+    },
+    "strncpy": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "destination", "type": "char *" },
+        { "name": "source", "type": "const char *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "strcat": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "destination", "type": "char *" },
+        { "name": "source", "type": "const char *" }
+      ]
+    },
+    "strchr": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "c", "type": "int" }
+      ]
+    },
+    "strrchr": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "c", "type": "int" }
+      ]
+    },
+    "strstr": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "search", "type": "const char *" }
+      ]
+    },
+    "strtok": {
+      "ret": "char *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "char *" },
+        { "name": "delimiters", "type": "const char *" }
+      ]
+    },
+    "strerror": { "ret": "char *", "cc": "cdecl", "params": [{ "name": "errnum", "type": "int" }] },
+    "atoi": { "ret": "int", "cc": "cdecl", "params": [{ "name": "string", "type": "const char *" }] },
+    "atol": { "ret": "int", "cc": "cdecl", "params": [{ "name": "string", "type": "const char *" }] },
+    "atof": { "ret": "double", "cc": "cdecl", "params": [{ "name": "string", "type": "const char *" }] },
+    "strtol": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "endptr", "type": "char **" },
+        { "name": "base", "type": "int" }
+      ]
+    },
+    "strtoul": {
+      "ret": "unsigned int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "endptr", "type": "char **" },
+        { "name": "base", "type": "int" }
+      ]
+    },
+    "strtoll": {
+      "ret": "long long",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "endptr", "type": "char **" },
+        { "name": "base", "type": "int" }
+      ]
+    },
+    "strtod": {
+      "ret": "double",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const char *" },
+        { "name": "endptr", "type": "char **" }
+      ]
+    },
+    "sprintf": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "char *" },
+        { "name": "format", "type": "const char *" }
+      ],
+      "varargs": true
+    },
+    "snprintf": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "char *" },
+        { "name": "count", "type": "size_t" },
+        { "name": "format", "type": "const char *" }
+      ],
+      "varargs": true
+    },
+    "vsnprintf": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "char *" },
+        { "name": "count", "type": "size_t" },
+        { "name": "format", "type": "const char *" },
+        { "name": "argptr", "type": "va_list" }
+      ]
+    },
+    "swprintf": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "wchar_t *" },
+        { "name": "count", "type": "size_t" },
+        { "name": "format", "type": "const wchar_t *" }
+      ],
+      "varargs": true
+    },
+    "fopen": {
+      "ret": "FILE *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "filename", "type": "const char *" },
+        { "name": "mode", "type": "const char *" }
+      ]
+    },
+    "fclose": { "ret": "int", "cc": "cdecl", "params": [{ "name": "stream", "type": "FILE *" }] },
+    "fread": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "void *" },
+        { "name": "size", "type": "size_t" },
+        { "name": "count", "type": "size_t" },
+        { "name": "stream", "type": "FILE *" }
+      ]
+    },
+    "fwrite": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "const void *" },
+        { "name": "size", "type": "size_t" },
+        { "name": "count", "type": "size_t" },
+        { "name": "stream", "type": "FILE *" }
+      ]
+    },
+    "fseek": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "stream", "type": "FILE *" },
+        { "name": "offset", "type": "long" },
+        { "name": "origin", "type": "int" }
+      ]
+    },
+    "ftell": { "ret": "long", "cc": "cdecl", "params": [{ "name": "stream", "type": "FILE *" }] },
+    "fflush": { "ret": "int", "cc": "cdecl", "params": [{ "name": "stream", "type": "FILE *" }] },
+    "remove": { "ret": "int", "cc": "cdecl", "params": [{ "name": "filename", "type": "const char *" }] },
+    "rename": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "oldname", "type": "const char *" },
+        { "name": "newname", "type": "const char *" }
+      ]
+    },
+    "time": { "ret": "time_t", "cc": "cdecl", "params": [{ "name": "destTime", "type": "time_t *" }] },
+    "clock": { "ret": "clock_t", "cc": "cdecl", "params": [] },
+    "localtime": {
+      "ret": "tm *",
+      "cc": "cdecl",
+      "params": [{ "name": "time", "type": "const time_t *" }]
+    },
+    "gmtime": { "ret": "tm *", "cc": "cdecl", "params": [{ "name": "time", "type": "const time_t *" }] },
+    "mktime": { "ret": "time_t", "cc": "cdecl", "params": [{ "name": "timeptr", "type": "tm *" }] },
+    "qsort": {
+      "ret": "void",
+      "cc": "cdecl",
+      "params": [
+        { "name": "base", "type": "void *" },
+        { "name": "num", "type": "size_t" },
+        { "name": "width", "type": "size_t" },
+        { "name": "compare", "type": "void *" }
+      ]
+    },
+    "bsearch": {
+      "ret": "void *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "key", "type": "const void *" },
+        { "name": "base", "type": "const void *" },
+        { "name": "num", "type": "size_t" },
+        { "name": "width", "type": "size_t" },
+        { "name": "compare", "type": "void *" }
+      ]
+    },
+    "abort": { "ret": "void", "cc": "cdecl", "params": [] },
+    "exit": { "ret": "void", "cc": "cdecl", "params": [{ "name": "status", "type": "int" }] },
+    "atexit": { "ret": "int", "cc": "cdecl", "params": [{ "name": "func", "type": "void *" }] },
+    "rand": { "ret": "int", "cc": "cdecl", "params": [] },
+    "srand": { "ret": "void", "cc": "cdecl", "params": [{ "name": "seed", "type": "unsigned int" }] },
+    "abs": { "ret": "int", "cc": "cdecl", "params": [{ "name": "number", "type": "int" }] },
+    "labs": { "ret": "int", "cc": "cdecl", "params": [{ "name": "number", "type": "long" }] },
+    "div": {
+      "ret": "div_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "numer", "type": "int" },
+        { "name": "denom", "type": "int" }
+      ]
+    },
+    "toupper": { "ret": "int", "cc": "cdecl", "params": [{ "name": "c", "type": "int" }] },
+    "tolower": { "ret": "int", "cc": "cdecl", "params": [{ "name": "c", "type": "int" }] },
+    "isalpha": { "ret": "int", "cc": "cdecl", "params": [{ "name": "c", "type": "int" }] },
+    "isdigit": { "ret": "int", "cc": "cdecl", "params": [{ "name": "c", "type": "int" }] },
+    "isspace": { "ret": "int", "cc": "cdecl", "params": [{ "name": "c", "type": "int" }] },
+    "wcslen": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [{ "name": "string", "type": "const wchar_t *" }]
+    },
+    "wcscpy": {
+      "ret": "wchar_t *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "destination", "type": "wchar_t *" },
+        { "name": "source", "type": "const wchar_t *" }
+      ]
+    },
+    "wcsncpy": {
+      "ret": "wchar_t *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "destination", "type": "wchar_t *" },
+        { "name": "source", "type": "const wchar_t *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "wcscat": {
+      "ret": "wchar_t *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "destination", "type": "wchar_t *" },
+        { "name": "source", "type": "const wchar_t *" }
+      ]
+    },
+    "wcscmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const wchar_t *" },
+        { "name": "string2", "type": "const wchar_t *" }
+      ]
+    },
+    "wcsncmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const wchar_t *" },
+        { "name": "string2", "type": "const wchar_t *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "wcschr": {
+      "ret": "wchar_t *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const wchar_t *" },
+        { "name": "c", "type": "wchar_t" }
+      ]
+    },
+    "_stricmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const char *" },
+        { "name": "string2", "type": "const char *" }
+      ]
+    },
+    "_strnicmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const char *" },
+        { "name": "string2", "type": "const char *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "_wcsicmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const wchar_t *" },
+        { "name": "string2", "type": "const wchar_t *" }
+      ]
+    },
+    "wcstombs": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "mbstr", "type": "char *" },
+        { "name": "wcstr", "type": "const wchar_t *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "mbstowcs": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "wcstr", "type": "wchar_t *" },
+        { "name": "mbstr", "type": "const char *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    }
+  }
+}

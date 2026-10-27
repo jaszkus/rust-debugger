@@ -1,0 +1,510 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "source": "hand-curated from public Microsoft Win32 API documentation",
+  "license": "Apache-2.0",
+  "unions": {
+    "LARGE_INTEGER": {
+      "fields": [
+        { "name": "QuadPart", "type": "long long" },
+        { "name": "LowPart", "type": "unsigned int", "offset": 0 },
+        { "name": "HighPart", "type": "int", "offset": 4 }
+      ]
+    },
+    "ULARGE_INTEGER": {
+      "fields": [
+        { "name": "QuadPart", "type": "unsigned long long" },
+        { "name": "LowPart", "type": "unsigned int", "offset": 0 },
+        { "name": "HighPart", "type": "unsigned int", "offset": 4 }
+      ]
+    },
+    "IO_STATUS_BLOCK_UNION": {
+      "fields": [
+        { "name": "Status", "type": "int" },
+        { "name": "Pointer", "type": "void *", "offset": 0 }
+      ]
+    }
+  },
+  "structs": {
+    "IO_STATUS_BLOCK": {
+      "fields": [
+        { "name": "Status", "type": "IO_STATUS_BLOCK_UNION" },
+        { "name": "Information", "type": "uintptr_t" }
+      ]
+    },
+    "FILETIME": {
+      "fields": [
+        { "name": "dwLowDateTime", "type": "unsigned int" },
+        { "name": "dwHighDateTime", "type": "unsigned int" }
+      ]
+    },
+    "SYSTEMTIME": {
+      "fields": [
+        { "name": "wYear", "type": "unsigned short" },
+        { "name": "wMonth", "type": "unsigned short" },
+        { "name": "wDayOfWeek", "type": "unsigned short" },
+        { "name": "wDay", "type": "unsigned short" },
+        { "name": "wHour", "type": "unsigned short" },
+        { "name": "wMinute", "type": "unsigned short" },
+        { "name": "wSecond", "type": "unsigned short" },
+        { "name": "wMilliseconds", "type": "unsigned short" }
+      ]
+    },
+    "GUID": {
+      "fields": [
+        { "name": "Data1", "type": "unsigned int" },
+        { "name": "Data2", "type": "unsigned short" },
+        { "name": "Data3", "type": "unsigned short" },
+        { "name": "Data4", "type": "unsigned char[8]" }
+      ]
+    },
+    "UNICODE_STRING": {
+      "fields": [
+        { "name": "Length", "type": "unsigned short" },
+        { "name": "MaximumLength", "type": "unsigned short" },
+        { "name": "Buffer", "type": "wchar_t *" }
+      ]
+    },
+    "ANSI_STRING": {
+      "fields": [
+        { "name": "Length", "type": "unsigned short" },
+        { "name": "MaximumLength", "type": "unsigned short" },
+        { "name": "Buffer", "type": "char *" }
+      ]
+    },
+    "LIST_ENTRY": {
+      "fields": [
+        { "name": "Flink", "type": "void *" },
+        { "name": "Blink", "type": "void *" }
+      ]
+    },
+    "SINGLE_LIST_ENTRY": {
+      "fields": [{ "name": "Next", "type": "void *" }]
+    },
+    "CLIENT_ID": {
+      "fields": [
+        { "name": "UniqueProcess", "type": "void *" },
+        { "name": "UniqueThread", "type": "void *" }
+      ]
+    },
+    "CURDIR": {
+      "fields": [
+        { "name": "DosPath", "type": "UNICODE_STRING" },
+        { "name": "Handle", "type": "void *" }
+      ]
+    },
+    "PEB_LDR_DATA": {
+      "fields": [
+        { "name": "Length", "type": "unsigned int" },
+        { "name": "Initialized", "type": "unsigned char" },
+        { "name": "SsHandle", "type": "void *" },
+        { "name": "InLoadOrderModuleList", "type": "LIST_ENTRY" },
+        { "name": "InMemoryOrderModuleList", "type": "LIST_ENTRY" },
+        { "name": "InInitializationOrderModuleList", "type": "LIST_ENTRY" },
+        { "name": "EntryInProgress", "type": "void *" },
+        { "name": "ShutdownInProgress", "type": "unsigned char" },
+        { "name": "ShutdownThreadId", "type": "void *" }
+      ]
+    },
+    "LDR_DATA_TABLE_ENTRY": {
+      "fields": [
+        { "name": "InLoadOrderLinks", "type": "LIST_ENTRY" },
+        { "name": "InMemoryOrderLinks", "type": "LIST_ENTRY" },
+        { "name": "InInitializationOrderLinks", "type": "LIST_ENTRY" },
+        { "name": "DllBase", "type": "void *" },
+        { "name": "EntryPoint", "type": "void *" },
+        { "name": "SizeOfImage", "type": "unsigned int" },
+        { "name": "FullDllName", "type": "UNICODE_STRING" },
+        { "name": "BaseDllName", "type": "UNICODE_STRING" },
+        { "name": "Flags", "type": "unsigned int" },
+        { "name": "ObsoleteLoadCount", "type": "unsigned short" },
+        { "name": "TlsIndex", "type": "unsigned short" },
+        { "name": "HashLinks", "type": "LIST_ENTRY" },
+        { "name": "TimeDateStamp", "type": "unsigned int" },
+        { "name": "EntryPointActivationContext", "type": "void *" },
+        { "name": "Lock", "type": "void *" },
+        { "name": "DdagNode", "type": "void *" }
+      ]
+    },
+    "RTL_CRITICAL_SECTION": {
+      "fields": [
+        { "name": "DebugInfo", "type": "void *" },
+        { "name": "LockCount", "type": "int" },
+        { "name": "RecursionCount", "type": "int" },
+        { "name": "OwningThread", "type": "void *" },
+        { "name": "LockSemaphore", "type": "void *" },
+        { "name": "SpinCount", "type": "uintptr_t" }
+      ]
+    },
+    "RTL_USER_PROCESS_PARAMETERS": {
+      "fields": [
+        { "name": "MaximumLength", "type": "unsigned int" },
+        { "name": "Length", "type": "unsigned int" },
+        { "name": "Flags", "type": "unsigned int" },
+        { "name": "DebugFlags", "type": "unsigned int" },
+        { "name": "ConsoleHandle", "type": "void *" },
+        { "name": "ConsoleFlags", "type": "unsigned int" },
+        { "name": "StandardInput", "type": "void *" },
+        { "name": "StandardOutput", "type": "void *" },
+        { "name": "StandardError", "type": "void *" },
+        { "name": "CurrentDirectory", "type": "CURDIR" },
+        { "name": "DllPath", "type": "UNICODE_STRING" },
+        { "name": "ImagePathName", "type": "UNICODE_STRING" },
+        { "name": "CommandLine", "type": "UNICODE_STRING" },
+        { "name": "Environment", "type": "void *" },
+        { "name": "StartingX", "type": "unsigned int" },
+        { "name": "StartingY", "type": "unsigned int" },
+        { "name": "CountX", "type": "unsigned int" },
+        { "name": "CountY", "type": "unsigned int" },
+        { "name": "CountCharsX", "type": "unsigned int" },
+        { "name": "CountCharsY", "type": "unsigned int" },
+        { "name": "FillAttribute", "type": "unsigned int" },
+        { "name": "WindowFlags", "type": "unsigned int" },
+        { "name": "ShowWindowFlags", "type": "unsigned int" },
+        { "name": "WindowTitle", "type": "UNICODE_STRING" },
+        { "name": "DesktopInfo", "type": "UNICODE_STRING" },
+        { "name": "ShellInfo", "type": "UNICODE_STRING" },
+        { "name": "RuntimeData", "type": "UNICODE_STRING" }
+      ]
+    },
+    "PEB": {
+      "variants": {
+        "x86": {
+          "fields": [
+            { "name": "InheritedAddressSpace", "type": "unsigned char", "offset": 0 },
+            { "name": "ReadImageFileExecOptions", "type": "unsigned char", "offset": 1 },
+            { "name": "BeingDebugged", "type": "unsigned char", "offset": 2 },
+            { "name": "BitField", "type": "unsigned char", "offset": 3 },
+            { "name": "Mutant", "type": "void *", "offset": 4 },
+            { "name": "ImageBaseAddress", "type": "void *", "offset": 8 },
+            { "name": "Ldr", "type": "PEB_LDR_DATA *", "offset": 12 },
+            { "name": "ProcessParameters", "type": "RTL_USER_PROCESS_PARAMETERS *", "offset": 16 },
+            { "name": "SubSystemData", "type": "void *", "offset": 20 },
+            { "name": "ProcessHeap", "type": "void *", "offset": 24 },
+            { "name": "FastPebLock", "type": "RTL_CRITICAL_SECTION *", "offset": 28 },
+            { "name": "AtlThunkSListPtr", "type": "void *", "offset": 32 },
+            { "name": "IFEOKey", "type": "void *", "offset": 36 },
+            { "name": "CrossProcessFlags", "type": "unsigned int", "offset": 40 },
+            { "name": "UserSharedInfoPtr", "type": "void *", "offset": 44 },
+            { "name": "SystemReserved", "type": "unsigned int", "offset": 48 },
+            { "name": "AtlThunkSListPtr32", "type": "unsigned int", "offset": 52 },
+            { "name": "ApiSetMap", "type": "void *", "offset": 56 },
+            { "name": "TlsExpansionCounter", "type": "unsigned int", "offset": 60 },
+            { "name": "TlsBitmap", "type": "void *", "offset": 64 },
+            { "name": "TlsBitmapBits", "type": "unsigned int[2]", "offset": 72 },
+            { "name": "ReadOnlySharedMemoryBase", "type": "void *", "offset": 80 },
+            { "name": "SharedData", "type": "void *", "offset": 84 },
+            { "name": "ReadOnlyStaticServerData", "type": "void *", "offset": 88 },
+            { "name": "AnsiCodePageData", "type": "void *", "offset": 92 },
+            { "name": "OemCodePageData", "type": "void *", "offset": 96 },
+            { "name": "UnicodeCaseTableData", "type": "void *", "offset": 100 },
+            { "name": "NumberOfProcessors", "type": "unsigned int", "offset": 104 },
+            { "name": "NtGlobalFlag", "type": "unsigned int", "offset": 108 },
+            { "name": "CriticalSectionTimeout", "type": "long long", "offset": 112 },
+            { "name": "HeapSegmentReserve", "type": "uintptr_t", "offset": 120 },
+            { "name": "HeapSegmentCommit", "type": "uintptr_t", "offset": 124 },
+            { "name": "HeapDeCommitTotalFreeThreshold", "type": "uintptr_t", "offset": 128 },
+            { "name": "HeapDeCommitFreeBlockThreshold", "type": "uintptr_t", "offset": 132 },
+            { "name": "NumberOfHeaps", "type": "unsigned int", "offset": 136 },
+            { "name": "MaximumNumberOfHeaps", "type": "unsigned int", "offset": 140 },
+            { "name": "ProcessHeaps", "type": "void **", "offset": 144 }
+          ]
+        },
+        "x64": {
+          "fields": [
+            { "name": "InheritedAddressSpace", "type": "unsigned char", "offset": 0 },
+            { "name": "ReadImageFileExecOptions", "type": "unsigned char", "offset": 1 },
+            { "name": "BeingDebugged", "type": "unsigned char", "offset": 2 },
+            { "name": "BitField", "type": "unsigned char", "offset": 3 },
+            { "name": "Mutant", "type": "void *", "offset": 8 },
+            { "name": "ImageBaseAddress", "type": "void *", "offset": 16 },
+            { "name": "Ldr", "type": "PEB_LDR_DATA *", "offset": 24 },
+            { "name": "ProcessParameters", "type": "RTL_USER_PROCESS_PARAMETERS *", "offset": 32 },
+            { "name": "SubSystemData", "type": "void *", "offset": 40 },
+            { "name": "ProcessHeap", "type": "void *", "offset": 48 },
+            { "name": "FastPebLock", "type": "RTL_CRITICAL_SECTION *", "offset": 56 },
+            { "name": "AtlThunkSListPtr", "type": "void *", "offset": 64 },
+            { "name": "IFEOKey", "type": "void *", "offset": 72 },
+            { "name": "CrossProcessFlags", "type": "unsigned int", "offset": 80 },
+            { "name": "UserSharedInfoPtr", "type": "void *", "offset": 88 },
+            { "name": "SystemReserved", "type": "unsigned int", "offset": 96 },
+            { "name": "AtlThunkSListPtr32", "type": "unsigned int", "offset": 100 },
+            { "name": "ApiSetMap", "type": "void *", "offset": 104 },
+            { "name": "TlsExpansionCounter", "type": "unsigned int", "offset": 112 },
+            { "name": "TlsBitmap", "type": "void *", "offset": 120 },
+            { "name": "TlsBitmapBits", "type": "unsigned int[2]", "offset": 128 },
+            { "name": "ReadOnlySharedMemoryBase", "type": "void *", "offset": 136 },
+            { "name": "SharedData", "type": "void *", "offset": 144 },
+            { "name": "ReadOnlyStaticServerData", "type": "void *", "offset": 152 },
+            { "name": "AnsiCodePageData", "type": "void *", "offset": 160 },
+            { "name": "OemCodePageData", "type": "void *", "offset": 168 },
+            { "name": "UnicodeCaseTableData", "type": "void *", "offset": 176 },
+            { "name": "NumberOfProcessors", "type": "unsigned int", "offset": 184 },
+            { "name": "NtGlobalFlag", "type": "unsigned int", "offset": 188 },
+            { "name": "CriticalSectionTimeout", "type": "long long", "offset": 192 },
+            { "name": "HeapSegmentReserve", "type": "uintptr_t", "offset": 200 },
+            { "name": "HeapSegmentCommit", "type": "uintptr_t", "offset": 208 },
+            { "name": "HeapDeCommitTotalFreeThreshold", "type": "uintptr_t", "offset": 216 },
+            { "name": "HeapDeCommitFreeBlockThreshold", "type": "uintptr_t", "offset": 224 },
+            { "name": "NumberOfHeaps", "type": "unsigned int", "offset": 232 },
+            { "name": "MaximumNumberOfHeaps", "type": "unsigned int", "offset": 236 },
+            { "name": "ProcessHeaps", "type": "void **", "offset": 240 },
+            { "name": "GdiSharedHandleTable", "type": "void *", "offset": 248 },
+            { "name": "ProcessStarterHelper", "type": "void *", "offset": 256 },
+            { "name": "GdiDCAttributeList", "type": "unsigned int", "offset": 264 },
+            { "name": "LoaderLock", "type": "RTL_CRITICAL_SECTION *", "offset": 272 },
+            { "name": "OSMajorVersion", "type": "unsigned int", "offset": 280 },
+            { "name": "OSMinorVersion", "type": "unsigned int", "offset": 284 },
+            { "name": "OSBuildNumber", "type": "unsigned short", "offset": 288 },
+            { "name": "OSCSDVersion", "type": "unsigned short", "offset": 290 },
+            { "name": "OSPlatformId", "type": "unsigned int", "offset": 292 },
+            { "name": "ImageSubsystem", "type": "unsigned int", "offset": 296 },
+            { "name": "ImageSubsystemMajorVersion", "type": "unsigned int", "offset": 300 },
+            { "name": "ImageSubsystemMinorVersion", "type": "unsigned int", "offset": 304 },
+            { "name": "ActiveProcessAffinityMask", "type": "unsigned int", "offset": 308 },
+            { "name": "GdiHandleBuffer", "type": "unsigned int[60]", "offset": 312 },
+            { "name": "PostProcessInitRoutine", "type": "void *", "offset": 552 },
+            { "name": "TlsExpansionBitmap", "type": "unsigned int[32]", "offset": 560 },
+            { "name": "SessionId", "type": "unsigned int", "offset": 688 },
+            { "name": "AppCompatFlags", "type": "ULARGE_INTEGER", "offset": 696 },
+            { "name": "AppCompatFlagsUser", "type": "ULARGE_INTEGER", "offset": 704 },
+            { "name": "pShimData", "type": "void *", "offset": 712 },
+            { "name": "AppCompatInfo", "type": "void *", "offset": 720 },
+            { "name": "CSDVersion", "type": "UNICODE_STRING", "offset": 728 }
+          ]
+        }
+      }
+    },
+    "TEB": {
+      "fields": [
+        { "name": "NtTib_ExceptionList", "type": "void *" },
+        { "name": "NtTib_StackBase", "type": "void *" },
+        { "name": "NtTib_StackLimit", "type": "void *" },
+        { "name": "NtTib_SubSystemTib", "type": "void *" },
+        { "name": "NtTib_FiberData", "type": "void *" },
+        { "name": "NtTib_ArbitraryUserPointer", "type": "void *" },
+        { "name": "NtTib_Self", "type": "void *" },
+        { "name": "EnvironmentPointer", "type": "void *" },
+        { "name": "ClientId", "type": "CLIENT_ID" },
+        { "name": "ActiveRpcHandle", "type": "void *" },
+        { "name": "ThreadLocalStoragePointer", "type": "void *" },
+        { "name": "ProcessEnvironmentBlock", "type": "PEB *" }
+      ]
+    },
+    "OBJECT_ATTRIBUTES": {
+      "fields": [
+        { "name": "Length", "type": "unsigned int" },
+        { "name": "RootDirectory", "type": "void *" },
+        { "name": "ObjectName", "type": "UNICODE_STRING *" },
+        { "name": "Attributes", "type": "unsigned int" },
+        { "name": "SecurityDescriptor", "type": "void *" },
+        { "name": "SecurityQualityOfService", "type": "void *" }
+      ]
+    },
+    "SECURITY_ATTRIBUTES": {
+      "fields": [
+        { "name": "nLength", "type": "unsigned int" },
+        { "name": "lpSecurityDescriptor", "type": "void *" },
+        { "name": "bInheritHandle", "type": "int" }
+      ]
+    },
+    "SECURITY_DESCRIPTOR": {
+      "fields": [
+        { "name": "Revision", "type": "unsigned char" },
+        { "name": "Sbz1", "type": "unsigned char" },
+        { "name": "Control", "type": "unsigned short" },
+        { "name": "Owner", "type": "void *" },
+        { "name": "Group", "type": "void *" },
+        { "name": "Sacl", "type": "void *" },
+        { "name": "Dacl", "type": "void *" }
+      ]
+    },
+    "OVERLAPPED": {
+      "fields": [
+        { "name": "Internal", "type": "uintptr_t" },
+        { "name": "InternalHigh", "type": "uintptr_t" },
+        { "name": "Offset", "type": "unsigned int" },
+        { "name": "OffsetHigh", "type": "unsigned int" },
+        { "name": "hEvent", "type": "void *" }
+      ]
+    },
+    "OVERLAPPED_ENTRY": {
+      "fields": [
+        { "name": "lpCompletionKey", "type": "uintptr_t" },
+        { "name": "lpOverlapped", "type": "OVERLAPPED *" },
+        { "name": "Internal", "type": "uintptr_t" },
+        { "name": "dwNumberOfBytesTransferred", "type": "unsigned int" }
+      ]
+    },
+    "STARTUPINFOW": {
+      "fields": [
+        { "name": "cb", "type": "unsigned int" },
+        { "name": "lpReserved", "type": "wchar_t *" },
+        { "name": "lpDesktop", "type": "wchar_t *" },
+        { "name": "lpTitle", "type": "wchar_t *" },
+        { "name": "dwX", "type": "unsigned int" },
+        { "name": "dwY", "type": "unsigned int" },
+        { "name": "dwXSize", "type": "unsigned int" },
+        { "name": "dwYSize", "type": "unsigned int" },
+        { "name": "dwXCountChars", "type": "unsigned int" },
+        { "name": "dwYCountChars", "type": "unsigned int" },
+        { "name": "dwFillAttribute", "type": "unsigned int" },
+        { "name": "dwFlags", "type": "unsigned int" },
+        { "name": "wShowWindow", "type": "unsigned short" },
+        { "name": "cbReserved2", "type": "unsigned short" },
+        { "name": "lpReserved2", "type": "unsigned char *" },
+        { "name": "hStdInput", "type": "void *" },
+        { "name": "hStdOutput", "type": "void *" },
+        { "name": "hStdError", "type": "void *" }
+      ]
+    },
+    "STARTUPINFOA": {
+      "fields": [
+        { "name": "cb", "type": "unsigned int" },
+        { "name": "lpReserved", "type": "char *" },
+        { "name": "lpDesktop", "type": "char *" },
+        { "name": "lpTitle", "type": "char *" },
+        { "name": "dwX", "type": "unsigned int" },
+        { "name": "dwY", "type": "unsigned int" },
+        { "name": "dwXSize", "type": "unsigned int" },
+        { "name": "dwYSize", "type": "unsigned int" },
+        { "name": "dwXCountChars", "type": "unsigned int" },
+        { "name": "dwYCountChars", "type": "unsigned int" },
+        { "name": "dwFillAttribute", "type": "unsigned int" },
+        { "name": "dwFlags", "type": "unsigned int" },
+        { "name": "wShowWindow", "type": "unsigned short" },
+        { "name": "cbReserved2", "type": "unsigned short" },
+        { "name": "lpReserved2", "type": "unsigned char *" },
+        { "name": "hStdInput", "type": "void *" },
+        { "name": "hStdOutput", "type": "void *" },
+        { "name": "hStdError", "type": "void *" }
+      ]
+    },
+    "PROCESS_INFORMATION": {
+      "fields": [
+        { "name": "hProcess", "type": "void *" },
+        { "name": "hThread", "type": "void *" },
+        { "name": "dwProcessId", "type": "unsigned int" },
+        { "name": "dwThreadId", "type": "unsigned int" }
+      ]
+    },
+    "SYSTEM_INFO": {
+      "fields": [
+        { "name": "wProcessorArchitecture", "type": "unsigned short" },
+        { "name": "wReserved", "type": "unsigned short" },
+        { "name": "dwPageSize", "type": "unsigned int" },
+        { "name": "lpMinimumApplicationAddress", "type": "void *" },
+        { "name": "lpMaximumApplicationAddress", "type": "void *" },
+        { "name": "dwActiveProcessorMask", "type": "uintptr_t" },
+        { "name": "dwNumberOfProcessors", "type": "unsigned int" },
+        { "name": "dwProcessorType", "type": "unsigned int" },
+        { "name": "dwAllocationGranularity", "type": "unsigned int" },
+        { "name": "wProcessorLevel", "type": "unsigned short" },
+        { "name": "wProcessorRevision", "type": "unsigned short" }
+      ]
+    },
+    "MEMORY_BASIC_INFORMATION": {
+      "fields": [
+        { "name": "BaseAddress", "type": "void *" },
+        { "name": "AllocationBase", "type": "void *" },
+        { "name": "AllocationProtect", "type": "unsigned int" },
+        { "name": "RegionSize", "type": "uintptr_t" },
+        { "name": "State", "type": "unsigned int" },
+        { "name": "Protect", "type": "unsigned int" },
+        { "name": "Type", "type": "unsigned int" }
+      ]
+    },
+    "WIN32_FIND_DATAW": {
+      "fields": [
+        { "name": "dwFileAttributes", "type": "unsigned int" },
+        { "name": "ftCreationTime", "type": "FILETIME" },
+        { "name": "ftLastAccessTime", "type": "FILETIME" },
+        { "name": "ftLastWriteTime", "type": "FILETIME" },
+        { "name": "nFileSizeHigh", "type": "unsigned int" },
+        { "name": "nFileSizeLow", "type": "unsigned int" },
+        { "name": "dwReserved0", "type": "unsigned int" },
+        { "name": "dwReserved1", "type": "unsigned int" },
+        { "name": "cFileName", "type": "wchar_t[260]" },
+        { "name": "cAlternateFileName", "type": "wchar_t[14]" }
+      ]
+    },
+    "WIN32_FIND_DATAA": {
+      "fields": [
+        { "name": "dwFileAttributes", "type": "unsigned int" },
+        { "name": "ftCreationTime", "type": "FILETIME" },
+        { "name": "ftLastAccessTime", "type": "FILETIME" },
+        { "name": "ftLastWriteTime", "type": "FILETIME" },
+        { "name": "nFileSizeHigh", "type": "unsigned int" },
+        { "name": "nFileSizeLow", "type": "unsigned int" },
+        { "name": "dwReserved0", "type": "unsigned int" },
+        { "name": "dwReserved1", "type": "unsigned int" },
+        { "name": "cFileName", "type": "char[260]" },
+        { "name": "cAlternateFileName", "type": "char[14]" }
+      ]
+    },
+    "EXCEPTION_RECORD": {
+      "fields": [
+        { "name": "ExceptionCode", "type": "unsigned int" },
+        { "name": "ExceptionFlags", "type": "unsigned int" },
+        { "name": "ExceptionRecord", "type": "EXCEPTION_RECORD *" },
+        { "name": "ExceptionAddress", "type": "void *" },
+        { "name": "NumberParameters", "type": "unsigned int" },
+        { "name": "ExceptionInformation", "type": "uintptr_t[15]" }
+      ]
+    },
+    "EXCEPTION_POINTERS": {
+      "fields": [
+        { "name": "ExceptionRecord", "type": "EXCEPTION_RECORD *" },
+        { "name": "ContextRecord", "type": "void *" }
+      ]
+    },
+    "POINT": {
+      "fields": [
+        { "name": "x", "type": "int" },
+        { "name": "y", "type": "int" }
+      ]
+    },
+    "SIZE": {
+      "fields": [
+        { "name": "cx", "type": "int" },
+        { "name": "cy", "type": "int" }
+      ]
+    },
+    "RECT": {
+      "fields": [
+        { "name": "left", "type": "int" },
+        { "name": "top", "type": "int" },
+        { "name": "right", "type": "int" },
+        { "name": "bottom", "type": "int" }
+      ]
+    },
+    "COORD": {
+      "fields": [
+        { "name": "X", "type": "short" },
+        { "name": "Y", "type": "short" }
+      ]
+    },
+    "SMALL_RECT": {
+      "fields": [
+        { "name": "Left", "type": "short" },
+        { "name": "Top", "type": "short" },
+        { "name": "Right", "type": "short" },
+        { "name": "Bottom", "type": "short" }
+      ]
+    },
+    "MEMORYSTATUSEX": {
+      "fields": [
+        { "name": "dwLength", "type": "unsigned int" },
+        { "name": "dwMemoryLoad", "type": "unsigned int" },
+        { "name": "ullTotalPhys", "type": "unsigned long long" },
+        { "name": "ullAvailPhys", "type": "unsigned long long" },
+        { "name": "ullTotalPageFile", "type": "unsigned long long" },
+        { "name": "ullAvailPageFile", "type": "unsigned long long" },
+        { "name": "ullTotalVirtual", "type": "unsigned long long" },
+        { "name": "ullAvailVirtual", "type": "unsigned long long" },
+        { "name": "ullAvailExtendedVirtual", "type": "unsigned long long" }
+      ]
+    }
+  }
+}

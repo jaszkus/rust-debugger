@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "module": "kernelbase",
+  "source": "hand-curated from public Microsoft Win32 API documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "BaseSetLastNTError": {
+      "ret": "void",
+      "params": [{ "name": "Status", "type": "NTSTATUS" }]
+    },
+    "Basep8BitStringToDynamicUnicodeString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "pUnicodeString", "type": "PUNICODE_STRING" },
+        { "name": "pAnsiString", "type": "PCSTR" }
+      ]
+    },
+    "KernelBaseGetGlobalData": { "ret": "PVOID", "params": [] },
+    "BaseFormatObjectAttributes": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ObjectAttributes", "type": "POBJECT_ATTRIBUTES" },
+        { "name": "ObjectName", "type": "PUNICODE_STRING" },
+        { "name": "Attributes", "type": "ULONG" }
+      ]
+    },
+    "BaseGetNamedObjectDirectory": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "BaseNamedObjectsDirectory", "type": "PHANDLE" }]
+    },
+    "GetLastError": { "ret": "DWORD", "params": [] },
+    "SetLastError": { "ret": "void", "params": [{ "name": "dwErrCode", "type": "DWORD" }] },
+    "CloseHandle": { "ret": "BOOL", "params": [{ "name": "hObject", "type": "HANDLE" }] },
+    "GetProcessHeap": { "ret": "HANDLE", "params": [] },
+    "HeapAlloc": {
+      "ret": "LPVOID",
+      "params": [
+        { "name": "hHeap", "type": "HANDLE" },
+        { "name": "dwFlags", "type": "DWORD" },
+        { "name": "dwBytes", "type": "SIZE_T" }
+      ]
+    },
+    "HeapFree": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hHeap", "type": "HANDLE" },
+        { "name": "dwFlags", "type": "DWORD" },
+        { "name": "lpMem", "type": "LPVOID" }
+      ]
+    },
+    "CreateFileW": {
+      "ret": "HANDLE",
+      "params": [
+        { "name": "lpFileName", "type": "LPCWSTR" },
+        { "name": "dwDesiredAccess", "type": "DWORD" },
+        { "name": "dwShareMode", "type": "DWORD" },
+        { "name": "lpSecurityAttributes", "type": "LPSECURITY_ATTRIBUTES" },
+        { "name": "dwCreationDisposition", "type": "DWORD" },
+        { "name": "dwFlagsAndAttributes", "type": "DWORD" },
+        { "name": "hTemplateFile", "type": "HANDLE" }
+      ]
+    },
+    "ReadFile": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hFile", "type": "HANDLE" },
+        { "name": "lpBuffer", "type": "LPVOID" },
+        { "name": "nNumberOfBytesToRead", "type": "DWORD" },
+        { "name": "lpNumberOfBytesRead", "type": "LPDWORD" },
+        { "name": "lpOverlapped", "type": "LPOVERLAPPED" }
+      ]
+    },
+    "WriteFile": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hFile", "type": "HANDLE" },
+        { "name": "lpBuffer", "type": "LPCVOID" },
+        { "name": "nNumberOfBytesToWrite", "type": "DWORD" },
+        { "name": "lpNumberOfBytesWritten", "type": "LPDWORD" },
+        { "name": "lpOverlapped", "type": "LPOVERLAPPED" }
+      ]
+    },
+    "GetModuleHandleW": {
+      "ret": "HMODULE",
+      "params": [{ "name": "lpModuleName", "type": "LPCWSTR" }]
+    },
+    "GetProcAddress": {
+      "ret": "FARPROC",
+      "params": [
+        { "name": "hModule", "type": "HMODULE" },
+        { "name": "lpProcName", "type": "LPCSTR" }
+      ]
+    },
+    "LoadLibraryExW": {
+      "ret": "HMODULE",
+      "params": [
+        { "name": "lpLibFileName", "type": "LPCWSTR" },
+        { "name": "hFile", "type": "HANDLE" },
+        { "name": "dwFlags", "type": "DWORD" }
+      ]
+    },
+    "VirtualAlloc": {
+      "ret": "LPVOID",
+      "params": [
+        { "name": "lpAddress", "type": "LPVOID" },
+        { "name": "dwSize", "type": "SIZE_T" },
+        { "name": "flAllocationType", "type": "DWORD" },
+        { "name": "flProtect", "type": "DWORD" }
+      ]
+    },
+    "VirtualFree": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "lpAddress", "type": "LPVOID" },
+        { "name": "dwSize", "type": "SIZE_T" },
+        { "name": "dwFreeType", "type": "DWORD" }
+      ]
+    },
+    "WaitForSingleObject": {
+      "ret": "DWORD",
+      "params": [
+        { "name": "hHandle", "type": "HANDLE" },
+        { "name": "dwMilliseconds", "type": "DWORD" }
+      ]
+    }
+  }
+}

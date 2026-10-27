@@ -1,0 +1,289 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "module": "user32",
+  "source": "hand-curated from public Microsoft Win32 API documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "MessageBoxW": {
+      "ret": "int",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpText", "type": "LPCWSTR" },
+        { "name": "lpCaption", "type": "LPCWSTR" },
+        { "name": "uType", "type": "UINT" }
+      ]
+    },
+    "MessageBoxA": {
+      "ret": "int",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpText", "type": "LPCSTR" },
+        { "name": "lpCaption", "type": "LPCSTR" },
+        { "name": "uType", "type": "UINT" }
+      ]
+    },
+    "SendMessageW": {
+      "ret": "LRESULT",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "Msg", "type": "UINT" },
+        { "name": "wParam", "type": "WPARAM" },
+        { "name": "lParam", "type": "LPARAM" }
+      ]
+    },
+    "SendMessageA": {
+      "ret": "LRESULT",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "Msg", "type": "UINT" },
+        { "name": "wParam", "type": "WPARAM" },
+        { "name": "lParam", "type": "LPARAM" }
+      ]
+    },
+    "PostMessageW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "Msg", "type": "UINT" },
+        { "name": "wParam", "type": "WPARAM" },
+        { "name": "lParam", "type": "LPARAM" }
+      ]
+    },
+    "SendDlgItemMessageW": {
+      "ret": "LRESULT",
+      "params": [
+        { "name": "hDlg", "type": "HWND" },
+        { "name": "nIDDlgItem", "type": "int" },
+        { "name": "Msg", "type": "UINT" },
+        { "name": "wParam", "type": "WPARAM" },
+        { "name": "lParam", "type": "LPARAM" }
+      ]
+    },
+    "GetDlgItem": {
+      "ret": "HWND",
+      "params": [
+        { "name": "hDlg", "type": "HWND" },
+        { "name": "nIDDlgItem", "type": "int" }
+      ]
+    },
+    "EnableWindow": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "bEnable", "type": "BOOL" }
+      ]
+    },
+    "DestroyWindow": { "ret": "BOOL", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "SetCursor": { "ret": "HCURSOR", "params": [{ "name": "hCursor", "type": "HCURSOR" }] },
+    "LoadCursorW": {
+      "ret": "HCURSOR",
+      "params": [
+        { "name": "hInstance", "type": "HINSTANCE" },
+        { "name": "lpCursorName", "type": "LPCWSTR" }
+      ]
+    },
+    "LoadIconW": {
+      "ret": "HICON",
+      "params": [
+        { "name": "hInstance", "type": "HINSTANCE" },
+        { "name": "lpIconName", "type": "LPCWSTR" }
+      ]
+    },
+    "CreateWindowExW": {
+      "ret": "HWND",
+      "params": [
+        { "name": "dwExStyle", "type": "DWORD" },
+        { "name": "lpClassName", "type": "LPCWSTR" },
+        { "name": "lpWindowName", "type": "LPCWSTR" },
+        { "name": "dwStyle", "type": "DWORD" },
+        { "name": "X", "type": "int" },
+        { "name": "Y", "type": "int" },
+        { "name": "nWidth", "type": "int" },
+        { "name": "nHeight", "type": "int" },
+        { "name": "hWndParent", "type": "HWND" },
+        { "name": "hMenu", "type": "HMENU" },
+        { "name": "hInstance", "type": "HINSTANCE" },
+        { "name": "lpParam", "type": "LPVOID" }
+      ]
+    },
+    "RegisterClassExW": { "ret": "ATOM", "params": [{ "name": "unnamedParam1", "type": "LPVOID" }] },
+    "DefWindowProcW": {
+      "ret": "LRESULT",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "Msg", "type": "UINT" },
+        { "name": "wParam", "type": "WPARAM" },
+        { "name": "lParam", "type": "LPARAM" }
+      ]
+    },
+    "GetMessageW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "lpMsg", "type": "LPVOID" },
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "wMsgFilterMin", "type": "UINT" },
+        { "name": "wMsgFilterMax", "type": "UINT" }
+      ]
+    },
+    "PeekMessageW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "lpMsg", "type": "LPVOID" },
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "wMsgFilterMin", "type": "UINT" },
+        { "name": "wMsgFilterMax", "type": "UINT" },
+        { "name": "wRemoveMsg", "type": "UINT" }
+      ]
+    },
+    "DispatchMessageW": {
+      "ret": "LRESULT",
+      "params": [{ "name": "lpMsg", "type": "const void *" }]
+    },
+    "TranslateMessage": {
+      "ret": "BOOL",
+      "params": [{ "name": "lpMsg", "type": "const void *" }]
+    },
+    "ShowWindow": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "nCmdShow", "type": "int" }
+      ]
+    },
+    "UpdateWindow": { "ret": "BOOL", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "SetWindowTextW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpString", "type": "LPCWSTR" }
+      ]
+    },
+    "GetWindowTextW": {
+      "ret": "int",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpString", "type": "LPWSTR" },
+        { "name": "nMaxCount", "type": "int" }
+      ]
+    },
+    "GetWindowTextLengthW": { "ret": "int", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "GetClientRect": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpRect", "type": "RECT *" }
+      ]
+    },
+    "GetWindowRect": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpRect", "type": "RECT *" }
+      ]
+    },
+    "EndDialog": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hDlg", "type": "HWND" },
+        { "name": "nResult", "type": "INT_PTR" }
+      ]
+    },
+    "SetFocus": { "ret": "HWND", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "GetFocus": { "ret": "HWND", "params": [] },
+    "GetForegroundWindow": { "ret": "HWND", "params": [] },
+    "IsWindow": { "ret": "BOOL", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "IsWindowVisible": { "ret": "BOOL", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "InvalidateRect": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpRect", "type": "const RECT *" },
+        { "name": "bErase", "type": "BOOL" }
+      ]
+    },
+    "BeginPaint": {
+      "ret": "HDC",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpPaint", "type": "LPVOID" }
+      ]
+    },
+    "EndPaint": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpPaint", "type": "const void *" }
+      ]
+    },
+    "FillRect": {
+      "ret": "int",
+      "params": [
+        { "name": "hDC", "type": "HDC" },
+        { "name": "lprc", "type": "const RECT *" },
+        { "name": "hbr", "type": "HBRUSH" }
+      ]
+    },
+    "CreateSolidBrush": {
+      "ret": "HBRUSH",
+      "params": [{ "name": "color", "type": "COLORREF" }]
+    },
+    "DeleteObject": { "ret": "BOOL", "params": [{ "name": "ho", "type": "HANDLE" }] },
+    "GetDC": { "ret": "HDC", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "ReleaseDC": {
+      "ret": "int",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "hDC", "type": "HDC" }
+      ]
+    },
+    "GetSystemMetrics": { "ret": "int", "params": [{ "name": "nIndex", "type": "int" }] },
+    "ScreenToClient": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpPoint", "type": "POINT *" }
+      ]
+    },
+    "ClientToScreen": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "lpPoint", "type": "POINT *" }
+      ]
+    },
+    "GetCursorPos": { "ret": "BOOL", "params": [{ "name": "lpPoint", "type": "POINT *" }] },
+    "SetWindowPos": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "hWndInsertAfter", "type": "HWND" },
+        { "name": "X", "type": "int" },
+        { "name": "Y", "type": "int" },
+        { "name": "cx", "type": "int" },
+        { "name": "cy", "type": "int" },
+        { "name": "uFlags", "type": "UINT" }
+      ]
+    },
+    "wsprintfW": {
+      "ret": "int",
+      "params": [
+        { "name": "unnamedParam1", "type": "LPWSTR" },
+        { "name": "unnamedParam2", "type": "LPCWSTR" }
+      ],
+      "varargs": true
+    },
+    "LoadStringW": {
+      "ret": "int",
+      "params": [
+        { "name": "hInstance", "type": "HINSTANCE" },
+        { "name": "uID", "type": "UINT" },
+        { "name": "lpBuffer", "type": "LPWSTR" },
+        { "name": "cchBufferMax", "type": "int" }
+      ]
+    },
+    "CharUpperW": { "ret": "LPWSTR", "params": [{ "name": "lpsz", "type": "LPWSTR" }] },
+    "CharLowerW": { "ret": "LPWSTR", "params": [{ "name": "lpsz", "type": "LPWSTR" }] }
+  }
+}

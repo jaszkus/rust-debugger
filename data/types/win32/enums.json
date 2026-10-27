@@ -1,0 +1,174 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "source": "hand-curated from public Microsoft Win32 API documentation",
+  "license": "Apache-2.0",
+  "enums": {
+    "FILE_ACCESS_RIGHTS": {
+      "underlying": "unsigned int",
+      "variants": {
+        "FILE_READ_DATA": "0x0001",
+        "FILE_WRITE_DATA": "0x0002",
+        "FILE_APPEND_DATA": "0x0004",
+        "FILE_READ_EA": "0x0008",
+        "FILE_WRITE_EA": "0x0010",
+        "FILE_EXECUTE": "0x0020",
+        "FILE_DELETE_CHILD": "0x0040",
+        "FILE_READ_ATTRIBUTES": "0x0080",
+        "FILE_WRITE_ATTRIBUTES": "0x0100",
+        "DELETE": "0x00010000",
+        "READ_CONTROL": "0x00020000",
+        "WRITE_DAC": "0x00040000",
+        "WRITE_OWNER": "0x00080000",
+        "SYNCHRONIZE": "0x00100000",
+        "GENERIC_READ": "0x80000000",
+        "GENERIC_WRITE": "0x40000000",
+        "GENERIC_EXECUTE": "0x20000000",
+        "GENERIC_ALL": "0x10000000"
+      }
+    },
+    "FILE_SHARE_MODE": {
+      "underlying": "unsigned int",
+      "variants": {
+        "FILE_SHARE_READ": "0x00000001",
+        "FILE_SHARE_WRITE": "0x00000002",
+        "FILE_SHARE_DELETE": "0x00000004"
+      }
+    },
+    "FILE_CREATION_DISPOSITION": {
+      "underlying": "unsigned int",
+      "variants": {
+        "CREATE_NEW": "1",
+        "CREATE_ALWAYS": "2",
+        "OPEN_EXISTING": "3",
+        "OPEN_ALWAYS": "4",
+        "TRUNCATE_EXISTING": "5"
+      }
+    },
+    "FILE_ATTRIBUTE": {
+      "underlying": "unsigned int",
+      "variants": {
+        "FILE_ATTRIBUTE_READONLY": "0x00000001",
+        "FILE_ATTRIBUTE_HIDDEN": "0x00000002",
+        "FILE_ATTRIBUTE_SYSTEM": "0x00000004",
+        "FILE_ATTRIBUTE_DIRECTORY": "0x00000010",
+        "FILE_ATTRIBUTE_ARCHIVE": "0x00000020",
+        "FILE_ATTRIBUTE_DEVICE": "0x00000040",
+        "FILE_ATTRIBUTE_NORMAL": "0x00000080",
+        "FILE_ATTRIBUTE_TEMPORARY": "0x00000100",
+        "FILE_ATTRIBUTE_SPARSE_FILE": "0x00000200",
+        "FILE_ATTRIBUTE_REPARSE_POINT": "0x00000400",
+        "FILE_ATTRIBUTE_COMPRESSED": "0x00000800",
+        "FILE_ATTRIBUTE_OFFLINE": "0x00001000",
+        "FILE_ATTRIBUTE_NOT_CONTENT_INDEXED": "0x00002000",
+        "FILE_ATTRIBUTE_ENCRYPTED": "0x00004000",
+        "FILE_FLAG_OPEN_NO_RECALL": "0x00100000",
+        "FILE_FLAG_OPEN_REPARSE_POINT": "0x00200000",
+        "FILE_FLAG_POSIX_SEMANTICS": "0x01000000",
+        "FILE_FLAG_BACKUP_SEMANTICS": "0x02000000",
+        "FILE_FLAG_DELETE_ON_CLOSE": "0x04000000",
+        "FILE_FLAG_SEQUENTIAL_SCAN": "0x08000000",
+        "FILE_FLAG_RANDOM_ACCESS": "0x10000000",
+        "FILE_FLAG_NO_BUFFERING": "0x20000000",
+        "FILE_FLAG_OVERLAPPED": "0x40000000",
+        "FILE_FLAG_WRITE_THROUGH": "0x80000000"
+      }
+    },
+    "MEMORY_PROTECTION": {
+      "underlying": "unsigned int",
+      "variants": {
+        "PAGE_NOACCESS": "0x01",
+        "PAGE_READONLY": "0x02",
+        "PAGE_READWRITE": "0x04",
+        "PAGE_WRITECOPY": "0x08",
+        "PAGE_EXECUTE": "0x10",
+        "PAGE_EXECUTE_READ": "0x20",
+        "PAGE_EXECUTE_READWRITE": "0x40",
+        "PAGE_EXECUTE_WRITECOPY": "0x80",
+        "PAGE_GUARD": "0x100",
+        "PAGE_NOCACHE": "0x200",
+        "PAGE_WRITECOMBINE": "0x400",
+        "PAGE_TARGETS_INVALID": "0x40000000",
+        "PAGE_TARGETS_NO_UPDATE": "0x40000000"
+      }
+    },
+    "MEMORY_ALLOCATION_TYPE": {
+      "underlying": "unsigned int",
+      "variants": {
+        "MEM_COMMIT": "0x00001000",
+        "MEM_RESERVE": "0x00002000",
+        "MEM_DECOMMIT": "0x00004000",
+        "MEM_RELEASE": "0x00008000",
+        "MEM_FREE": "0x00010000",
+        "MEM_PRIVATE": "0x00020000",
+        "MEM_MAPPED": "0x00040000",
+        "MEM_RESET": "0x00080000",
+        "MEM_TOP_DOWN": "0x00100000",
+        "MEM_WRITE_WATCH": "0x00200000",
+        "MEM_PHYSICAL": "0x00400000",
+        "MEM_LARGE_PAGES": "0x20000000",
+        "MEM_RESET_UNDO": "0x1000000"
+      }
+    },
+    "HEAP_FLAGS": {
+      "underlying": "unsigned int",
+      "variants": {
+        "HEAP_NO_SERIALIZE": "0x00000001",
+        "HEAP_GENERATE_EXCEPTIONS": "0x00000004",
+        "HEAP_ZERO_MEMORY": "0x00000008",
+        "HEAP_REALLOC_IN_PLACE_ONLY": "0x00000010",
+        "HEAP_CREATE_ENABLE_EXECUTE": "0x00040000"
+      }
+    },
+    "SECURITY_INFORMATION": {
+      "underlying": "unsigned int",
+      "variants": {
+        "OWNER_SECURITY_INFORMATION": "0x00000001",
+        "GROUP_SECURITY_INFORMATION": "0x00000002",
+        "DACL_SECURITY_INFORMATION": "0x00000004",
+        "SACL_SECURITY_INFORMATION": "0x00000008",
+        "LABEL_SECURITY_INFORMATION": "0x00000010",
+        "PROTECTED_DACL_SECURITY_INFORMATION": "0x80000000",
+        "PROTECTED_SACL_SECURITY_INFORMATION": "0x40000000",
+        "UNPROTECTED_DACL_SECURITY_INFORMATION": "0x20000000",
+        "UNPROTECTED_SACL_SECURITY_INFORMATION": "0x10000000"
+      }
+    },
+    "REG_VALUE_TYPE": {
+      "underlying": "unsigned int",
+      "variants": {
+        "REG_NONE": "0",
+        "REG_SZ": "1",
+        "REG_EXPAND_SZ": "2",
+        "REG_BINARY": "3",
+        "REG_DWORD": "4",
+        "REG_DWORD_BIG_ENDIAN": "5",
+        "REG_LINK": "6",
+        "REG_MULTI_SZ": "7",
+        "REG_QWORD": "11"
+      }
+    },
+    "SERVICE_STATE": {
+      "underlying": "unsigned int",
+      "variants": {
+        "SERVICE_STOPPED": "1",
+        "SERVICE_START_PENDING": "2",
+        "SERVICE_STOP_PENDING": "3",
+        "SERVICE_RUNNING": "4",
+        "SERVICE_CONTINUE_PENDING": "5",
+        "SERVICE_PAUSE_PENDING": "6",
+        "SERVICE_PAUSED": "7"
+      }
+    },
+    "WAIT_RESULT": {
+      "underlying": "unsigned int",
+      "variants": {
+        "WAIT_OBJECT_0": "0",
+        "WAIT_ABANDONED": "0x80",
+        "WAIT_TIMEOUT": "0x102",
+        "WAIT_FAILED": "0xffffffff"
+      }
+    }
+  }
+}

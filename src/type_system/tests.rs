@@ -386,7 +386,12 @@ fn win32_archive_is_idempotent_and_arch_aware() {
 fn crt_archive_follows_long_size() {
     let mut m = DataTypeManager::new();
     m.seed_archive("crt").unwrap();
-    assert_eq!(field_offset(&m, "timeval", "tv_usec"), Some(8));
+    assert_eq!(
+        field_offset(&m, "timeval", "tv_usec"),
+        Some(4),
+        "Windows LLP64 keeps long at 32 bits on x64"
+    );
+    assert_eq!(m.size_of(m.find_by_name("timeval").unwrap()), Some(8));
     let mut m32 = DataTypeManager::new();
     m32.set_arch("arm");
     m32.seed_archive("crt").unwrap();
@@ -405,4 +410,261 @@ fn seed_all_covers_every_archive() {
     assert!(m.find_by_name("GUID").is_some());
     assert!(m.find_by_name("FILE").is_some());
     assert!(m.seed_archive("bogus").is_err());
+}
+
+fn archive_offset(archive: &TypeArchive, ty: &str, field: &str) -> Option<usize> {
+    archive
+        .get(ty)?
+        .fields()
+        .iter()
+        .find(|f| f.name == field)
+        .map(|f| f.offset)
+}
+
+#[test]
+fn archive_embedded_data_resolves_every_reference() {
+    for arch in [Arch::X64, Arch::X86] {
+        for name in ["win32", "crt", "libc"] {
+            let archive = embedded_archive(name, arch).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(
+                archive.unknown_types().is_empty(),
+                "{name} ({:?}) has unresolved types: {:?}",
+                arch,
+                archive.unknown_types()
+            );
+            assert!(
+                archive.type_names().count() > 20,
+                "{name} archive is suspiciously small"
+            );
+        }
+    }
+    let win32 = embedded_archive("win32", Arch::X64).unwrap();
+    assert!(
+        win32.function_count() >= 150,
+        "win32 function table too small: {}",
+        win32.function_count()
+    );
+}
+
+#[test]
+fn archive_typedef_chain_renders_the_public_spelling() {
+    let a = embedded_archive("win32", Arch::X64).unwrap();
+    assert_eq!(a.render("HANDLE"), "HANDLE");
+    assert_eq!(a.render("DWORD"), "DWORD");
+    assert_eq!(a.render("LPCWSTR"), "LPCWSTR");
+    assert_eq!(a.size_of("HANDLE"), Some(8));
+    assert_eq!(a.size_of("DWORD"), Some(4));
+    let lpcwstr = a.get("LPCWSTR").expect("LPCWSTR");
+    match &lpcwstr.kind {
+        TypeKind::Alias { target } => {
+            assert_eq!(a.render(target), "wchar_t *");
+        }
+        other => panic!("LPCWSTR should be an alias, got {other:?}"),
+    }
+    assert_eq!(a.render("GUID"), "GUID");
+    assert_eq!(a.size_of("GUID"), Some(16));
+}
+
+#[test]
+fn archive_layouts_match_windows_llp64() {
+    let x64 = embedded_archive("win32", Arch::X64).unwrap();
+    assert_eq!(x64.size_of("UNICODE_STRING"), Some(16));
+    assert_eq!(archive_offset(&x64, "UNICODE_STRING", "Buffer"), Some(8));
+    assert_eq!(archive_offset(&x64, "TEB", "ProcessEnvironmentBlock"), Some(0x60));
+    assert_eq!(archive_offset(&x64, "PEB", "ProcessHeap"), Some(0x30));
+    assert_eq!(archive_offset(&x64, "PEB", "Ldr"), Some(0x18));
+    assert_eq!(archive_offset(&x64, "PEB", "ImageBaseAddress"), Some(0x10));
+    assert_eq!(archive_offset(&x64, "PEB", "CSDVersion"), Some(0x2d8));
+    assert_eq!(archive_offset(&x64, "LDR_DATA_TABLE_ENTRY", "DllBase"), Some(0x30));
+    assert_eq!(archive_offset(&x64, "LDR_DATA_TABLE_ENTRY", "FullDllName"), Some(0x48));
+    assert_eq!(x64.size_of("IO_STATUS_BLOCK"), Some(16));
+    assert_eq!(x64.size_of("OBJECT_ATTRIBUTES"), Some(0x30));
+    assert_eq!(x64.size_of("OVERLAPPED"), Some(0x20));
+    assert_eq!(x64.size_of("WIN32_FIND_DATAW"), Some(0x250));
+    assert_eq!(x64.size_of("MEMORY_BASIC_INFORMATION"), Some(0x30));
+    assert_eq!(x64.size_of("PROCESS_INFORMATION"), Some(0x18));
+    assert_eq!(x64.size_of("SYSTEM_INFO"), Some(0x30));
+    assert_eq!(x64.size_of("EXCEPTION_RECORD"), Some(0x98));
+    assert_eq!(x64.size_of("RTL_CRITICAL_SECTION"), Some(0x28));
+    assert_eq!(x64.size_of("LARGE_INTEGER"), Some(8));
+    assert_eq!(x64.size_of("FILETIME"), Some(8));
+
+    let x86 = embedded_archive("win32", Arch::X86).unwrap();
+    assert_eq!(x86.size_of("UNICODE_STRING"), Some(8));
+    assert_eq!(archive_offset(&x86, "UNICODE_STRING", "Buffer"), Some(4));
+    assert_eq!(archive_offset(&x86, "TEB", "ProcessEnvironmentBlock"), Some(0x30));
+    assert_eq!(archive_offset(&x86, "PEB", "ProcessHeap"), Some(0x18));
+    assert_eq!(archive_offset(&x86, "PEB", "Ldr"), Some(0x0c));
+    assert_eq!(x86.size_of("IO_STATUS_BLOCK"), Some(8));
+    assert_eq!(x86.size_of("OVERLAPPED"), Some(20));
+    assert_eq!(x86.size_of("MEMORY_BASIC_INFORMATION"), Some(28));
+    assert_eq!(x86.size_of("PROCESS_INFORMATION"), Some(16));
+    assert_eq!(x86.size_of("SYSTEM_INFO"), Some(36));
+    assert_eq!(x86.size_of("LIST_ENTRY"), Some(8));
+    assert_eq!(x86.size_of("SIZE_T"), Some(4));
+    assert_eq!(x86.size_of("LONG"), Some(4), "Windows LLP64 keeps long at 32 bits");
+}
+
+#[test]
+fn archive_long_is_32_bit_on_both_arches() {
+    for arch in [Arch::X64, Arch::X86] {
+        let crt = embedded_archive("crt", arch).unwrap();
+        assert_eq!(crt.size_of("long"), Some(4), "{arch:?}");
+        assert_eq!(crt.size_of("timeval"), Some(8), "{arch:?}");
+        assert_eq!(archive_offset(&crt, "timeval", "tv_usec"), Some(4), "{arch:?}");
+        assert_eq!(crt.size_of("div_t"), Some(8));
+        assert_eq!(crt.size_of("ldiv_t"), Some(8));
+        assert_eq!(crt.size_of("lldiv_t"), Some(16));
+        assert_eq!(crt.size_of("tm"), Some(36));
+    }
+}
+
+#[test]
+fn archive_pointee_aggregate_follows_typedefs() {
+    let a = embedded_archive("win32", Arch::X64).unwrap();
+    let us = a.pointee_aggregate("PUNICODE_STRING").expect("PUNICODE_STRING");
+    assert_eq!(us.name, "UNICODE_STRING");
+    assert!(a.pointee_aggregate("HANDLE").is_none());
+    assert!(a.pointee_aggregate("DWORD").is_none());
+    let peb = a.pointee_aggregate("PEB *").expect("PEB *");
+    assert_eq!(peb.name, "PEB");
+}
+
+#[test]
+fn archive_function_lookup_handles_decorations_and_api_sets() {
+    let set = TypeArchiveSet::embedded(Arch::X64).unwrap();
+    let a = set.archive("win32").expect("win32 archive");
+    let f = a.function("kernel32", "CreateFileW").expect("CreateFileW");
+    assert_eq!(a.render(&f.ret), "HANDLE");
+    assert_eq!(set.render(&f.ret).as_deref(), Some("HANDLE"));
+    assert_eq!(f.params.len(), 7);
+    assert_eq!(f.params[0].ty, "LPCWSTR");
+    assert!(!f.varargs);
+    let decorated = a.function("KERNEL32.dll", "_CreateFileW@28").expect("decorated");
+    assert_eq!(decorated.params.len(), 7);
+    let api_set = set
+        .function("api-ms-win-core-file-l1-1-0.dll", "CreateFileW")
+        .or_else(|| set.function_any_module("CreateFileW"))
+        .expect("api set fallback");
+    assert_eq!(api_set.params.len(), 7);
+    let memcpy = set.function("ucrtbase", "memcpy").expect("memcpy");
+    assert_eq!(memcpy.params.len(), 3);
+    assert_eq!(memcpy.cc, "cdecl");
+    let mb = set.function("user32", "MessageBoxW").expect("MessageBoxW");
+    assert_eq!(mb.params.len(), 4);
+    assert_eq!(set.render(&mb.ret).as_deref(), Some("int"));
+    assert!(set.function("kernel32", "definitely_not_an_api").is_none());
+    assert_eq!(normalize_symbol("__imp_GetProcAddress"), "GetProcAddress");
+    assert_eq!(normalize_symbol("_malloc@4"), "malloc");
+}
+
+#[test]
+fn archive_rejects_malformed_documents() {
+    let bad_schema = r#"{"schema": 99, "typedefs": {"A": "int"}}"#;
+    assert!(parse_archive("t", Arch::X64, &[bad_schema]).is_err());
+
+    let cycle = r#"{"schema": 1, "structs": {"A": {"fields": [{"name": "b", "type": "B"}]},
+        "B": {"fields": [{"name": "a", "type": "A"}]}}}"#;
+    let err = parse_archive("t", Arch::X64, &[cycle]).unwrap_err();
+    assert!(err.contains("cycle"), "{err}");
+
+    let self_alias = r#"{"schema": 1, "typedefs": {"A": "A"}}"#;
+    assert!(parse_archive("t", Arch::X64, &[self_alias]).is_err());
+
+    let overlap = r#"{"schema": 1, "structs": {"S": {"fields": [
+        {"name": "a", "type": "int", "offset": 0},
+        {"name": "b", "type": "int", "offset": 2}]}}}"#;
+    assert!(parse_archive("t", Arch::X64, &[overlap]).is_err());
+
+    let beyond = r#"{"schema": 1, "structs": {"S": {"size": 4, "fields": [
+        {"name": "a", "type": "long long", "offset": 0}]}}}"#;
+    assert!(parse_archive("t", Arch::X64, &[beyond]).is_err());
+
+    let bad_bits = r#"{"schema": 1, "structs": {"S": {"fields": [
+        {"name": "a", "type": "unsigned char", "bit_width": 12}]}}}"#;
+    assert!(parse_archive("t", Arch::X64, &[bad_bits]).is_err());
+
+    let broken = "{ not json";
+    assert!(parse_archive("t", Arch::X64, &[broken]).is_err());
+}
+
+#[test]
+fn archive_parses_c_type_expressions() {
+    assert_eq!(parse_type_expr("const wchar_t *"), TypeRef::Pointer(Box::new(TypeRef::named("wchar_t"))));
+    assert_eq!(
+        parse_type_expr("int * *"),
+        TypeRef::Pointer(Box::new(TypeRef::Pointer(Box::new(TypeRef::named("int")))))
+    );
+    assert_eq!(
+        parse_type_expr("unsigned int[4]"),
+        TypeRef::Array(Box::new(TypeRef::named("unsigned int")), 4)
+    );
+    assert_eq!(
+        parse_type_expr("const void *"),
+        TypeRef::Pointer(Box::new(TypeRef::named("void")))
+    );
+    assert_eq!(parse_type_expr("void (__stdcall *)(void)"), TypeRef::named("void *"));
+    assert_eq!(parse_type_expr(""), TypeRef::named("void"));
+}
+
+#[test]
+fn archive_handles_unions_bitfields_arrays_and_forward_declarations() {
+    let doc = r#"{
+      "schema": 1,
+      "typedefs": { "PNode": "Node *" },
+      "unions": { "U": { "fields": [
+        { "name": "i", "type": "int" },
+        { "name": "b", "type": "unsigned char", "offset": 0 } ] } },
+      "structs": {
+        "Node": { "fields": [
+          { "name": "next", "type": "Node *", "offset": 0 },
+          { "name": "low", "type": "unsigned int", "offset": 8, "bit_offset": 0, "bit_width": 3 },
+          { "name": "high", "type": "unsigned int", "offset": 8, "bit_offset": 3, "bit_width": 5 },
+          { "name": "arr", "type": "unsigned short[3]", "offset": 12 },
+          { "name": "u", "type": "U", "offset": 20 } ] }
+      }
+    }"#;
+    let a = parse_archive("t", Arch::X64, &[doc]).unwrap();
+    assert!(a.unknown_types().is_empty(), "{:?}", a.unknown_types());
+    assert_eq!(a.size_of("Node"), Some(24));
+    assert_eq!(a.size_of("U"), Some(4));
+    assert_eq!(archive_offset(&a, "Node", "next"), Some(0));
+    assert_eq!(archive_offset(&a, "Node", "arr"), Some(12));
+    assert_eq!(a.size_of("Node *"), Some(8));
+    assert_eq!(a.size_of("unsigned short[3]"), Some(6));
+    assert!(a.pointee_aggregate("PNode").is_some());
+    let low = a.get("Node").unwrap().fields()[0].clone();
+    assert_eq!(low.name, "next");
+    let bit = a.get("Node").unwrap().fields()[1].clone();
+    assert_eq!(bit.name, "low");
+    assert_eq!(bit.bit_offset, Some(0));
+    assert_eq!(bit.bit_width, Some(3));
+    let high = a.get("Node").unwrap().fields()[2].clone();
+    assert_eq!(high.offset, 8);
+    assert_eq!(high.bit_offset, Some(3));
+}
+
+#[test]
+fn archive_materialises_into_the_type_manager() {
+    let mut m = DataTypeManager::new();
+    let added = m.seed_archive("win32").unwrap();
+    assert!(added > 100, "added {added}");
+    assert_eq!(m.seed_archive("win32").unwrap(), 0, "seeding must be idempotent");
+    let us = m.find_by_name("UNICODE_STRING").expect("UNICODE_STRING");
+    assert_eq!(m.size_of(us), Some(16));
+    let peb = m.find_by_name("PEB").expect("PEB");
+    assert_eq!(m.size_of(peb), Some(0x2e8));
+    let lpcw = m.find_by_name("LPCWSTR").expect("LPCWSTR");
+    assert_eq!(m.size_of(lpcw), Some(8));
+    let decl = m.to_c_decl(us, 0);
+    assert!(decl.contains("Length"));
+    assert!(decl.contains("Buffer"));
+
+    let mut m32 = DataTypeManager::new();
+    m32.set_arch("x86");
+    m32.seed_archive("win32").unwrap();
+    let us32 = m32.find_by_name("UNICODE_STRING").expect("UNICODE_STRING");
+    assert_eq!(m32.size_of(us32), Some(8));
+    let id = m32.find_by_name("IO_STATUS_BLOCK").expect("IO_STATUS_BLOCK");
+    assert_eq!(m32.size_of(id), Some(8));
 }

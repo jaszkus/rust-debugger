@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "archive": "crt",
+  "version": "ucrt-10.0.26100-public",
+  "source": "hand-curated from the public C standard library and Microsoft UCRT documentation",
+  "license": "Apache-2.0",
+  "typedefs": {
+    "size_t": "uintptr_t",
+    "ssize_t": "intptr_t",
+    "ptrdiff_t": "intptr_t",
+    "int8_t": "char",
+    "uint8_t": "unsigned char",
+    "int16_t": "short",
+    "uint16_t": "unsigned short",
+    "int32_t": "int",
+    "uint32_t": "unsigned int",
+    "int64_t": "long long",
+    "uint64_t": "unsigned long long",
+    "intmax_t": "long long",
+    "uintmax_t": "unsigned long long",
+    "time_t": "long long",
+    "clock_t": "int",
+    "errno_t": "int",
+    "sig_atomic_t": "int",
+    "va_list": "char *",
+    "fpos_t": "long long",
+    "off_t": "int",
+    "wint_t": "unsigned short",
+    "wctype_t": "unsigned short",
+    "imaxdiv_t": "lldiv_t"
+  },
+  "structs": {
+    "mbstate_t": {
+      "fields": [
+        { "name": "_Wchar", "type": "unsigned int" },
+        { "name": "_Byte", "type": "unsigned short" },
+        { "name": "_State", "type": "unsigned short" }
+      ]
+    },
+    "FILE": {
+      "fields": [
+        { "name": "_ptr", "type": "char *" },
+        { "name": "_cnt", "type": "int" },
+        { "name": "_base", "type": "char *" },
+        { "name": "_flag", "type": "int" },
+        { "name": "_file", "type": "int" },
+        { "name": "_charbuf", "type": "int" },
+        { "name": "_bufsiz", "type": "int" },
+        { "name": "_tmpfname", "type": "char *" }
+      ]
+    },
+    "tm": {
+      "fields": [
+        { "name": "tm_sec", "type": "int" },
+        { "name": "tm_min", "type": "int" },
+        { "name": "tm_hour", "type": "int" },
+        { "name": "tm_mday", "type": "int" },
+        { "name": "tm_mon", "type": "int" },
+        { "name": "tm_year", "type": "int" },
+        { "name": "tm_wday", "type": "int" },
+        { "name": "tm_yday", "type": "int" },
+        { "name": "tm_isdst", "type": "int" }
+      ]
+    },
+    "div_t": {
+      "fields": [
+        { "name": "quot", "type": "int" },
+        { "name": "rem", "type": "int" }
+      ]
+    },
+    "ldiv_t": {
+      "fields": [
+        { "name": "quot", "type": "long" },
+        { "name": "rem", "type": "long" }
+      ]
+    },
+    "lldiv_t": {
+      "fields": [
+        { "name": "quot", "type": "long long" },
+        { "name": "rem", "type": "long long" }
+      ]
+    },
+    "timeval": {
+      "fields": [
+        { "name": "tv_sec", "type": "long" },
+        { "name": "tv_usec", "type": "long" }
+      ]
+    },
+    "timespec": {
+      "fields": [
+        { "name": "tv_sec", "type": "time_t" },
+        { "name": "tv_nsec", "type": "long" }
+      ]
+    }
+  }
+}

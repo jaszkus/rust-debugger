@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "archive": "crt",
+  "version": "ucrt-10.0.26100-public",
+  "source": "hand-curated from the public C standard library and Microsoft UCRT documentation",
+  "license": "Apache-2.0",
+  "structs": {}
+}

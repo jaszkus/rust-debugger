@@ -1,0 +1,560 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "module": "ntdll",
+  "source": "hand-curated from public Microsoft Windows API documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "RtlInitUnicodeString": {
+      "ret": "void",
+      "params": [
+        { "name": "DestinationString", "type": "PUNICODE_STRING" },
+        { "name": "SourceString", "type": "PCWSTR" }
+      ]
+    },
+    "RtlInitAnsiString": {
+      "ret": "void",
+      "params": [
+        { "name": "DestinationString", "type": "PANSI_STRING" },
+        { "name": "SourceString", "type": "PCSTR" }
+      ]
+    },
+    "RtlFreeUnicodeString": {
+      "ret": "void",
+      "params": [{ "name": "UnicodeString", "type": "PUNICODE_STRING" }]
+    },
+    "RtlCopyUnicodeString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "DestinationString", "type": "PUNICODE_STRING" },
+        { "name": "SourceString", "type": "PCUNICODE_STRING" }
+      ]
+    },
+    "RtlAppendUnicodeStringToString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "Destination", "type": "PUNICODE_STRING" },
+        { "name": "Source", "type": "PCUNICODE_STRING" }
+      ]
+    },
+    "RtlAppendUnicodeToString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "Destination", "type": "PUNICODE_STRING" },
+        { "name": "Source", "type": "PCWSTR" }
+      ]
+    },
+    "RtlEqualUnicodeString": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "String1", "type": "PCUNICODE_STRING" },
+        { "name": "String2", "type": "PCUNICODE_STRING" },
+        { "name": "CaseInSensitive", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlCompareUnicodeString": {
+      "ret": "LONG",
+      "params": [
+        { "name": "String1", "type": "PCUNICODE_STRING" },
+        { "name": "String2", "type": "PCUNICODE_STRING" },
+        { "name": "CaseInSensitive", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlCompareUnicodeStrings": {
+      "ret": "LONG",
+      "params": [
+        { "name": "String1", "type": "PCWCH" },
+        { "name": "String2", "type": "PCWCH" },
+        { "name": "String1Length", "type": "SIZE_T" },
+        { "name": "String2Length", "type": "SIZE_T" },
+        { "name": "CaseInSensitive", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlAnsiStringToUnicodeString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "DestinationString", "type": "PUNICODE_STRING" },
+        { "name": "SourceString", "type": "PANSI_STRING" },
+        { "name": "AllocateDestinationString", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlUnicodeStringToAnsiString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "DestinationString", "type": "PANSI_STRING" },
+        { "name": "SourceString", "type": "PCUNICODE_STRING" },
+        { "name": "AllocateDestinationString", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlOemStringToUnicodeString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "DestinationString", "type": "PUNICODE_STRING" },
+        { "name": "SourceString", "type": "PANSI_STRING" },
+        { "name": "AllocateDestinationString", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlUpcaseUnicodeString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "DestinationString", "type": "PUNICODE_STRING" },
+        { "name": "SourceString", "type": "PCUNICODE_STRING" },
+        { "name": "AllocateDestinationString", "type": "BOOLEAN" }
+      ]
+    },
+    "RtlUpcaseUnicodeChar": {
+      "ret": "WCHAR",
+      "params": [{ "name": "SourceCharacter", "type": "WCHAR" }]
+    },
+    "RtlDowncaseUnicodeChar": {
+      "ret": "WCHAR",
+      "params": [{ "name": "SourceCharacter", "type": "WCHAR" }]
+    },
+    "RtlDosPathNameToNtPathName_U": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "DosName", "type": "PCWSTR" },
+        { "name": "NtName", "type": "PUNICODE_STRING" },
+        { "name": "NtFileNamePart", "type": "PWSTR *" },
+        { "name": "DirectoryInfo", "type": "void *" }
+      ]
+    },
+    "RtlFreeHeap": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "HeapHandle", "type": "PVOID" },
+        { "name": "Flags", "type": "ULONG" },
+        { "name": "BaseAddress", "type": "PVOID" }
+      ]
+    },
+    "RtlAllocateHeap": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "HeapHandle", "type": "PVOID" },
+        { "name": "Flags", "type": "ULONG" },
+        { "name": "Size", "type": "SIZE_T" }
+      ]
+    },
+    "RtlReAllocateHeap": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "HeapHandle", "type": "PVOID" },
+        { "name": "Flags", "type": "ULONG" },
+        { "name": "BaseAddress", "type": "PVOID" },
+        { "name": "Size", "type": "SIZE_T" }
+      ]
+    },
+    "RtlSizeHeap": {
+      "ret": "SIZE_T",
+      "params": [
+        { "name": "HeapHandle", "type": "PVOID" },
+        { "name": "Flags", "type": "ULONG" },
+        { "name": "BaseAddress", "type": "PVOID" }
+      ]
+    },
+    "RtlZeroMemory": {
+      "ret": "void",
+      "params": [
+        { "name": "Destination", "type": "void *" },
+        { "name": "Length", "type": "SIZE_T" }
+      ]
+    },
+    "RtlFillMemory": {
+      "ret": "void",
+      "params": [
+        { "name": "Destination", "type": "void *" },
+        { "name": "Length", "type": "SIZE_T" },
+        { "name": "Fill", "type": "unsigned char" }
+      ]
+    },
+    "RtlMoveMemory": {
+      "ret": "void",
+      "params": [
+        { "name": "Destination", "type": "void *" },
+        { "name": "Source", "type": "const void *" },
+        { "name": "Length", "type": "SIZE_T" }
+      ]
+    },
+    "RtlCopyMemory": {
+      "ret": "void",
+      "params": [
+        { "name": "Destination", "type": "void *" },
+        { "name": "Source", "type": "const void *" },
+        { "name": "Length", "type": "SIZE_T" }
+      ]
+    },
+    "RtlCompareMemory": {
+      "ret": "SIZE_T",
+      "params": [
+        { "name": "Source1", "type": "const void *" },
+        { "name": "Source2", "type": "const void *" },
+        { "name": "Length", "type": "SIZE_T" }
+      ]
+    },
+    "RtlSetLastWin32Error": {
+      "ret": "void",
+      "params": [{ "name": "dwErrCode", "type": "ULONG" }]
+    },
+    "RtlGetLastWin32Error": { "ret": "ULONG", "params": [] },
+    "RtlNtStatusToDosError": {
+      "ret": "ULONG",
+      "params": [{ "name": "Status", "type": "NTSTATUS" }]
+    },
+    "RtlNtStatusToDosErrorNoTeb": {
+      "ret": "ULONG",
+      "params": [{ "name": "Status", "type": "NTSTATUS" }]
+    },
+    "NtClose": { "ret": "NTSTATUS", "params": [{ "name": "Handle", "type": "HANDLE" }] },
+    "ZwClose": { "ret": "NTSTATUS", "params": [{ "name": "Handle", "type": "HANDLE" }] },
+    "NtQueryInformationProcess": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "ProcessInformationClass", "type": "int" },
+        { "name": "ProcessInformation", "type": "PVOID" },
+        { "name": "ProcessInformationLength", "type": "ULONG" },
+        { "name": "ReturnLength", "type": "PULONG" }
+      ]
+    },
+    "NtSetInformationProcess": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "ProcessInformationClass", "type": "int" },
+        { "name": "ProcessInformation", "type": "PVOID" },
+        { "name": "ProcessInformationLength", "type": "ULONG" }
+      ]
+    },
+    "NtQuerySystemInformation": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "SystemInformationClass", "type": "int" },
+        { "name": "SystemInformation", "type": "PVOID" },
+        { "name": "SystemInformationLength", "type": "ULONG" },
+        { "name": "ReturnLength", "type": "PULONG" }
+      ]
+    },
+    "NtQueryInformationThread": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ThreadHandle", "type": "HANDLE" },
+        { "name": "ThreadInformationClass", "type": "int" },
+        { "name": "ThreadInformation", "type": "PVOID" },
+        { "name": "ThreadInformationLength", "type": "ULONG" },
+        { "name": "ReturnLength", "type": "PULONG" }
+      ]
+    },
+    "NtQueryInformationFile": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "FileHandle", "type": "HANDLE" },
+        { "name": "IoStatusBlock", "type": "PIO_STATUS_BLOCK" },
+        { "name": "FileInformation", "type": "PVOID" },
+        { "name": "Length", "type": "ULONG" },
+        { "name": "FileInformationClass", "type": "int" }
+      ]
+    },
+    "NtQueryObject": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "Handle", "type": "HANDLE" },
+        { "name": "ObjectInformationClass", "type": "int" },
+        { "name": "ObjectInformation", "type": "PVOID" },
+        { "name": "ObjectInformationLength", "type": "ULONG" },
+        { "name": "ReturnLength", "type": "PULONG" }
+      ]
+    },
+    "NtQueryValueKey": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "KeyHandle", "type": "HANDLE" },
+        { "name": "ValueName", "type": "PUNICODE_STRING" },
+        { "name": "KeyValueInformationClass", "type": "int" },
+        { "name": "KeyValueInformation", "type": "PVOID" },
+        { "name": "Length", "type": "ULONG" },
+        { "name": "ResultLength", "type": "PULONG" }
+      ]
+    },
+    "NtOpenKey": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "KeyHandle", "type": "PHANDLE" },
+        { "name": "DesiredAccess", "type": "ACCESS_MASK" },
+        { "name": "ObjectAttributes", "type": "POBJECT_ATTRIBUTES" }
+      ]
+    },
+    "NtEnumerateKey": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "KeyHandle", "type": "HANDLE" },
+        { "name": "Index", "type": "ULONG" },
+        { "name": "KeyInformationClass", "type": "int" },
+        { "name": "KeyInformation", "type": "PVOID" },
+        { "name": "Length", "type": "ULONG" },
+        { "name": "ResultLength", "type": "PULONG" }
+      ]
+    },
+    "NtCreateFile": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "FileHandle", "type": "PHANDLE" },
+        { "name": "DesiredAccess", "type": "ACCESS_MASK" },
+        { "name": "ObjectAttributes", "type": "POBJECT_ATTRIBUTES" },
+        { "name": "IoStatusBlock", "type": "PIO_STATUS_BLOCK" },
+        { "name": "AllocationSize", "type": "PLARGE_INTEGER" },
+        { "name": "FileAttributes", "type": "ULONG" },
+        { "name": "ShareAccess", "type": "ULONG" },
+        { "name": "CreateDisposition", "type": "ULONG" },
+        { "name": "CreateOptions", "type": "ULONG" },
+        { "name": "EaBuffer", "type": "PVOID" },
+        { "name": "EaLength", "type": "ULONG" }
+      ]
+    },
+    "NtReadFile": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "FileHandle", "type": "HANDLE" },
+        { "name": "Event", "type": "HANDLE" },
+        { "name": "ApcRoutine", "type": "PVOID" },
+        { "name": "ApcContext", "type": "PVOID" },
+        { "name": "IoStatusBlock", "type": "PIO_STATUS_BLOCK" },
+        { "name": "Buffer", "type": "PVOID" },
+        { "name": "Length", "type": "ULONG" },
+        { "name": "ByteOffset", "type": "PLARGE_INTEGER" },
+        { "name": "Key", "type": "PULONG" }
+      ]
+    },
+    "NtWriteFile": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "FileHandle", "type": "HANDLE" },
+        { "name": "Event", "type": "HANDLE" },
+        { "name": "ApcRoutine", "type": "PVOID" },
+        { "name": "ApcContext", "type": "PVOID" },
+        { "name": "IoStatusBlock", "type": "PIO_STATUS_BLOCK" },
+        { "name": "Buffer", "type": "const void *" },
+        { "name": "Length", "type": "ULONG" },
+        { "name": "ByteOffset", "type": "PLARGE_INTEGER" },
+        { "name": "Key", "type": "PULONG" }
+      ]
+    },
+    "NtWaitForSingleObject": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "Handle", "type": "HANDLE" },
+        { "name": "Alertable", "type": "BOOLEAN" },
+        { "name": "Timeout", "type": "PLARGE_INTEGER" }
+      ]
+    },
+    "NtAllocateVirtualMemory": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID *" },
+        { "name": "ZeroBits", "type": "uintptr_t" },
+        { "name": "RegionSize", "type": "PSIZE_T" },
+        { "name": "AllocationType", "type": "ULONG" },
+        { "name": "Protect", "type": "ULONG" }
+      ]
+    },
+    "NtFreeVirtualMemory": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID *" },
+        { "name": "RegionSize", "type": "PSIZE_T" },
+        { "name": "FreeType", "type": "ULONG" }
+      ]
+    },
+    "NtProtectVirtualMemory": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID *" },
+        { "name": "RegionSize", "type": "PSIZE_T" },
+        { "name": "NewProtect", "type": "ULONG" },
+        { "name": "OldProtect", "type": "PULONG" }
+      ]
+    },
+    "NtQueryVirtualMemory": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID" },
+        { "name": "MemoryInformationClass", "type": "int" },
+        { "name": "MemoryInformation", "type": "PVOID" },
+        { "name": "MemoryInformationLength", "type": "SIZE_T" },
+        { "name": "ReturnLength", "type": "PSIZE_T" }
+      ]
+    },
+    "NtCreateEvent": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "EventHandle", "type": "PHANDLE" },
+        { "name": "DesiredAccess", "type": "ACCESS_MASK" },
+        { "name": "ObjectAttributes", "type": "POBJECT_ATTRIBUTES" },
+        { "name": "EventType", "type": "int" },
+        { "name": "InitialState", "type": "BOOLEAN" }
+      ]
+    },
+    "NtSetEvent": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "EventHandle", "type": "HANDLE" },
+        { "name": "PreviousState", "type": "PLONG" }
+      ]
+    },
+    "RtlGetVersion": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "lpVersionInformation", "type": "PVOID" }]
+    },
+    "RtlCaptureContext": { "ret": "void", "params": [{ "name": "ContextRecord", "type": "PVOID" }] },
+    "RtlCaptureStackBackTrace": {
+      "ret": "USHORT",
+      "params": [
+        { "name": "FramesToSkip", "type": "ULONG" },
+        { "name": "FramesToCapture", "type": "ULONG" },
+        { "name": "BackTrace", "type": "PVOID *" },
+        { "name": "BackTraceHash", "type": "PULONG" }
+      ]
+    },
+    "RtlLookupFunctionEntry": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "ControlPc", "type": "uintptr_t" },
+        { "name": "ImageBase", "type": "uintptr_t *" },
+        { "name": "HistoryTable", "type": "PVOID" }
+      ]
+    },
+    "RtlVirtualUnwind": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "HandlerType", "type": "ULONG" },
+        { "name": "ImageBase", "type": "uintptr_t" },
+        { "name": "ControlPc", "type": "uintptr_t" },
+        { "name": "FunctionEntry", "type": "PVOID" },
+        { "name": "ContextRecord", "type": "PVOID" },
+        { "name": "HandlerData", "type": "PVOID *" },
+        { "name": "EstablisherFrame", "type": "uintptr_t *" },
+        { "name": "ContextPointers", "type": "PVOID" }
+      ]
+    },
+    "RtlPcToFileHeader": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "PcValue", "type": "PVOID" },
+        { "name": "BaseOfImage", "type": "PVOID *" }
+      ]
+    },
+    "RtlImageNtHeader": {
+      "ret": "PVOID",
+      "params": [{ "name": "ModuleAddress", "type": "PVOID" }]
+    },
+    "RtlImageDirectoryEntryToData": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "Base", "type": "PVOID" },
+        { "name": "MappedAsImage", "type": "BOOLEAN" },
+        { "name": "DirectoryEntry", "type": "unsigned short" },
+        { "name": "Size", "type": "PULONG" }
+      ]
+    },
+    "RtlInitializeCriticalSection": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "CriticalSection", "type": "PRTL_CRITICAL_SECTION" }]
+    },
+    "RtlEnterCriticalSection": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "CriticalSection", "type": "PRTL_CRITICAL_SECTION" }]
+    },
+    "RtlLeaveCriticalSection": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "CriticalSection", "type": "PRTL_CRITICAL_SECTION" }]
+    },
+    "RtlDeleteCriticalSection": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "CriticalSection", "type": "PRTL_CRITICAL_SECTION" }]
+    },
+    "RtlRaiseException": {
+      "ret": "void",
+      "params": [{ "name": "ExceptionRecord", "type": "PEXCEPTION_RECORD" }]
+    },
+    "RtlUnwind": {
+      "ret": "void",
+      "params": [
+        { "name": "TargetFrame", "type": "PVOID" },
+        { "name": "TargetIp", "type": "PVOID" },
+        { "name": "ExceptionRecord", "type": "PEXCEPTION_RECORD" },
+        { "name": "ReturnValue", "type": "PVOID" }
+      ]
+    },
+    "RtlAddVectoredExceptionHandler": {
+      "ret": "PVOID",
+      "params": [
+        { "name": "First", "type": "ULONG" },
+        { "name": "Handler", "type": "PVOID" }
+      ]
+    },
+    "RtlRemoveVectoredExceptionHandler": {
+      "ret": "ULONG",
+      "params": [{ "name": "Handle", "type": "PVOID" }]
+    },
+    "RtlGetNtVersionNumbers": {
+      "ret": "void",
+      "params": [
+        { "name": "NtMajorVersion", "type": "PULONG" },
+        { "name": "NtMinorVersion", "type": "PULONG" },
+        { "name": "NtBuildNumber", "type": "PULONG" }
+      ]
+    },
+    "RtlDllShutdownInProgress": { "ret": "BOOLEAN", "params": [] },
+    "RtlIntegerToUnicodeString": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "Value", "type": "ULONG" },
+        { "name": "Base", "type": "ULONG" },
+        { "name": "String", "type": "PUNICODE_STRING" }
+      ]
+    },
+    "RtlUnicodeStringToInteger": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "String", "type": "PCUNICODE_STRING" },
+        { "name": "Base", "type": "ULONG" },
+        { "name": "Value", "type": "PULONG" }
+      ]
+    },
+    "RtlCharToInteger": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "String", "type": "PCSTR" },
+        { "name": "Base", "type": "ULONG" },
+        { "name": "Value", "type": "PULONG" }
+      ]
+    },
+    "RtlIsTextUnicode": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "Buffer", "type": "const void *" },
+        { "name": "Size", "type": "int" },
+        { "name": "Result", "type": "PULONG" }
+      ]
+    },
+    "RtlAcquireSRWLockExclusive": {
+      "ret": "void",
+      "params": [{ "name": "SRWLock", "type": "PSRWLOCK" }]
+    },
+    "RtlReleaseSRWLockExclusive": {
+      "ret": "void",
+      "params": [{ "name": "SRWLock", "type": "PSRWLOCK" }]
+    },
+    "SystemFunction036": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "RandomBuffer", "type": "PVOID" },
+        { "name": "RandomBufferLength", "type": "ULONG" }
+      ]
+    }
+  }
+}

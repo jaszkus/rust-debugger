@@ -4,6 +4,10 @@ Bundled analysis data. Both files are compiled into the binary
 (`include_str!` / `include_bytes!` in `src/parser/strings/string_model.rs`),
 so they must stay in the repository for the crate to build.
 
+`types/` holds the versioned Win32/CRT/libc type archive: original,
+hand-curated type and signature data compiled in with `include_str!`. See
+`types/README.md` for the schema, the LLP64 layout rules and provenance.
+
 ## StringModel.sng
 
 Character n-gram language model used to classify extracted strings as

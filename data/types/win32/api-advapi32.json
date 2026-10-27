@@ -1,0 +1,230 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "module": "advapi32",
+  "source": "hand-curated from public Microsoft Win32 API documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "RegCloseKey": { "ret": "LONG", "params": [{ "name": "hKey", "type": "HKEY" }] },
+    "RegOpenKeyExW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpSubKey", "type": "LPCWSTR" },
+        { "name": "ulOptions", "type": "DWORD" },
+        { "name": "samDesired", "type": "REGSAM" },
+        { "name": "phkResult", "type": "HKEY *" }
+      ]
+    },
+    "RegOpenKeyW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpSubKey", "type": "LPCWSTR" },
+        { "name": "phkResult", "type": "HKEY *" }
+      ]
+    },
+    "RegCreateKeyExW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpSubKey", "type": "LPCWSTR" },
+        { "name": "Reserved", "type": "DWORD" },
+        { "name": "lpClass", "type": "LPWSTR" },
+        { "name": "dwOptions", "type": "DWORD" },
+        { "name": "samDesired", "type": "REGSAM" },
+        { "name": "lpSecurityAttributes", "type": "LPSECURITY_ATTRIBUTES" },
+        { "name": "phkResult", "type": "HKEY *" },
+        { "name": "lpdwDisposition", "type": "LPDWORD" }
+      ]
+    },
+    "RegQueryValueExW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpValueName", "type": "LPCWSTR" },
+        { "name": "lpReserved", "type": "LPDWORD" },
+        { "name": "lpType", "type": "LPDWORD" },
+        { "name": "lpData", "type": "LPBYTE" },
+        { "name": "lpcbData", "type": "LPDWORD" }
+      ]
+    },
+    "RegSetValueExW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpValueName", "type": "LPCWSTR" },
+        { "name": "Reserved", "type": "DWORD" },
+        { "name": "dwType", "type": "DWORD" },
+        { "name": "lpData", "type": "const BYTE *" },
+        { "name": "cbData", "type": "DWORD" }
+      ]
+    },
+    "RegDeleteValueW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpValueName", "type": "LPCWSTR" }
+      ]
+    },
+    "RegDeleteKeyW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpSubKey", "type": "LPCWSTR" }
+      ]
+    },
+    "RegEnumKeyExW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "dwIndex", "type": "DWORD" },
+        { "name": "lpName", "type": "LPWSTR" },
+        { "name": "lpcchName", "type": "LPDWORD" },
+        { "name": "lpReserved", "type": "LPDWORD" },
+        { "name": "lpClass", "type": "LPWSTR" },
+        { "name": "lpcchClass", "type": "LPDWORD" },
+        { "name": "lpftLastWriteTime", "type": "LPFILETIME" }
+      ]
+    },
+    "RegEnumValueW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "dwIndex", "type": "DWORD" },
+        { "name": "lpValueName", "type": "LPWSTR" },
+        { "name": "lpcchValueName", "type": "LPDWORD" },
+        { "name": "lpReserved", "type": "LPDWORD" },
+        { "name": "lpType", "type": "LPDWORD" },
+        { "name": "lpData", "type": "LPBYTE" },
+        { "name": "lpcbData", "type": "LPDWORD" }
+      ]
+    },
+    "RegQueryInfoKeyW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpClass", "type": "LPWSTR" },
+        { "name": "lpcchClass", "type": "LPDWORD" },
+        { "name": "lpReserved", "type": "LPDWORD" },
+        { "name": "lpcSubKeys", "type": "LPDWORD" },
+        { "name": "lpcbMaxSubKeyLen", "type": "LPDWORD" },
+        { "name": "lpcbMaxClassLen", "type": "LPDWORD" },
+        { "name": "lpcValues", "type": "LPDWORD" },
+        { "name": "lpcbMaxValueNameLen", "type": "LPDWORD" },
+        { "name": "lpcbMaxValueLen", "type": "LPDWORD" },
+        { "name": "lpcbSecurityDescriptor", "type": "LPDWORD" },
+        { "name": "lpftLastWriteTime", "type": "LPFILETIME" }
+      ]
+    },
+    "OpenProcessToken": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "DesiredAccess", "type": "DWORD" },
+        { "name": "TokenHandle", "type": "PHANDLE" }
+      ]
+    },
+    "OpenThreadToken": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "ThreadHandle", "type": "HANDLE" },
+        { "name": "DesiredAccess", "type": "DWORD" },
+        { "name": "OpenAsSelf", "type": "BOOL" },
+        { "name": "TokenHandle", "type": "PHANDLE" }
+      ]
+    },
+    "GetTokenInformation": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "TokenHandle", "type": "HANDLE" },
+        { "name": "TokenInformationClass", "type": "int" },
+        { "name": "TokenInformation", "type": "LPVOID" },
+        { "name": "TokenInformationLength", "type": "DWORD" },
+        { "name": "ReturnLength", "type": "LPDWORD" }
+      ]
+    },
+    "AdjustTokenPrivileges": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "TokenHandle", "type": "HANDLE" },
+        { "name": "DisableAllPrivileges", "type": "BOOL" },
+        { "name": "NewState", "type": "LPVOID" },
+        { "name": "BufferLength", "type": "DWORD" },
+        { "name": "PreviousState", "type": "LPVOID" },
+        { "name": "ReturnLength", "type": "LPDWORD" }
+      ]
+    },
+    "LookupPrivilegeValueW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "lpSystemName", "type": "LPCWSTR" },
+        { "name": "lpName", "type": "LPCWSTR" },
+        { "name": "lpLuid", "type": "LPVOID" }
+      ]
+    },
+    "AllocateAndInitializeSid": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "pIdentifierAuthority", "type": "const void *" },
+        { "name": "nSubAuthorityCount", "type": "unsigned char" },
+        { "name": "nSubAuthority0", "type": "DWORD" },
+        { "name": "nSubAuthority1", "type": "DWORD" },
+        { "name": "nSubAuthority2", "type": "DWORD" },
+        { "name": "nSubAuthority3", "type": "DWORD" },
+        { "name": "nSubAuthority4", "type": "DWORD" },
+        { "name": "nSubAuthority5", "type": "DWORD" },
+        { "name": "nSubAuthority6", "type": "DWORD" },
+        { "name": "nSubAuthority7", "type": "DWORD" },
+        { "name": "pSid", "type": "PSID *" }
+      ]
+    },
+    "FreeSid": { "ret": "PVOID", "params": [{ "name": "pSid", "type": "PSID" }] },
+    "GetLengthSid": { "ret": "DWORD", "params": [{ "name": "pSid", "type": "PSID" }] },
+    "InitializeSecurityDescriptor": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "pSecurityDescriptor", "type": "PSECURITY_DESCRIPTOR" },
+        { "name": "dwRevision", "type": "DWORD" }
+      ]
+    },
+    "SetSecurityDescriptorDacl": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "pSecurityDescriptor", "type": "PSECURITY_DESCRIPTOR" },
+        { "name": "bDaclPresent", "type": "BOOL" },
+        { "name": "pDacl", "type": "PACL" },
+        { "name": "bDaclDefaulted", "type": "BOOL" }
+      ]
+    },
+    "GetSecurityDescriptorLength": {
+      "ret": "DWORD",
+      "params": [{ "name": "pSecurityDescriptor", "type": "PSECURITY_DESCRIPTOR" }]
+    },
+    "CryptAcquireContextW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "phProv", "type": "uintptr_t *" },
+        { "name": "szContainer", "type": "LPCWSTR" },
+        { "name": "szProvider", "type": "LPCWSTR" },
+        { "name": "dwProvType", "type": "DWORD" },
+        { "name": "dwFlags", "type": "DWORD" }
+      ]
+    },
+    "CryptReleaseContext": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hProv", "type": "uintptr_t" },
+        { "name": "dwFlags", "type": "DWORD" }
+      ]
+    },
+    "SystemFunction036": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "RandomBuffer", "type": "PVOID" },
+        { "name": "RandomBufferLength", "type": "ULONG" }
+      ]
+    }
+  }
+}

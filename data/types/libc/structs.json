@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "archive": "libc",
+  "version": "posix-2024-public",
+  "source": "hand-curated from public POSIX / C library documentation",
+  "license": "Apache-2.0",
+  "structs": {}
+}

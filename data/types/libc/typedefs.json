@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "archive": "libc",
+  "version": "posix-2024-public",
+  "source": "hand-curated from public POSIX / C library documentation",
+  "license": "Apache-2.0",
+  "typedefs": {
+    "pid_t": "int",
+    "uid_t": "unsigned int",
+    "gid_t": "unsigned int",
+    "mode_t": "unsigned int",
+    "socklen_t": "unsigned int",
+    "sa_family_t": "unsigned short",
+    "in_addr_t": "unsigned int",
+    "in_port_t": "unsigned short",
+    "dev_t": "unsigned long long",
+    "ino_t": "unsigned long long",
+    "nlink_t": "unsigned long long",
+    "blksize_t": "long long",
+    "blkcnt_t": "long long",
+    "pthread_t": "unsigned long long",
+    "pthread_attr_t": "void *",
+    "pthread_mutex_t": "void *",
+    "sem_t": "void *",
+    "DIR": "void *"
+  },
+  "structs": {
+    "in_addr": {
+      "fields": [{ "name": "s_addr", "type": "unsigned int" }]
+    },
+    "sockaddr_in": {
+      "fields": [
+        { "name": "sin_family", "type": "unsigned short" },
+        { "name": "sin_port", "type": "unsigned short" },
+        { "name": "sin_addr", "type": "in_addr" },
+        { "name": "sin_zero", "type": "unsigned char[8]" }
+      ]
+    },
+    "in6_addr": {
+      "fields": [{ "name": "s6_addr", "type": "unsigned char[16]" }]
+    },
+    "sockaddr_in6": {
+      "fields": [
+        { "name": "sin6_family", "type": "unsigned short" },
+        { "name": "sin6_port", "type": "unsigned short" },
+        { "name": "sin6_flowinfo", "type": "unsigned int" },
+        { "name": "sin6_addr", "type": "in6_addr" },
+        { "name": "sin6_scope_id", "type": "unsigned int" },
+        { "name": "sin6_len", "type": "unsigned char" }
+      ]
+    },
+    "sockaddr_storage": {
+      "size": 128,
+      "fields": [
+        { "name": "ss_family", "type": "unsigned short" },
+        { "name": "__ss_padding", "type": "unsigned char[118]", "offset": 2 },
+        { "name": "__ss_align", "type": "unsigned long long", "offset": 120 }
+      ]
+    },
+    "pollfd": {
+      "fields": [
+        { "name": "fd", "type": "int" },
+        { "name": "events", "type": "short" },
+        { "name": "revents", "type": "short" }
+      ]
+    },
+    "stat": {
+      "size": 144,
+      "fields": [
+        { "name": "st_dev", "type": "unsigned long long", "offset": 0 },
+        { "name": "st_ino", "type": "unsigned long long", "offset": 8 },
+        { "name": "st_nlink", "type": "unsigned long long", "offset": 16 },
+        { "name": "st_mode", "type": "unsigned int", "offset": 24 },
+        { "name": "st_uid", "type": "unsigned int", "offset": 28 },
+        { "name": "st_gid", "type": "unsigned int", "offset": 32 },
+        { "name": "st_rdev", "type": "unsigned long long", "offset": 40 },
+        { "name": "st_size", "type": "long long", "offset": 48 },
+        { "name": "st_blksize", "type": "long long", "offset": 56 },
+        { "name": "st_blocks", "type": "long long", "offset": 64 },
+        { "name": "st_atime", "type": "long long", "offset": 72 },
+        { "name": "st_mtime", "type": "long long", "offset": 88 },
+        { "name": "st_ctime", "type": "long long", "offset": 104 }
+      ]
+    },
+    "timespec": {
+      "fields": [
+        { "name": "tv_sec", "type": "long long" },
+        { "name": "tv_nsec", "type": "long long" }
+      ]
+    },
+    "timeval": {
+      "fields": [
+        { "name": "tv_sec", "type": "long long" },
+        { "name": "tv_usec", "type": "long long" }
+      ]
+    }
+  }
+}
