@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "module": "ole32",
+  "source": "hand-curated from public Microsoft Windows API documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "CoTaskMemAlloc": {
+      "ret": "LPVOID",
+      "params": [{ "name": "cb", "type": "SIZE_T" }]
+    },
+    "CoTaskMemRealloc": {
+      "ret": "LPVOID",
+      "params": [
+        { "name": "pv", "type": "LPVOID" },
+        { "name": "cb", "type": "SIZE_T" }
+      ]
+    },
+    "CoTaskMemFree": {
+      "ret": "void",
+      "params": [{ "name": "pv", "type": "LPVOID" }]
+    },
+    "CoCreateGuid": {
+      "ret": "HRESULT",
+      "params": [{ "name": "pguid", "type": "GUID *" }]
+    },
+    "CoInitializeEx": {
+      "ret": "HRESULT",
+      "params": [
+        { "name": "pvReserved", "type": "LPVOID" },
+        { "name": "dwCoInit", "type": "DWORD" }
+      ]
+    },
+    "CoUninitialize": { "ret": "void", "params": [] },
+    "CoInitializeSecurity": {
+      "ret": "HRESULT",
+      "params": [
+        { "name": "pSecDesc", "type": "PSECURITY_DESCRIPTOR" },
+        { "name": "cAuthSvc", "type": "LONG" },
+        { "name": "asAuthSvc", "type": "LPVOID" },
+        { "name": "pReserved1", "type": "LPVOID" },
+        { "name": "dwAuthnLevel", "type": "DWORD" },
+        { "name": "dwImpLevel", "type": "DWORD" },
+        { "name": "pAuthList", "type": "LPVOID" },
+        { "name": "dwCapabilities", "type": "DWORD" },
+        { "name": "pReserved3", "type": "LPVOID" }
+      ]
+    }
+  }
+}

@@ -426,6 +426,143 @@
         { "name": "mbstr", "type": "const char *" },
         { "name": "count", "type": "size_t" }
       ]
+    },
+    "wcsnlen": {
+      "ret": "size_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const wchar_t *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "wcsrchr": {
+      "ret": "wchar_t *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const wchar_t *" },
+        { "name": "c", "type": "wchar_t" }
+      ]
+    },
+    "wcscpy_s": {
+      "ret": "errno_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "wchar_t *" },
+        { "name": "sizeOfBuffer", "type": "size_t" },
+        { "name": "source", "type": "const wchar_t *" }
+      ]
+    },
+    "wcsncpy_s": {
+      "ret": "errno_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "wchar_t *" },
+        { "name": "sizeOfBuffer", "type": "size_t" },
+        { "name": "source", "type": "const wchar_t *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "_wcsnicmp": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string1", "type": "const wchar_t *" },
+        { "name": "string2", "type": "const wchar_t *" },
+        { "name": "count", "type": "size_t" }
+      ]
+    },
+    "_wtol": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [{ "name": "string", "type": "const wchar_t *" }]
+    },
+    "_wtoi": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [{ "name": "string", "type": "const wchar_t *" }]
+    },
+    "_llseek": {
+      "ret": "long long",
+      "cc": "cdecl",
+      "params": [
+        { "name": "fd", "type": "int" },
+        { "name": "offset", "type": "long long" },
+        { "name": "origin", "type": "int" }
+      ]
+    },
+    "_lseek": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "fd", "type": "int" },
+        { "name": "offset", "type": "int" },
+        { "name": "origin", "type": "int" }
+      ]
+    },
+    "_lwrite": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "fd", "type": "int" },
+        { "name": "buffer", "type": "const void *" },
+        { "name": "count", "type": "unsigned int" }
+      ]
+    },
+    "_read": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "fd", "type": "int" },
+        { "name": "buffer", "type": "void *" },
+        { "name": "count", "type": "unsigned int" }
+      ]
+    },
+    "_errno": { "ret": "int *", "cc": "cdecl", "params": [] },
+    "_invalid_parameter_noinfo": { "ret": "void", "cc": "cdecl", "params": [] },
+    "_invalid_parameter": {
+      "ret": "void",
+      "cc": "cdecl",
+      "params": [
+        { "name": "expression", "type": "const wchar_t *" },
+        { "name": "function_name", "type": "const wchar_t *" },
+        { "name": "file_name", "type": "const wchar_t *" },
+        { "name": "line_number", "type": "unsigned int" },
+        { "name": "reserved", "type": "uintptr_t" }
+      ]
+    },
+    "_wcserror_s": {
+      "ret": "errno_t",
+      "cc": "cdecl",
+      "params": [
+        { "name": "buffer", "type": "wchar_t *" },
+        { "name": "size_of_buffer", "type": "size_t" },
+        { "name": "errnum", "type": "int" }
+      ]
+    },
+    "fgetws": {
+      "ret": "wchar_t *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "wchar_t *" },
+        { "name": "count", "type": "int" },
+        { "name": "stream", "type": "FILE *" }
+      ]
+    },
+    "fputws": {
+      "ret": "int",
+      "cc": "cdecl",
+      "params": [
+        { "name": "string", "type": "const wchar_t *" },
+        { "name": "stream", "type": "FILE *" }
+      ]
+    },
+    "_wfopen": {
+      "ret": "FILE *",
+      "cc": "cdecl",
+      "params": [
+        { "name": "filename", "type": "const wchar_t *" },
+        { "name": "mode", "type": "const wchar_t *" }
+      ]
     }
   }
 }

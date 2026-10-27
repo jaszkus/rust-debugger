@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "archive": "win32",
+  "version": "10.0.26100-public",
+  "module": "gdi32",
+  "source": "hand-curated from public Microsoft Windows API documentation",
+  "license": "Apache-2.0",
+  "functions": {
+    "SelectObject": {
+      "ret": "HGDIOBJ",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "h", "type": "HGDIOBJ" }
+      ]
+    },
+    "DeleteObject": { "ret": "BOOL", "params": [{ "name": "ho", "type": "HGDIOBJ" }] },
+    "DeleteDC": { "ret": "BOOL", "params": [{ "name": "hdc", "type": "HDC" }] },
+    "CreateCompatibleDC": { "ret": "HDC", "params": [{ "name": "hdc", "type": "HDC" }] },
+    "CreateCompatibleBitmap": {
+      "ret": "HBITMAP",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "cx", "type": "int" },
+        { "name": "cy", "type": "int" }
+      ]
+    },
+    "GetDeviceCaps": {
+      "ret": "int",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "index", "type": "int" }
+      ]
+    },
+    "CreateFontIndirectW": {
+      "ret": "HFONT",
+      "params": [{ "name": "lplf", "type": "const void *" }]
+    },
+    "CreateFontW": {
+      "ret": "HFONT",
+      "params": [
+        { "name": "cHeight", "type": "int" },
+        { "name": "cWidth", "type": "int" },
+        { "name": "cEscapement", "type": "int" },
+        { "name": "cOrientation", "type": "int" },
+        { "name": "cWeight", "type": "int" },
+        { "name": "bItalic", "type": "DWORD" },
+        { "name": "bUnderline", "type": "DWORD" },
+        { "name": "bStrikeOut", "type": "DWORD" },
+        { "name": "iCharSet", "type": "DWORD" },
+        { "name": "iOutPrecision", "type": "DWORD" },
+        { "name": "iClipPrecision", "type": "DWORD" },
+        { "name": "iQuality", "type": "DWORD" },
+        { "name": "iPitchAndFamily", "type": "DWORD" },
+        { "name": "pszFaceName", "type": "LPCWSTR" }
+      ]
+    },
+    "GetStockObject": { "ret": "HGDIOBJ", "params": [{ "name": "i", "type": "int" }] },
+    "SetTextColor": {
+      "ret": "COLORREF",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "color", "type": "COLORREF" }
+      ]
+    },
+    "SetBkColor": {
+      "ret": "COLORREF",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "color", "type": "COLORREF" }
+      ]
+    },
+    "SetBkMode": {
+      "ret": "int",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "mode", "type": "int" }
+      ]
+    },
+    "TextOutW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "x", "type": "int" },
+        { "name": "y", "type": "int" },
+        { "name": "lpString", "type": "LPCWSTR" },
+        { "name": "c", "type": "int" }
+      ]
+    },
+    "GetTextExtentPoint32W": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "lpString", "type": "LPCWSTR" },
+        { "name": "c", "type": "int" },
+        { "name": "psizl", "type": "SIZE *" }
+      ]
+    },
+    "GetTextMetricsW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "lptm", "type": "void *" }
+      ]
+    },
+    "StartDocW": {
+      "ret": "int",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "lpdi", "type": "const void *" }
+      ]
+    },
+    "StartPage": { "ret": "int", "params": [{ "name": "hdc", "type": "HDC" }] },
+    "EndPage": { "ret": "int", "params": [{ "name": "hdc", "type": "HDC" }] },
+    "EndDoc": { "ret": "int", "params": [{ "name": "hdc", "type": "HDC" }] },
+    "AbortDoc": { "ret": "int", "params": [{ "name": "hdc", "type": "HDC" }] },
+    "ResetDCW": {
+      "ret": "HDC",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "lpdm", "type": "const void *" }
+      ]
+    },
+    "BitBlt": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hdc", "type": "HDC" },
+        { "name": "x", "type": "int" },
+        { "name": "y", "type": "int" },
+        { "name": "cx", "type": "int" },
+        { "name": "cy", "type": "int" },
+        { "name": "hdcSrc", "type": "HDC" },
+        { "name": "x1", "type": "int" },
+        { "name": "y1", "type": "int" },
+        { "name": "rop", "type": "DWORD" }
+      ]
+    }
+  }
+}

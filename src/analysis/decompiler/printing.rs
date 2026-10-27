@@ -131,7 +131,7 @@ impl StructHint {
         Self {
             fields,
             field_sizes,
-            owner: Some(shape.name.clone()),
+            owner: None,
         }
     }
 }

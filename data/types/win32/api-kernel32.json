@@ -1642,6 +1642,119 @@
         { "name": "lpName", "type": "LPCSTR" },
         { "name": "lpValue", "type": "LPCSTR" }
       ]
+    },
+    "IsDebuggerPresent": { "ret": "BOOL", "params": [] },
+    "WaitForSingleObjectEx": {
+      "ret": "DWORD",
+      "params": [
+        { "name": "hHandle", "type": "HANDLE" },
+        { "name": "dwMilliseconds", "type": "DWORD" },
+        { "name": "bAlertable", "type": "BOOL" }
+      ]
+    },
+    "WaitForMultipleObjectsEx": {
+      "ret": "DWORD",
+      "params": [
+        { "name": "nCount", "type": "DWORD" },
+        { "name": "lpHandles", "type": "const HANDLE *" },
+        { "name": "bWaitAll", "type": "BOOL" },
+        { "name": "dwMilliseconds", "type": "DWORD" },
+        { "name": "bAlertable", "type": "BOOL" }
+      ]
+    },
+    "DeviceIoControl": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hDevice", "type": "HANDLE" },
+        { "name": "dwIoControlCode", "type": "DWORD" },
+        { "name": "lpInBuffer", "type": "LPVOID" },
+        { "name": "nInBufferSize", "type": "DWORD" },
+        { "name": "lpOutBuffer", "type": "LPVOID" },
+        { "name": "nOutBufferSize", "type": "DWORD" },
+        { "name": "lpBytesReturned", "type": "LPDWORD" },
+        { "name": "lpOverlapped", "type": "LPOVERLAPPED" }
+      ]
+    },
+    "CreateThreadpoolTimer": {
+      "ret": "PTP_TIMER",
+      "params": [
+        { "name": "pfnti", "type": "LPVOID" },
+        { "name": "pv", "type": "LPVOID" },
+        { "name": "pcbe", "type": "LPVOID" }
+      ]
+    },
+    "SetThreadpoolTimer": {
+      "ret": "void",
+      "params": [
+        { "name": "pfti", "type": "PTP_TIMER" },
+        { "name": "pftDueTime", "type": "PFILETIME" },
+        { "name": "msPeriod", "type": "DWORD" },
+        { "name": "msWindowLength", "type": "DWORD" }
+      ]
+    },
+    "WaitForThreadpoolTimerCallbacks": {
+      "ret": "void",
+      "params": [
+        { "name": "pfti", "type": "PTP_TIMER" },
+        { "name": "fCancelPendingCallbacks", "type": "BOOL" }
+      ]
+    },
+    "CloseThreadpoolTimer": {
+      "ret": "void",
+      "params": [{ "name": "pfti", "type": "PTP_TIMER" }]
+    },
+    "CreateThreadpoolWork": {
+      "ret": "PTP_WORK",
+      "params": [
+        { "name": "pfnwk", "type": "LPVOID" },
+        { "name": "pv", "type": "LPVOID" },
+        { "name": "pcbe", "type": "LPVOID" }
+      ]
+    },
+    "SubmitThreadpoolWork": {
+      "ret": "void",
+      "params": [{ "name": "pwk", "type": "PTP_WORK" }]
+    },
+    "CloseThreadpoolWork": {
+      "ret": "void",
+      "params": [{ "name": "pwk", "type": "PTP_WORK" }]
+    },
+    "WakeByAddressSingle": {
+      "ret": "void",
+      "params": [{ "name": "Address", "type": "PVOID" }]
+    },
+    "WakeByAddressAll": {
+      "ret": "void",
+      "params": [{ "name": "Address", "type": "PVOID" }]
+    },
+    "GetDateFormatW": {
+      "ret": "int",
+      "params": [
+        { "name": "Locale", "type": "LCID" },
+        { "name": "dwFlags", "type": "DWORD" },
+        { "name": "lpDate", "type": "const SYSTEMTIME *" },
+        { "name": "lpFormat", "type": "LPCWSTR" },
+        { "name": "lpDateStr", "type": "LPWSTR" },
+        { "name": "cchDate", "type": "int" }
+      ]
+    },
+    "GetTimeFormatW": {
+      "ret": "int",
+      "params": [
+        { "name": "Locale", "type": "LCID" },
+        { "name": "dwFlags", "type": "DWORD" },
+        { "name": "lpTime", "type": "const SYSTEMTIME *" },
+        { "name": "lpFormat", "type": "LPCWSTR" },
+        { "name": "lpTimeStr", "type": "LPWSTR" },
+        { "name": "cchTime", "type": "int" }
+      ]
+    },
+    "GetCalendar": {
+      "ret": "int",
+      "params": [
+        { "name": "lpCalInfo", "type": "LPVOID" },
+        { "name": "cchCalInfo", "type": "int" }
+      ]
     }
   }
 }

@@ -225,6 +225,48 @@
         { "name": "RandomBuffer", "type": "PVOID" },
         { "name": "RandomBufferLength", "type": "ULONG" }
       ]
-    }
+    },
+    "RegCreateKeyW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpSubKey", "type": "LPCWSTR" },
+        { "name": "phkResult", "type": "HKEY *" }
+      ]
+    },
+    "RegDeleteKeyExW": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "lpSubKey", "type": "LPCWSTR" },
+        { "name": "samDesired", "type": "REGSAM" },
+        { "name": "Reserved", "type": "DWORD" }
+      ]
+    },
+    "RegFlushKey": { "ret": "LONG", "params": [{ "name": "hKey", "type": "HKEY" }] },
+    "RegNotifyChangeKeyValue": {
+      "ret": "LONG",
+      "params": [
+        { "name": "hKey", "type": "HKEY" },
+        { "name": "bWatchSubtree", "type": "BOOL" },
+        { "name": "dwNotifyFilter", "type": "DWORD" },
+        { "name": "hEvent", "type": "HANDLE" },
+        { "name": "fAsynchronous", "type": "BOOL" }
+      ]
+    },
+    "ConvertStringSecurityDescriptorToSecurityDescriptorW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "StringSecurityDescriptor", "type": "LPCWSTR" },
+        { "name": "StringSDRevision", "type": "DWORD" },
+        { "name": "SecurityDescriptor", "type": "PSECURITY_DESCRIPTOR *" },
+        { "name": "SecurityDescriptorSize", "type": "PULONG" }
+      ]
+    },
+    "GetSidLengthRequired": {
+      "ret": "DWORD",
+      "params": [{ "name": "nSubAuthorityCount", "type": "unsigned char" }]
+    },
+    "IsValidSid": { "ret": "BOOL", "params": [{ "name": "pSid", "type": "PSID" }] }
   }
 }

@@ -397,6 +397,8 @@ const WIN32_FILES: &[&str] = &[
     include_str!("../../data/types/win32/api-ntdll.json"),
     include_str!("../../data/types/win32/api-user32.json"),
     include_str!("../../data/types/win32/api-advapi32.json"),
+    include_str!("../../data/types/win32/api-gdi32.json"),
+    include_str!("../../data/types/win32/api-ole32.json"),
 ];
 
 const CRT_FILES: &[&str] = &[

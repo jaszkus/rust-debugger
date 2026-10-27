@@ -284,6 +284,96 @@
       ]
     },
     "CharUpperW": { "ret": "LPWSTR", "params": [{ "name": "lpsz", "type": "LPWSTR" }] },
-    "CharLowerW": { "ret": "LPWSTR", "params": [{ "name": "lpsz", "type": "LPWSTR" }] }
+    "CharLowerW": { "ret": "LPWSTR", "params": [{ "name": "lpsz", "type": "LPWSTR" }] },
+    "EnableMenuItem": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hMenu", "type": "HMENU" },
+        { "name": "uIDEnableItem", "type": "UINT" },
+        { "name": "uEnable", "type": "UINT" }
+      ]
+    },
+    "GetSubMenu": {
+      "ret": "HMENU",
+      "params": [
+        { "name": "hMenu", "type": "HMENU" },
+        { "name": "nPos", "type": "int" }
+      ]
+    },
+    "GetMenu": { "ret": "HMENU", "params": [{ "name": "hWnd", "type": "HWND" }] },
+    "SetDlgItemTextW": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hDlg", "type": "HWND" },
+        { "name": "nIDDlgItem", "type": "int" },
+        { "name": "lpString", "type": "LPCWSTR" }
+      ]
+    },
+    "GetDlgItemTextW": {
+      "ret": "UINT",
+      "params": [
+        { "name": "hDlg", "type": "HWND" },
+        { "name": "nIDDlgItem", "type": "int" },
+        { "name": "lpString", "type": "LPWSTR" },
+        { "name": "cchMax", "type": "int" }
+      ]
+    },
+    "MoveWindow": {
+      "ret": "BOOL",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "X", "type": "int" },
+        { "name": "Y", "type": "int" },
+        { "name": "nWidth", "type": "int" },
+        { "name": "nHeight", "type": "int" },
+        { "name": "bRepaint", "type": "BOOL" }
+      ]
+    },
+    "TranslateAcceleratorW": {
+      "ret": "int",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "hAccTable", "type": "HACCEL" },
+        { "name": "lpMsg", "type": "LPVOID" }
+      ]
+    },
+    "SetThreadDpiAwarenessContext": {
+      "ret": "DPIAWARENESS_CONTEXT",
+      "params": [{ "name": "dpiContext", "type": "DPIAWARENESS_CONTEXT" }]
+    },
+    "SetWindowLongPtrW": {
+      "ret": "LONG_PTR",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "nIndex", "type": "int" },
+        { "name": "dwNewLong", "type": "LONG_PTR" }
+      ]
+    },
+    "GetWindowLongPtrW": {
+      "ret": "LONG_PTR",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "nIndex", "type": "int" }
+      ]
+    },
+    "SendMessageTimeoutW": {
+      "ret": "LRESULT",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "Msg", "type": "UINT" },
+        { "name": "wParam", "type": "WPARAM" },
+        { "name": "lParam", "type": "LPARAM" },
+        { "name": "fuFlags", "type": "UINT" },
+        { "name": "uTimeout", "type": "UINT" },
+        { "name": "lpdwResult", "type": "uintptr_t *" }
+      ]
+    },
+    "GetSystemMenu": {
+      "ret": "HMENU",
+      "params": [
+        { "name": "hWnd", "type": "HWND" },
+        { "name": "bRevert", "type": "BOOL" }
+      ]
+    }
   }
 }

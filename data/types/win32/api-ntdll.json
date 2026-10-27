@@ -555,6 +555,117 @@
         { "name": "RandomBuffer", "type": "PVOID" },
         { "name": "RandomBufferLength", "type": "ULONG" }
       ]
+    },
+    "NtUnmapViewOfSection": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID" }
+      ]
+    },
+    "ZwUnmapViewOfSection": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID" }
+      ]
+    },
+    "NtMapViewOfSection": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "SectionHandle", "type": "HANDLE" },
+        { "name": "ProcessHandle", "type": "HANDLE" },
+        { "name": "BaseAddress", "type": "PVOID *" },
+        { "name": "ZeroBits", "type": "uintptr_t" },
+        { "name": "CommitSize", "type": "SIZE_T" },
+        { "name": "SectionOffset", "type": "PLARGE_INTEGER" },
+        { "name": "ViewSize", "type": "PSIZE_T" },
+        { "name": "InheritDisposition", "type": "int" },
+        { "name": "AllocationType", "type": "ULONG" },
+        { "name": "Win32Protect", "type": "ULONG" }
+      ]
+    },
+    "NtCreateSection": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "SectionHandle", "type": "PHANDLE" },
+        { "name": "DesiredAccess", "type": "ACCESS_MASK" },
+        { "name": "ObjectAttributes", "type": "POBJECT_ATTRIBUTES" },
+        { "name": "MaximumSize", "type": "PLARGE_INTEGER" },
+        { "name": "SectionPageProtection", "type": "ULONG" },
+        { "name": "AllocationAttributes", "type": "ULONG" },
+        { "name": "FileHandle", "type": "HANDLE" }
+      ]
+    },
+    "NtOpenFile": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "FileHandle", "type": "PHANDLE" },
+        { "name": "DesiredAccess", "type": "ACCESS_MASK" },
+        { "name": "ObjectAttributes", "type": "POBJECT_ATTRIBUTES" },
+        { "name": "IoStatusBlock", "type": "PIO_STATUS_BLOCK" },
+        { "name": "ShareAccess", "type": "ULONG" },
+        { "name": "OpenOptions", "type": "ULONG" }
+      ]
+    },
+    "NtUnlockFile": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "FileHandle", "type": "HANDLE" },
+        { "name": "IoStatusBlock", "type": "PIO_STATUS_BLOCK" },
+        { "name": "ByteOffset", "type": "PLARGE_INTEGER" },
+        { "name": "Length", "type": "PLARGE_INTEGER" },
+        { "name": "Key", "type": "ULONG" }
+      ]
+    },
+    "RtlInitUnicodeStringEx": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "DestinationString", "type": "PUNICODE_STRING" },
+        { "name": "SourceString", "type": "PCWSTR" }
+      ]
+    },
+    "RtlFreeAnsiString": {
+      "ret": "void",
+      "params": [{ "name": "AnsiString", "type": "PANSI_STRING" }]
+    },
+    "RtlDecodeSystemPointer": {
+      "ret": "PVOID",
+      "params": [{ "name": "Ptr", "type": "PVOID" }]
+    },
+    "RtlEncodeSystemPointer": {
+      "ret": "PVOID",
+      "params": [{ "name": "Ptr", "type": "PVOID" }]
+    },
+    "RtlDestroyEnvironment": {
+      "ret": "NTSTATUS",
+      "params": [{ "name": "Environment", "type": "PVOID" }]
+    },
+    "LdrGetProcedureAddress": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "Module", "type": "PVOID" },
+        { "name": "ProcedureName", "type": "PANSI_STRING" },
+        { "name": "ProcedureNumber", "type": "ULONG" },
+        { "name": "ProcedureAddress", "type": "PVOID *" }
+      ]
+    },
+    "LdrLoadDll": {
+      "ret": "NTSTATUS",
+      "params": [
+        { "name": "PathToFile", "type": "PCWSTR" },
+        { "name": "Flags", "type": "PULONG" },
+        { "name": "ModuleFileName", "type": "PUNICODE_STRING" },
+        { "name": "ModuleHandle", "type": "PVOID *" }
+      ]
+    },
+    "RtlGetThreadPreferredUILanguages": {
+      "ret": "BOOLEAN",
+      "params": [
+        { "name": "Flags", "type": "ULONG" },
+        { "name": "Languages", "type": "PVOID" },
+        { "name": "LanguageCount", "type": "PULONG" }
+      ]
     }
   }
 }

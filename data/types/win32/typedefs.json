@@ -206,6 +206,16 @@
     "DLGPROC": "void *",
     "TIMERPROC": "void *",
     "HOOKPROC": "void *",
-    "WNDENUMPROC": "void *"
+    "WNDENUMPROC": "void *",
+    "HGDIOBJ": "void *",
+    "HSTRING": "void *",
+    "DPIAWARENESS_CONTEXT": "void *",
+    "PTP_TIMER": "void *",
+    "PTP_WORK": "void *",
+    "PTP_WAIT": "void *",
+    "PTP_IO": "void *",
+    "PTP_CALLBACK_INSTANCE": "void *",
+    "PTP_POOL": "void *",
+    "PINIT_ONCE": "void *"
   }
 }
