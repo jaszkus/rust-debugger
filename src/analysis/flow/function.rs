@@ -297,6 +297,12 @@ pub fn scan_code_address_candidates(
         if out.len() >= max {
             break;
         }
+        if !matches!(
+            insn.mnemonic,
+            "lea" | "mov" | "movzx" | "movsx" | "movsxd"
+        ) {
+            continue;
+        }
         let ops = parse_insn_operands(insn);
         let mut targets: [Option<u64>; 2] = [None, None];
         match insn.mnemonic {
