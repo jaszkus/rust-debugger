@@ -87,8 +87,8 @@ documentation:
 
 No Microsoft Windows SDK header text is copied or redistributed. No data was
 extracted from Ghidra `.gdt` archives, MinGW-w64, Wine or ReactOS, and none of
-those projects' files are redistributed here. Ghidra is used only as an
-external reference for `secret/compare` parity measurements.
+those projects' files are redistributed here. Ghidra is only used as an
+external reference for local parity measurements.
 
 If a third-party type source is ever added, it must be recorded here **and**
 in `NOTICE` and `THIRD_PARTY_LICENSES.md`, with its upstream version and
