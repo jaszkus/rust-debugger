@@ -407,23 +407,16 @@ fn flattened_struct_fields(
     out
 }
 
-fn call_result_addrs(pinstrs: &[PInstr]) -> HashSet<u64> {
+fn call_result_addrs(pinstrs: &[PInstr], return_reads_rax: bool) -> HashSet<u64> {
     let mut out: HashSet<u64> = HashSet::default();
     let mut pending: Option<u64> = None;
     for pi in pinstrs {
         for op in &pi.ops {
-            if let Some(pc) = pending
-                && matches!(
-                    op,
-                    POp::Return
-                        | POp::ReturnPop { .. }
-                        | POp::Branch { .. }
-                        | POp::BranchInd { .. }
-                        | POp::CBranch { .. }
-                )
+            if let Some(_pc) = pending
+                && (matches!(op, POp::Branch { .. } | POp::BranchInd { .. } | POp::CBranch { .. })
+                    || (!return_reads_rax && matches!(op, POp::Return | POp::ReturnPop { .. })))
             {
                 pending = None;
-                let _ = pc;
             }
             if let Some(pc) = pending {
                 let writes = written_reg(op) == Some("rax");
@@ -454,6 +447,127 @@ fn call_result_addrs(pinstrs: &[PInstr]) -> HashSet<u64> {
         }
     }
     out
+}
+
+struct PointerUses {
+    regs: HashSet<&'static str>,
+    slots: HashSet<(u8, i64)>,
+    param_slots: HashMap<&'static str, Vec<(u8, i64)>>,
+}
+
+fn slot_key(v: &PVar) -> Option<(u8, i64)> {
+    match v {
+        PVar::StackSlot { base, off } => Some((
+            if *base == StackBase::Rbp { 0 } else { 1 },
+            *off,
+        )),
+        _ => None,
+    }
+}
+
+fn address_regs(v: &PVar) -> Vec<&'static str> {
+    fn walk(v: &PVar, out: &mut Vec<&'static str>) {
+        match v {
+            PVar::Mem(base, _) => walk(base, out),
+            PVar::Scaled { base, index, .. } => {
+                walk(base, out);
+                walk(index, out);
+            }
+            PVar::Reg(r) => out.push(r),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, &mut out);
+    out
+}
+
+fn pointer_uses(pinstrs: &[PInstr]) -> PointerUses {
+    let mut uses = PointerUses {
+        regs: HashSet::default(),
+        slots: HashSet::default(),
+        param_slots: HashMap::default(),
+    };
+    let mut clobbered: HashSet<&'static str> = HashSet::default();
+    for pi in pinstrs {
+        for op in &pi.ops {
+            if let POp::Store {
+                addr: PVar::StackSlot { base, off },
+                src: PVar::Reg(r),
+                ..
+            } = op
+                && !clobbered.contains(r)
+            {
+                uses.param_slots
+                    .entry(r)
+                    .or_default()
+                    .push((if *base == StackBase::Rbp { 0 } else { 1 }, *off));
+            }
+            if let Some(r) = written_reg(op) {
+                clobbered.insert(r);
+            }
+            if matches!(
+                op,
+                POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. }
+            ) {
+                for r in crate::analysis::pcode::CALL_CLOBBERED {
+                    clobbered.insert(*r);
+                }
+            }
+        }
+    }
+
+    let mut clobbered: HashSet<&'static str> = HashSet::default();
+    let mut aliases: HashMap<&'static str, (u8, i64)> = HashMap::default();
+    for pi in pinstrs {
+        for op in &pi.ops {
+            match op {
+                POp::Load { dst, addr, .. } => {
+                    if let PVar::Reg(r) = dst
+                        && let Some(key) = slot_key(addr)
+                        && uses.param_slots.values().any(|v| v.contains(&key))
+                    {
+                        aliases.insert(r, key);
+                    }
+                    for r in address_regs(addr) {
+                        if clobbered.contains(r) {
+                            continue;
+                        }
+                        uses.regs.insert(r);
+                        if let Some(key) = aliases.get(r) {
+                            uses.slots.insert(*key);
+                        }
+                    }
+                }
+                POp::Store { addr, .. } => {
+                    for r in address_regs(addr) {
+                        if clobbered.contains(r) {
+                            continue;
+                        }
+                        uses.regs.insert(r);
+                        if let Some(key) = aliases.get(r) {
+                            uses.slots.insert(*key);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(r) = written_reg(op) {
+                clobbered.insert(r);
+                aliases.remove(r);
+            }
+            if matches!(
+                op,
+                POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. }
+            ) {
+                for r in crate::analysis::pcode::CALL_CLOBBERED {
+                    clobbered.insert(*r);
+                    aliases.remove(*r);
+                }
+            }
+        }
+    }
+    uses
 }
 
 fn mark_slot(set: &mut HashSet<i64>, v: &PVar) {
@@ -1081,6 +1195,30 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
+    if let Some(rv) = recovery.as_ref() {
+        let ptr = pointer_uses(pinstrs_in_func);
+        for &id in &rv.params {
+            let v = &rv.vars[id as usize];
+            let is_pointer = match v.storage {
+                variables::Loc::Reg(reg) => {
+                    ptr.regs.contains(reg)
+                        || ptr
+                            .param_slots
+                            .get(reg)
+                            .is_some_and(|slots| slots.iter().any(|s| ptr.slots.contains(s)))
+                }
+                variables::Loc::Stack { base, off } => ptr.slots.contains(&(
+                    if base == 0 { 0 } else { 1 },
+                    off,
+                )),
+                _ => false,
+            };
+            if is_pointer && !local_types.contains_key(&v.name) {
+                local_types.insert(v.name.clone(), "longlong *".to_string());
+            }
+        }
+    }
+
     let mut enum_variants: HashMap<String, Vec<(String, i64)>> = HashMap::default();
     let mut enum_fields: HashMap<String, String> = HashMap::default();
     let mut bitfields: Vec<(String, u8, u8, String)> = Vec::new();
@@ -1157,7 +1295,10 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         rbp_delta: recovery.as_ref().map(|r| r.rbp_delta).unwrap_or(0),
         rsp_at: recovery.as_ref().map(|r| r.rsp_at.clone()).unwrap_or_default(),
         hidden_locals,
-        call_result_addrs: call_result_addrs(pinstrs_in_func),
+        call_result_addrs: call_result_addrs(pinstrs_in_func, debug_sig.is_some_and(|s| {
+            let t = s.ret.trim();
+            !t.is_empty() && !t.eq_ignore_ascii_case("void")
+        })),
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
@@ -1200,7 +1341,12 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 .iter()
                 .map(|&id| {
                     let v = &rv.vars[id as usize];
-                    format!("{} {}", v.ty.c_str(), v.name)
+                    let ty = hints
+                        .local_types
+                        .get(&v.name)
+                        .cloned()
+                        .unwrap_or_else(|| v.ty.c_str().to_string());
+                    format!("{} {}", ty, v.name)
                 })
                 .collect()
         } else {
@@ -1545,6 +1691,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     debug_check_braces("alias", func_name, &lines, 1);
     substitute_enum_values(&mut lines, &hints);
     fold_bitfield_accesses(&mut lines, &hints);
+    fold_bitfield_stores(&mut lines, &hints);
     debug_check_braces("enum+bitfield", func_name, &lines, 1);
     squash_empty_branches(&mut lines);
     debug_check_braces("squash_empty_branches", func_name, &lines, 1);
@@ -1594,6 +1741,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         alias::name_temporary_values(&mut lines, &plan);
     }
     let t_tmp = t_tmp.elapsed();
+    alias::drop_self_assignments(&mut lines);
     ghidra_type_names(&mut lines);
     ghidra_function_names(&mut lines);
     let writes_rax = pinstrs_in_func
@@ -1845,7 +1993,16 @@ fn fold_bitfield_accesses(lines: &mut [PseudoLine], hints: &TypeHints) {
             }
             Pat {
                 needle: format!(".{base}"),
-                tails: forms.iter().map(|f| format!(" >> {} & {}", bit, f)).collect(),
+                tails: forms
+                    .iter()
+                    .map(|f| {
+                        if *bit == 0 {
+                            format!(" & {}", f)
+                        } else {
+                            format!(" >> {} & {}", bit, f)
+                        }
+                    })
+                    .collect(),
                 name: name.as_str(),
             }
         })
@@ -1895,6 +2052,86 @@ fn field_expr_start(text: &str, dot: usize) -> Option<usize> {
     }
     let first = text[start..dot].chars().next()?;
     (first.is_ascii_alphabetic() || first == '_').then_some(start)
+}
+
+fn bitfield_store_value(
+    rhs: &str,
+    lhs: &str,
+    hints: &TypeHints,
+) -> Option<(String, String)> {
+    let and_at = rhs.find(" & ")?;
+    let or_at = rhs[and_at + 3..].find(" | ")? + and_at + 3;
+    let src = rhs[..and_at].trim().trim_matches(|c| c == '(' || c == ')');
+    if src != lhs {
+        return None;
+    }
+    let mask_text = rhs[and_at + 3..or_at].trim().trim_matches(|c| c == '(' || c == ')');
+    let value_text = rhs[or_at + 3..]
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .trim_matches(|c| c == '(' || c == ')');
+    let mask = parse_c_int(mask_text)? as u64;
+    let value = parse_c_int(value_text)? as u64;
+    let field = lhs.rsplit('.').next()?;
+    let (base, _) = lhs.split_once('.')?;
+    for (bf_base, bit, width, bf_name) in &hints.bitfields {
+        if bf_base != field || *width == 0 || *width > 31 {
+            continue;
+        }
+        let run = ((1u64 << *width) - 1) << *bit;
+        if mask & run != 0 || (mask | run) != u32::MAX as u64 {
+            continue;
+        }
+        if value & !run != 0 {
+            continue;
+        }
+        return Some((format!("{}.{}", base, bf_name), (value >> bit).to_string()));
+    }
+    None
+}
+
+fn fold_bitfield_stores(lines: &mut Vec<PseudoLine>, hints: &TypeHints) {
+    if hints.bitfields.is_empty() {
+        return;
+    }
+    let mut remove: HashSet<usize> = HashSet::default();
+    for i in 0..lines.len() {
+        if lines[i].kind == LineKind::Comment {
+            continue;
+        }
+        let Some((lhs, rhs)) = alias::assignment_parts(&lines[i].text) else {
+            continue;
+        };
+        if let Some((target, value)) = bitfield_store_value(rhs, lhs, hints) {
+            lines[i].text = format!("{} = {};", target, value);
+            continue;
+        }
+        if i + 1 >= lines.len() || remove.contains(&(i + 1)) {
+            continue;
+        }
+        if lines[i + 1].kind == LineKind::Comment {
+            continue;
+        }
+        let Some((next_lhs, next_rhs)) = alias::assignment_parts(&lines[i + 1].text) else {
+            continue;
+        };
+        if next_rhs.trim_end_matches(';').trim() != lhs {
+            continue;
+        }
+        if let Some((target, value)) = bitfield_store_value(rhs, next_lhs, hints) {
+            lines[i].text = format!("{} = {};", target, value);
+            remove.insert(i + 1);
+        }
+    }
+    if !remove.is_empty() {
+        let mut idx = 0;
+        lines.retain(|_| {
+            let keep = !remove.contains(&idx);
+            idx += 1;
+            keep
+        });
+    }
 }
 
 fn debug_check_braces(stage: &str, name: &str, lines: &[PseudoLine], expected: i32) {
@@ -3290,8 +3527,8 @@ mod graph_tests {
         let mut m: HashMap<String, String> = HashMap::default();
         m.insert("a".into(), "b".into());
         assert_eq!(
-            rename_identifiers("a = \"zaÅ¼Ã³Å‚Ä‡\" + 0xa;", &m),
-            "b = \"zaÅ¼Ã³Å‚Ä‡\" + 0xa;"
+            rename_identifiers("a = \"zaÃ…Â¼ÃƒÂ³Ã…â€šÃ„â€¡\" + 0xa;", &m),
+            "b = \"zaÃ…Â¼ÃƒÂ³Ã…â€šÃ„â€¡\" + 0xa;"
         );
     }
 

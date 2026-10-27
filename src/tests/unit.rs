@@ -1822,9 +1822,10 @@ fn pdb_enums_and_bitfields_reach_decompilation() {
     let main = text("main");
     assert!(main.contains("Flags f;"), "bitfield local:\n{}", main);
     assert!(main.contains("f.color = GREEN;"), "enum constant:\n{}", main);
+    assert!(main.contains("f.a = 3;"), "bitfield a store:\n{}", main);
     assert!(
-        main.contains("f.a = uVar1;"),
-        "bitfield storage destination:\n{}",
+        main.contains("f.b = 7;"),
+        "bitfield b store must target the debug field name:\n{}",
         main
     );
     let classify = text("classify");
