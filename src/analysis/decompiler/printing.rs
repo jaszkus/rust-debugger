@@ -166,6 +166,7 @@ pub(crate) struct TypeHints {
     pub(crate) stack_structs: Vec<StackStructHint>,
     pub(crate) local_types: HashMap<String, String>,
     pub(crate) stack_names: HashMap<i64, (String, usize)>,
+    pub(crate) stack_widths: HashMap<(u8, i64), u32>,
     pub(crate) enum_variants: HashMap<String, Vec<(String, i64)>>,
     pub(crate) enum_fields: HashMap<String, String>,
     pub(crate) bitfields: Vec<(String, u8, u8, String)>,
@@ -290,7 +291,7 @@ pub(crate) fn render_op(
         POp::Load { dst, addr, size } => {
             let is_f = hints.floats.contains(&fmt_var(dst))
                 || matches!(addr, PVar::StackSlot { off: o, .. } if hints.float_slots.contains(o));
-            let v = fmt_load(addr, *size, reg_values, Some(is_f), Some(hints));
+            let v = fmt_load(addr, *size, reg_values, Some(is_f), Some(hints), true);
             track(reg_values, dst, PVal::E(v.clone()));
             Some((format!("{} = {};", fmt_var(dst), v), LineKind::Assignment))
         }
@@ -298,7 +299,7 @@ pub(crate) fn render_op(
             let src_f = hints.floats.contains(&fmt_var(src));
             let slot_f =
                 matches!(addr, PVar::StackSlot { off: o, .. } if hints.float_slots.contains(o));
-            let v = fmt_load(addr, *size, reg_values, Some(src_f || slot_f), Some(hints));
+            let v = fmt_load(addr, *size, reg_values, Some(src_f || slot_f), Some(hints), false);
             Some((
                 format!(
                     "{} = {};",
@@ -547,7 +548,7 @@ pub(crate) fn render_op(
             Some((format!("{} = {};", dv, v), LineKind::Assignment))
         }
         POp::Cmpxchg { addr, src, size } => {
-            let mem = fmt_load(addr, *size, reg_values, None, Some(hints));
+            let mem = fmt_load(addr, *size, reg_values, None, Some(hints), false);
             let sv = pval_str(&resolve_pval_with_hints(src, reg_values, hints));
             let call = format!("atomic_cmpxchg(&{}, {})", mem, sv);
             let rax = PVar::Reg("rax");

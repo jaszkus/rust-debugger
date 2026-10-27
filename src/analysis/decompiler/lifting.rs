@@ -172,6 +172,28 @@ fn stack_base_id(base: StackBase) -> u8 {
     if base == StackBase::Rbp { 0 } else { 1 }
 }
 
+fn stack_access_widths(pinstrs: &[PInstr]) -> HashMap<(u8, i64), u32> {
+    let mut out: HashMap<(u8, i64), u32> = HashMap::default();
+    let note = |addr: &PVar, size: u32, out: &mut HashMap<(u8, i64), u32>| {
+        if let PVar::StackSlot { base, off } = addr {
+            let key = (stack_base_id(*base), *off);
+            let slot = out.entry(key).or_insert(0);
+            *slot = (*slot).max(size);
+        }
+    };
+    for pi in pinstrs {
+        for op in &pi.ops {
+            match op {
+                POp::Load { addr, size, .. } | POp::Store { addr, size, .. } => {
+                    note(addr, *size, &mut out)
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 fn archive_local_types(
     cfg: &CFG,
     pinstrs: &[PInstr],
@@ -1768,6 +1790,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         stack_structs,
         local_types,
         stack_names,
+        stack_widths: stack_access_widths(pinstrs_in_func),
         enum_variants,
         enum_fields,
         bitfields,

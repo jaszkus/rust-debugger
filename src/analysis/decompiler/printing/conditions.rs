@@ -441,6 +441,7 @@ pub(crate) fn fmt_load(
     reg_values: &HashMap<&'static str, PVal>,
     float_hint: Option<bool>,
     hints: Option<&TypeHints>,
+    plain_slot: bool,
 ) -> String {
     let ty: &str = match float_hint {
         Some(true) if size == 8 => "double",
@@ -493,6 +494,9 @@ pub(crate) fn fmt_load(
                 .as_ref()
                 .is_some_and(|vn| vn.size_of.get(&name).copied() == Some(size))
             {
+                return name;
+            }
+            if plain_slot && h.stack_widths.get(&(b, *off)).copied() == Some(size) {
                 return name;
             }
             format!("*({0} *)&{1}", ty, name)
