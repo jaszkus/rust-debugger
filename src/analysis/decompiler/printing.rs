@@ -142,6 +142,7 @@ pub(crate) struct StackStructHint {
     pub(crate) base: i64,
 
     pub(crate) base_norm: i64,
+    pub(crate) raw_key: bool,
     pub(crate) base_display: Option<String>,
     pub(crate) size: usize,
     pub(crate) is_union: bool,

@@ -146,7 +146,7 @@ fn function_struct_hints(cfg: &CFG, pinstrs: &[PInstr]) -> HashMap<String, Struc
         .collect()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ArgOrigin {
     Param(usize),
     Stack(u8, i64),
@@ -199,6 +199,7 @@ fn archive_local_types(
     pinstrs: &[PInstr],
     idx: &'static crate::analysis::symbols::type_archive::ArchiveIndex,
     resolve_callee: &dyn Fn(u64) -> Option<String>,
+    resolve_import: &dyn Fn(u64) -> Option<String>,
     is64: bool,
     is_win64: bool,
 ) -> ArchiveLocalTypes {
@@ -221,10 +222,16 @@ fn archive_local_types(
             continue;
         }
         for op in &pi.ops {
-            if let POp::Call { target } = op
-                && let Some(name) = resolve_callee(*target)
-                && let Some(sig) = idx.signature(&name)
-            {
+            let callee_sig = match op {
+                POp::Call { target } => {
+                    resolve_callee(*target).and_then(|n| idx.signature(&n).map(|s| (n, s)))
+                }
+                POp::CallInd {
+                    target: PVar::Addr(a),
+                } => resolve_import(*a).and_then(|n| idx.signature(&n).map(|s| (n, s))),
+                _ => None,
+            };
+            if let Some((_, sig)) = callee_sig {
                 for i in 0..sig.params.len() {
                     let Some(reg) = arg_regs.get(i).copied() else {
                         break;
@@ -275,6 +282,10 @@ fn archive_local_types(
         if let Some((ty, _)) = ty {
             out.param_types.push((i, ty.clone()));
         }
+    }
+
+    if out.params.is_empty() {
+        return out;
     }
 
     let mut ptr: HashMap<&'static str, crate::analysis::symbols::type_archive::StructShape> =
@@ -1304,8 +1315,19 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 .or_else(|| func_lookup.get(&target))
                 .map(|n| n.rsplit('!').next().unwrap_or(n).to_string())
         };
-        let mut types =
-            archive_local_types(cfg, pinstrs_in_func, idx, &callee_name, is64, is_win64);
+        let mut types = archive_local_types(
+            cfg,
+            pinstrs_in_func,
+            idx,
+            &callee_name,
+            &|slot: u64| {
+                imports
+                    .get(&slot)
+                    .map(|n| n.rsplit('!').next().unwrap_or(n).to_string())
+            },
+            is64,
+            is_win64,
+        );
         for (index, shape) in &types.params {
             if let Some(id) = rv.params.get(*index)
                 && let Some(v) = rv.vars.get(*id as usize)
@@ -1486,6 +1508,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 base_reg: base,
                 base: raw_off,
                 base_norm,
+                raw_key: true,
                 base_display: Some(display),
                 size: shape.size,
                 is_union: shape.is_union,
@@ -1507,6 +1530,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     base_reg: *base,
                     base: *off,
                     base_norm,
+                    raw_key: false,
                     base_display: None,
                     size: shape.size,
                     is_union: shape.is_union,
@@ -1543,6 +1567,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             base_reg: b,
                             base: *off,
                             base_norm,
+                            raw_key: false,
                             base_display: None,
                             size: shape.size,
                             is_union: shape.is_union,
@@ -1630,6 +1655,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             base_reg: b,
                             base: raw_off,
                             base_norm: target_norm,
+                            raw_key: false,
                             base_display: Some(display.clone()),
                             size: local.size,
                             is_union: struct_is_union(ds),
@@ -1671,6 +1697,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         base_reg: b,
                         base: raw_off,
                         base_norm: target_norm,
+                        raw_key: false,
                         base_display: None,
                         size: local.size,
                         is_union: struct_is_union(ds),

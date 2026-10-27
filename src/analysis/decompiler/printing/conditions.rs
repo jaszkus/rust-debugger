@@ -456,9 +456,14 @@ pub(crate) fn fmt_load(
             };
             let (b, norm) = stack_key(base, *off, h);
             if let Some(st) = h.stack_structs.iter().find(|s| {
-                s.base_reg == b
-                    && norm >= s.base_norm
-                    && norm < s.base_norm.saturating_add(s.size as i64)
+                if s.base_reg != b {
+                    return false;
+                }
+                if s.raw_key {
+                    *off >= s.base && *off < s.base.saturating_add(s.size as i64)
+                } else {
+                    norm >= s.base_norm && norm < s.base_norm.saturating_add(s.size as i64)
+                }
             }) {
                 let base_name = st
                     .base_display
@@ -470,14 +475,22 @@ pub(crate) fn fmt_load(
                             .cloned()
                     })
                     .unwrap_or_else(|| fallback_slot_name(st.base, h));
-                let rel = norm - st.base_norm;
+                let rel = if st.raw_key {
+                    *off - st.base
+                } else {
+                    norm - st.base_norm
+                };
                 let field = st.fields.iter().find(|(o, fs, _)| *o == rel && *fs == usz);
                 if st.is_union
                     && let Some((_, _, fname)) = field
                 {
                     return format!("{}.{}", base_name, fname);
                 }
-                if norm == st.base_norm && usz >= st.size {
+                if st.raw_key {
+                    if rel == 0 && usz >= st.size {
+                        return base_name;
+                    }
+                } else if norm == st.base_norm && usz >= st.size {
                     return base_name;
                 }
                 if let Some((_, _, fname)) = field {
