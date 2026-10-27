@@ -1,4 +1,4 @@
-﻿
+
 
 
 
@@ -636,6 +636,9 @@ pub(crate) fn drop_self_assignments(lines: &mut Vec<PseudoLine>) {
 pub(crate) fn drop_dead_register_assignments(lines: &mut Vec<PseudoLine>) {
     let mut remove: HashSet<usize> = HashSet::default();
     for (i, line) in lines.iter().enumerate() {
+        if line.kind == LineKind::Call {
+            continue;
+        }
         let Some((lhs, _)) = assignment_parts(&line.text) else {
             continue;
         };
@@ -1095,7 +1098,7 @@ fn rhs_needs_parens(rhs: &str) -> bool {
     rhs.starts_with('*') || rhs.chars().any(|c| c.is_whitespace())
 }
 
-fn assignment_parts(text: &str) -> Option<(&str, &str)> {
+pub(crate) fn assignment_parts(text: &str) -> Option<(&str, &str)> {
     let code = text.split("//").next().unwrap_or(text).trim();
     let t = code.strip_suffix(';')?;
     let (lhs, rhs) = t.split_once(" = ")?;
