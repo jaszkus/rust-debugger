@@ -2140,3 +2140,70 @@ fn address_taken_entry_splits_the_owner_range() {
     assert_eq!(second.source, crate::analysis::FuncSource::AddressTaken);
     assert_eq!(second.end, 0x100D);
 }
+
+#[test]
+fn void_return_is_inferred_when_the_function_returns_no_value() {
+    let insns = vec![
+        mk_insn(0x1000, "push", &[0x55], "rbp"),
+        mk_insn(0x1001, "mov", &[0x48, 0x89, 0xE5], "rbp, rsp"),
+        mk_insn(0x1004, "pop", &[0x5D], "rbp"),
+        mk_insn(0x1005, "ret", &[0xC3], ""),
+    ];
+    let cfg = crate::analysis::cfg::build_cfg(&insns, 0x1000, 0x1006);
+    let pinstrs = crate::analysis::pcode::lift_func(&insns, 0x1000, 0x1006);
+    let sf = crate::analysis::stack::analyze_stack(&pinstrs, 0x1000, 0x1006, false, 0);
+    let pc = crate::analysis::decompiler::decompile(crate::analysis::decompiler::LiftInput {
+        cfg: &cfg,
+        pinstrs_in_func: &pinstrs,
+        imap: &insns,
+        stack: &sf,
+        func_name: "t",
+        func_lookup: &rustc_hash::FxHashMap::default(),
+        is64: true,
+        is_win64: true,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
+        imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
+        cancel: None,
+        debug_types: None,
+    });
+    let text: Vec<String> = pc.lines.iter().map(|l| l.text.clone()).collect();
+    assert!(
+        text[0].starts_with("void "),
+        "a function with only bare returns must not claim a value: {:?}",
+        text
+    );
+}
+
+#[test]
+fn void_return_is_not_claimed_when_a_value_is_returned() {
+    let insns = vec![
+        mk_insn(0x1000, "mov", &[0xB8, 7, 0, 0, 0], "eax, 7"),
+        mk_insn(0x1005, "ret", &[0xC3], ""),
+    ];
+    let cfg = crate::analysis::cfg::build_cfg(&insns, 0x1000, 0x1006);
+    let pinstrs = crate::analysis::pcode::lift_func(&insns, 0x1000, 0x1006);
+    let sf = crate::analysis::stack::analyze_stack(&pinstrs, 0x1000, 0x1006, false, 0);
+    let pc = crate::analysis::decompiler::decompile(crate::analysis::decompiler::LiftInput {
+        cfg: &cfg,
+        pinstrs_in_func: &pinstrs,
+        imap: &insns,
+        stack: &sf,
+        func_name: "t",
+        func_lookup: &rustc_hash::FxHashMap::default(),
+        is64: true,
+        is_win64: true,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
+        imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
+        cancel: None,
+        debug_types: None,
+    });
+    let text: Vec<String> = pc.lines.iter().map(|l| l.text.clone()).collect();
+    assert!(
+        !text[0].starts_with("void "),
+        "a value-returning function must keep a value type: {:?}",
+        text
+    );
+}
+

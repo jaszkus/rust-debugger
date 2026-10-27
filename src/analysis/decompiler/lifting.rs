@@ -1475,6 +1475,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let t_tmp = t_tmp.elapsed();
     ghidra_type_names(&mut lines);
     ghidra_function_names(&mut lines);
+    infer_void_return(&mut lines);
     alias::remove_unused_declarations(&mut lines);
     debug_goto_classes(func_name, &lines);
     debug_line_histogram(func_name, &lines);
@@ -1502,6 +1503,37 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
 
 
 
+
+fn infer_void_return(lines: &mut [PseudoLine]) {
+    let mut has_return = false;
+    let mut has_value_return = false;
+    for line in lines.iter().skip(1) {
+        if line.kind != LineKind::Return {
+            continue;
+        }
+        has_return = true;
+        if line.text.trim() != "return;" {
+            has_value_return = true;
+            break;
+        }
+    }
+    if !has_return || has_value_return {
+        return;
+    }
+    let Some(sig) = lines.first_mut() else {
+        return;
+    };
+    if sig.kind != LineKind::Signature {
+        return;
+    }
+    let Some(space) = sig.text.find(' ') else {
+        return;
+    };
+    if !matches!(&sig.text[..space], "longlong" | "int" | "long") {
+        return;
+    }
+    sig.text = format!("void {}", &sig.text[space + 1..]);
+}
 
 fn ghidra_type_name(name: &str) -> Option<&'static str> {
     Some(match name {
