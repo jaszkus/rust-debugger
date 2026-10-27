@@ -20,7 +20,7 @@ and an MCP server for AI agents.
 [![Rust](https://img.shields.io/badge/Rust-2024%20edition-orange?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational?style=flat-square)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-200%2B%20tools-8A2BE2?style=flat-square)](#mcp-server)
-![Version](https://img.shields.io/badge/version-1.0.0-yellow?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.1.0-yellow?style=flat-square)
 
 [![Stars](https://img.shields.io/github/stars/jaszkus/rust-debugger?style=flat-square&logo=github)](https://github.com/jaszkus/rust-debugger/stargazers)
 [![Issues](https://img.shields.io/github/issues/jaszkus/rust-debugger?style=flat-square)](https://github.com/jaszkus/rust-debugger/issues)
@@ -42,7 +42,7 @@ and an MCP server for AI agents.
 <br/>
 
 > [!WARNING]
-> **Version `1.0.0`.** Features, APIs and project-file formats may change between releases.
+> **Version `1.1.0`.** Features, APIs and project-file formats may change between releases.
 > **I'm actively looking for contributors.** See [Contributing](#contributing).
 
 <!--

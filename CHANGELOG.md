@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.1.0 - 2026-10-27
+
+### Type archive (new)
+
+- Added a versioned Win32, CRT and libc type archive under `data/types`, embedded
+  with `include_str!`, so a release never depends on files in the working
+  directory.
+- Added a loader, typedef resolver and LLP64 layout engine with validation of
+  cycles, overlaps, out-of-bounds members and bitfield widths, plus `x86`/`x64`
+  layout variants (`src/type_system/archive.rs`).
+- `DataTypeManager` archives are now materialised from that data instead of
+  hard-coded Rust tables.
+- Added an immutable archive index (`src/analysis/symbols/type_archive.rs`) with
+  function signatures, aggregate shapes and `PEB`/`TEB` layouts.
+- Exported and imported functions get archive signatures, parameter names and
+  typedefs when no debug info exists; user and PDB/DWARF types still win.
+- Import call sites type their arguments through the IAT, so locals and
+  parameters become `UNICODE_STRING`, `RECT`, `LONG` and friends, and struct
+  members render as `base->field` when the access width matches a known field.
+- `gs:[0x60]` now types as `PEB *`, so `*(T *)(ProcessEnvironmentBlock + off)`
+  renders as a named field.
+
+### Analysis
+
+- Discover address-taken functions from data-section pointers and `lea`/`mov`
+  targets, with an instruction-boundary and block-shape gate.
+- Stop function extents at `int3`/zero padding, at `ud2`/`hlt`, and at jumps into
+  a distinct known entry; reject prologue-looking starts after a conditional
+  branch.
+- Type parameters proven to be memory bases as pointers and fold bitfield stores
+  to their debug field.
+- Keep by-value debug parameters named across stack spills and resolve debug
+  stack locals in comparisons and operands.
+- Parse only address-forming instructions in the code-address scan.
+
+### Decompiler
+
+- Added an SSA view over p-code, forwarding SSA stack values and dispatch state.
+- Recover compare-chain equality dispatchers as `switch`, structure loop
+  state-machine transitions as `continue`, and prefer the lower-`goto` rendering
+  when switches are present.
+- Duplicate small goto regions and loop transitions to remove flat cleanup
+  `goto`s while keeping the conservative rollback.
+- Fold subtraction conditions into direct comparisons.
+- Infer a `void` return when no value is returned, capture call results that are
+  used, and never drop a call line when its return register is overwritten.
+- Read absolute memory in comparisons, keep shifted constants numeric, and
+  expand debug-info arrays element-wise.
+- Name temporaries, hide ABI bookkeeping, render typed stack slots without
+  pointer casts, and keep `utf8` identifiers intact in generated code.
+
+### Tests
+
+- Added type-system tests for the archive: embedded data resolves every
+  reference, typedef chains, 32/64-bit layouts, function lookup with decoration
+  and `api-ms-win-*` fallback, malformed archives, unions, bitfields, arrays and
+  materialisation into `DataTypeManager`.
+
 ## 1.0.0 - 2026-10-26
 
 ### Analysis
