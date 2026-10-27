@@ -2030,3 +2030,113 @@ fn pdb_types_import_structs_unions_enums() {
         other => panic!("Mixed not a union: {:?}", other),
     }
 }
+
+fn mk_insn(addr: u64, mnemonic: &'static str, bytes: &[u8], operands: &str) -> crate::disasm::DisasmInstruction {
+    crate::disasm::DisasmInstruction {
+        address: addr,
+        bytes: crate::disasm::InsnBytes::from_slice(bytes),
+        mnemonic,
+        operands: operands.to_string().into(),
+    }
+}
+
+#[test]
+fn function_extent_stops_at_int3_padding() {
+    let insns = vec![
+        mk_insn(0x1000, "sub", &[0x48, 0x83, 0xEC, 0x08], "rsp, 8"),
+        mk_insn(0x1004, "ret", &[0xC3], ""),
+        mk_insn(0x1005, "int3", &[0xCC], ""),
+        mk_insn(0x1006, "int3", &[0xCC], ""),
+        mk_insn(0x1007, "mov", &[0xB8, 1, 0, 0, 0], "eax, 1"),
+        mk_insn(0x100C, "ret", &[0xC3], ""),
+    ];
+    let funcs = crate::analysis::function::detect_functions(&insns, 0x1000, &[]);
+    let f = funcs.iter().find(|f| f.entry == 0x1000).expect("entry function");
+    assert_eq!(
+        f.end, 0x1005,
+        "function extent must stop at the int3 padding run, got {:#x}",
+        f.end
+    );
+    assert!(
+        funcs.iter().all(|f| f.entry != 0x1007),
+        "code after int3 padding needs its own evidence"
+    );
+}
+
+#[test]
+fn prologue_after_conditional_branch_is_not_a_function() {
+    let insns = vec![
+        mk_insn(0x1000, "test", &[0x48, 0x85, 0xC9], "rcx, rcx"),
+        mk_insn(0x1003, "je", &[0x74, 0x06], "0x100b"),
+        mk_insn(0x1005, "push", &[0x53], "rbx"),
+        mk_insn(0x1006, "sub", &[0x48, 0x83, 0xEC, 0x20], "rsp, 0x20"),
+        mk_insn(0x100A, "ret", &[0xC3], ""),
+        mk_insn(0x100B, "ret", &[0xC3], ""),
+    ];
+    let funcs = crate::analysis::function::detect_functions(&insns, 0x1000, &[]);
+    assert!(
+        funcs.iter().all(|f| f.entry != 0x1005),
+        "a prologue that is the fallthrough of a jcc is inside the caller: {:?}",
+        funcs.iter().map(|f| (f.entry, f.source.clone())).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn address_taken_shape_accepts_ret_and_short_thunks() {
+    use crate::analysis::function::address_taken_shape;
+    let ret_block = vec![
+        mk_insn(0x1000, "mov", &[0xB8, 1, 0, 0, 0], "eax, 1"),
+        mk_insn(0x1005, "ret", &[0xC3], ""),
+    ];
+    assert_eq!(address_taken_shape(&ret_block, 0x1000), Some(0x1006));
+
+    let thunk = vec![
+        mk_insn(0x2000, "lea", &[0x4C, 0x8D, 0x05, 1, 0, 0, 0], "r8, [rip + 0x1]"),
+        mk_insn(0x2007, "jmp", &[0xE9, 0, 0, 0, 0], "0x3000"),
+    ];
+    assert_eq!(address_taken_shape(&thunk, 0x2000), Some(0x200C));
+
+    let long_thunk = vec![
+        mk_insn(0x4000, "mov", &[0x48, 0x89, 0xD0], "rax, rdx"),
+        mk_insn(0x4003, "mov", &[0x48, 0x8B, 0x11], "rdx, qword ptr [rcx]"),
+        mk_insn(0x4006, "mov", &[0x4C, 0x8B, 0x41, 0x08], "r8, qword ptr [rcx + 8]"),
+        mk_insn(0x400A, "jmp", &[0xE9, 0, 0, 0, 0], "0x5000"),
+    ];
+    assert_eq!(
+        address_taken_shape(&long_thunk, 0x4000),
+        None,
+        "straight-line blocks longer than a thunk need another source"
+    );
+
+    let padded = vec![
+        mk_insn(0x6000, "int3", &[0xCC], ""),
+        mk_insn(0x6001, "mov", &[0xB8, 1, 0, 0, 0], "eax, 1"),
+        mk_insn(0x6006, "ret", &[0xC3], ""),
+    ];
+    assert_eq!(address_taken_shape(&padded, 0x6000), None);
+}
+
+#[test]
+fn address_taken_entry_splits_the_owner_range() {
+    let insns = vec![
+        mk_insn(0x1000, "sub", &[0x48, 0x83, 0xEC, 0x08], "rsp, 8"),
+        mk_insn(0x1004, "ret", &[0xC3], ""),
+        mk_insn(0x1005, "int3", &[0xCC], ""),
+        mk_insn(0x1006, "int3", &[0xCC], ""),
+        mk_insn(0x1007, "mov", &[0xB8, 1, 0, 0, 0], "eax, 1"),
+        mk_insn(0x100C, "ret", &[0xC3], ""),
+        mk_insn(0x100D, "int3", &[0xCC], ""),
+    ];
+    let funcs = crate::analysis::function::detect_functions_with_extra(
+        &insns,
+        0x1000,
+        &[],
+        &[(0x1007, crate::analysis::FuncSource::AddressTaken)],
+        None,
+    );
+    let first = funcs.iter().find(|f| f.entry == 0x1000).expect("entry");
+    let second = funcs.iter().find(|f| f.entry == 0x1007).expect("address taken");
+    assert_eq!(first.end, 0x1005, "owner must stop at the address-taken start");
+    assert_eq!(second.source, crate::analysis::FuncSource::AddressTaken);
+    assert_eq!(second.end, 0x100D);
+}

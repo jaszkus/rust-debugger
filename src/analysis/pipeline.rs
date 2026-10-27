@@ -179,6 +179,18 @@ fn propagate_noreturn(edges: &[(u64, u64)], noreturn: &mut HashSet<u64>) -> bool
     changed
 }
 
+fn prune_inferred_overlaps(functions: &mut Vec<DetectedFunction>) {
+    let ranges: Vec<(u64, u64)> = functions.iter().map(|f| (f.entry, f.end)).collect();
+    functions.retain(|f| {
+        if !matches!(f.source, FuncSource::AddressTaken | FuncSource::DataPointer) {
+            return true;
+        }
+        !ranges
+            .iter()
+            .any(|&(entry, end)| entry < f.entry && f.entry < end)
+    });
+}
+
 fn add_missed_import_thunks(
     functions: &mut Vec<DetectedFunction>,
     disasm: &DisasmResult,
@@ -377,17 +389,28 @@ fn auto_analyze_inner(
     
     
     {
-        let candidates = function::scan_data_pointer_candidates(
+        let mut candidates: Vec<(u64, FuncSource)> = function::scan_data_pointer_candidates(
             binary,
             &disasm.instructions,
             MAX_DATA_POINTER_CANDIDATES,
+        )
+        .into_iter()
+        .map(|a| (a, FuncSource::DataPointer))
+        .collect();
+        candidates.extend(
+            function::scan_code_address_candidates(
+                binary,
+                &disasm.instructions,
+                MAX_DATA_POINTER_CANDIDATES,
+            )
+            .into_iter()
+            .map(|a| (a, FuncSource::AddressTaken)),
         );
         if !candidates.is_empty() {
             let covered = FuncRanges::new(&functions);
             let extra: Vec<(u64, FuncSource)> = candidates
                 .into_iter()
-                .filter(|a| covered.find(*a).is_none())
-                .map(|a| (a, FuncSource::DataPointer))
+                .filter(|(a, _)| covered.find(*a).is_none())
                 .collect();
             if !extra.is_empty() {
                 let mut all_extra = unwind_extra.clone();
@@ -416,6 +439,8 @@ fn auto_analyze_inner(
             }
         }
     }
+    prune_inferred_overlaps(&mut functions);
+    functions.sort_by_key(|f| f.entry);
 
     for func in functions.iter_mut() {
         if let Some(name) = pdb_names.get(&func.entry) {

@@ -43,6 +43,7 @@ pub(crate) fn functions_tab(shell: &Shell) -> Element<'_, Message, Theme, iced::
                                 crate::analysis::FuncSource::UnwindInfo => "UW",
                                 crate::analysis::FuncSource::UserDefined => "US",
                                 crate::analysis::FuncSource::DataPointer => "DP",
+                                crate::analysis::FuncSource::AddressTaken => "AT",
                             };
                             let xrefs = a.xrefs.by_to.get(&f.entry).map(|v| v.len()).unwrap_or(0);
                             let name = match a.stubs.get(&f.entry) {

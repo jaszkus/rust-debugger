@@ -26,6 +26,7 @@ pub enum FuncSource {
     
     
     DataPointer,
+    AddressTaken,
 }
 
 pub fn detect_functions(
@@ -110,6 +111,14 @@ pub fn scan_data_pointer_candidates(
                 | "xor"
                 | "test"
                 | "cmp"
+                | "movzx"
+                | "movsx"
+                | "movsxd"
+                | "or"
+                | "and"
+                | "add"
+                | "inc"
+                | "dec"
                 | "endbr64"
                 | "endbr32"
                 | "nop"
@@ -132,6 +141,9 @@ pub fn scan_data_pointer_candidates(
             return;
         }
         if !plausible_start(va) {
+            return;
+        }
+        if address_taken_shape(insns, va).is_none() {
             return;
         }
         out.push(va);
@@ -181,6 +193,163 @@ pub fn scan_data_pointer_candidates(
         }
     }
 
+    out
+}
+
+pub fn address_taken_shape(insns: &[DisasmInstruction], addr: u64) -> Option<u64> {
+    let idx = insns.partition_point(|i| i.address < addr);
+    let insn = insns.get(idx)?;
+    if insn.address != addr {
+        return None;
+    }
+    let mut steps = 0usize;
+    let mut branch = false;
+    for cur in &insns[idx..] {
+        if is_padding_boundary(cur) {
+            return None;
+        }
+        steps += 1;
+        let end = cur.address.saturating_add(cur.bytes.len() as u64);
+        match cur.mnemonic {
+            "ret" | "retn" => return Some(end),
+            "jmp" => return (steps <= 3 || branch).then_some(end),
+            "ud2" | "hlt" | "int3" => return None,
+            m if m.starts_with('j') => branch = true,
+            _ => {}
+        }
+        if steps >= 64 {
+            return None;
+        }
+    }
+    None
+}
+
+fn jump_thunk_end(insns: &[DisasmInstruction], addr: u64) -> Option<u64> {
+    let idx = insns.partition_point(|i| i.address < addr);
+    let insn = insns.get(idx)?;
+    if insn.address != addr {
+        return None;
+    }
+    let mut steps = 0usize;
+    for cur in &insns[idx..] {
+        if is_padding_boundary(cur) {
+            return None;
+        }
+        steps += 1;
+        let end = cur.address.saturating_add(cur.bytes.len() as u64);
+        match cur.mnemonic {
+            "jmp" => return (steps <= 3).then_some(end),
+            "ud2" | "hlt" | "int3" | "ret" | "retn" => return None,
+            m if m.starts_with('j') => return None,
+            _ => {}
+        }
+        if steps >= 3 {
+            return None;
+        }
+    }
+    None
+}
+
+pub fn scan_code_address_candidates(
+    binary: &crate::parser::ParsedBinary,
+    insns: &[DisasmInstruction],
+    max: usize,
+) -> Vec<u64> {
+    use crate::analysis::operands::{Operand, parse_insn_operands};
+    use rustc_hash::FxHashSet;
+
+    if binary.sections.is_empty() || insns.is_empty() || max == 0 {
+        return Vec::new();
+    }
+    let exec: Vec<(u64, u64)> = binary
+        .sections
+        .iter()
+        .filter(|s| s.is_executable && s.size > 0)
+        .map(|s| (s.vaddr, s.vaddr.saturating_add(s.size)))
+        .collect();
+    if exec.is_empty() {
+        return Vec::new();
+    }
+    let is_exec = |a: u64| exec.iter().any(|&(s, e)| a >= s && a < e);
+    let data = binary.data.as_slice();
+    let byte_at = |va: u64| -> Option<u8> {
+        let sec = binary
+            .sections
+            .iter()
+            .find(|s| va >= s.vaddr && va < s.vaddr.saturating_add(s.size))?;
+        let off = sec.offset.saturating_add(va - sec.vaddr);
+        data.get(off as usize).copied()
+    };
+    let padding_before = |va: u64| -> bool {
+        let mut count = 0u64;
+        for k in 1..=8u64 {
+            match byte_at(va.saturating_sub(k)) {
+                Some(0xCC | 0x90 | 0x00) => count += 1,
+                _ => break,
+            }
+        }
+        count >= 2
+    };
+
+    let mut out: Vec<u64> = Vec::new();
+    let mut seen: FxHashSet<u64> = FxHashSet::default();
+    for insn in insns {
+        if out.len() >= max {
+            break;
+        }
+        let ops = parse_insn_operands(insn);
+        let mut targets: [Option<u64>; 2] = [None, None];
+        match insn.mnemonic {
+            "lea" | "mov" | "movzx" | "movsx" | "movsxd" => {
+                for (slot, op) in targets.iter_mut().zip(ops.iter()) {
+                    *slot = match op {
+                        Operand::Addr(a) => Some(*a),
+                        Operand::Mem {
+                            base: Some("rip"),
+                            index: None,
+                            disp,
+                            ..
+                        } => Some(
+                            insn.address
+                                .saturating_add(insn.bytes.len() as u64)
+                                .wrapping_add(*disp as u64),
+                        ),
+                        Operand::Mem {
+                            base: None,
+                            index: None,
+                            disp,
+                            ..
+                        } => Some(*disp as u64),
+                        _ => None,
+                    };
+                }
+            }
+            "jmp" => {
+                if let Some(Operand::Addr(a)) = ops.first()
+                    && jump_thunk_end(insns, *a).is_some()
+                {
+                    targets[0] = Some(*a);
+                }
+            }
+            _ => continue,
+        }
+        for target in targets.into_iter().flatten() {
+            if target == 0 || !is_exec(target) || !seen.insert(target) {
+                continue;
+            }
+            if !target.is_multiple_of(16) && !padding_before(target) {
+                continue;
+            }
+            if address_taken_shape(insns, target).is_none() {
+                continue;
+            }
+            out.push(target);
+            if out.len() >= max {
+                break;
+            }
+        }
+    }
+    out.sort_unstable();
     out
 }
 
@@ -416,6 +585,9 @@ pub fn detect_functions_with_extra_opt(
             if insn.address >= limit {
                 continue;
             }
+            if is_padding_boundary(insn) {
+                continue;
+            }
             let insn_end = insn.address.saturating_add(insn.bytes.len() as u64);
             reachable_max = Some(reachable_max.map_or(insn_end, |m: u64| m.max(insn_end)));
             if insn_end >= limit {
@@ -423,11 +595,12 @@ pub fn detect_functions_with_extra_opt(
             }
             let next_idx = idx + 1;
             let m = insn.mnemonic;
-            if m == "ret" || m == "retn" {
+            if m == "ret" || m == "retn" || m == "ud2" || m == "hlt" || m == "int3" {
                 continue;
             } else if m == "jmp" {
                 if let Some(t) = parse_addr_operand(&insn.ops())
                     && t >= entry && t < limit
+                        && !(t != entry && entry_set.contains(&t))
                         && let Some(ti) = idx_of(t)
                             && visited[ti] != *stamp {
                                 visited[ti] = *stamp;
@@ -436,6 +609,7 @@ pub fn detect_functions_with_extra_opt(
             } else if m.starts_with('j') {
                 if let Some(t) = parse_addr_operand(&insn.ops())
                     && t >= entry && t < limit
+                        && !(t != entry && entry_set.contains(&t))
                         && let Some(ti) = idx_of(t)
                             && visited[ti] != *stamp {
                                 visited[ti] = *stamp;
@@ -600,6 +774,10 @@ pub fn apply_noreturn_ends(
     }
 }
 
+fn is_padding_boundary(insn: &DisasmInstruction) -> bool {
+    insn.mnemonic == "int3" || (insn.bytes.len() >= 2 && insn.bytes.iter().all(|&b| b == 0))
+}
+
 fn is_valid_subroutine_start(insns: &[DisasmInstruction], idx: usize) -> bool {
     if idx == 0 {
         return true;
@@ -613,16 +791,13 @@ fn is_valid_subroutine_start(insns: &[DisasmInstruction], idx: usize) -> bool {
         return hole < 15;
     }
     let m = prev.mnemonic;
-    if m == "ret"
-        || m == "retn"
-        || m == "retf"
-        || m == "jmp"
-        || (m.starts_with('j') && m != "jmp")
-        || matches!(m, "nop" | "int3" | "ud2" | "hlt")
-    {
+    if m == "ret" || m == "retn" || m == "retf" || m == "jmp" {
         return true;
     }
-    false
+    if m.starts_with('j') {
+        return false;
+    }
+    matches!(m, "nop" | "int3" | "ud2" | "hlt")
 }
 
 fn eq_ci(a: &str, b: &str) -> bool {

@@ -166,6 +166,7 @@ pub(crate) const T_FUNC_AFTER_RET: u8 = 4;
 pub(crate) const T_FUNC_UNWIND: u8 = 5;
 pub(crate) const T_FUNC_USER: u8 = 6;
 pub(crate) const T_FUNC_DATA_PTR: u8 = 7;
+pub(crate) const T_FUNC_ADDRESS: u8 = 8;
 
 pub(crate) const T_XREF_CALL: u8 = 0;
 pub(crate) const T_XREF_JUMP: u8 = 1;

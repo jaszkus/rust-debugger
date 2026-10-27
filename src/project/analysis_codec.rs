@@ -1,6 +1,6 @@
 use super::binary_codec::{
-    R, T_EDGE_F, T_EDGE_FT, T_EDGE_JMP, T_EDGE_T, T_FUNC_AFTER_RET, T_FUNC_CALL, T_FUNC_DATA_PTR,
-    T_FUNC_ENTRY, T_FUNC_PROLOGUE, T_FUNC_SYMBOL, T_FUNC_UNWIND, T_FUNC_USER, T_LINE_ASSIGN,
+    R, T_EDGE_F, T_EDGE_FT, T_EDGE_JMP, T_EDGE_T, T_FUNC_ADDRESS, T_FUNC_AFTER_RET, T_FUNC_CALL,
+    T_FUNC_DATA_PTR, T_FUNC_ENTRY, T_FUNC_PROLOGUE, T_FUNC_SYMBOL, T_FUNC_UNWIND, T_FUNC_USER, T_LINE_ASSIGN,
     T_LINE_BRANCH, T_LINE_CALL, T_LINE_CLOSE, T_LINE_COMMENT, T_LINE_DECL, T_LINE_LABEL,
     T_LINE_OPEN, T_LINE_RET, T_LINE_SIG, T_PRIM_BOOL, T_PRIM_CHAR, T_PRIM_DOUBLE, T_PRIM_FLOAT,
     T_PRIM_INT, T_PRIM_LLONG, T_PRIM_LONG, T_PRIM_SHORT, T_PRIM_UCHAR, T_PRIM_UINT, T_PRIM_ULLONG,
@@ -56,6 +56,7 @@ pub(crate) fn write_analysis(w: &mut W, a: &AnalysisResult) {
             FuncSource::UnwindInfo => T_FUNC_UNWIND,
             FuncSource::UserDefined => T_FUNC_USER,
             FuncSource::DataPointer => T_FUNC_DATA_PTR,
+            FuncSource::AddressTaken => T_FUNC_ADDRESS,
         });
         w.u8(f.is_thunk as u8);
         w.opt_u64(f.thunk_target);
@@ -533,6 +534,7 @@ pub(crate) fn read_analysis(r: &mut R, db_ver: u32) -> Result<AnalysisResult, St
             T_FUNC_UNWIND => FuncSource::UnwindInfo,
             T_FUNC_USER => FuncSource::UserDefined,
             T_FUNC_DATA_PTR => FuncSource::DataPointer,
+            T_FUNC_ADDRESS => FuncSource::AddressTaken,
             other => {
                 return Err(format!(
                     "corrupt project DB (function source tag {})",
