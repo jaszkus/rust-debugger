@@ -1,4 +1,4 @@
-﻿use super::printing::*;
+use super::printing::*;
 use super::structure::{
     GotoClass, Loops, Postdom, WalkCtx, classify_gotos, cleanup_labels, code_part,
     compute_dowhile, elide_else_after_terminal, inline_terminal_block_regions,
@@ -10,7 +10,7 @@ use super::*;
 use super::alias;
 use crate::analysis::flow::cfg::CFG;
 use crate::analysis::operands::canonical_reg;
-use crate::analysis::symbols::debug_types::{DebugBase, DebugStruct, DebugTypes};
+use crate::analysis::symbols::debug_types::{DebugBase, DebugField, DebugStruct, DebugTypes};
 use super::pcode::StackBase;
 use crate::analysis::flow::stack::StackFrame;
 use crate::analysis::flow::variables;
@@ -272,6 +272,56 @@ fn struct_is_union(ds: &DebugStruct) -> bool {
         > 1
 }
 
+fn primitive_field_size(name: &str) -> Option<usize> {
+    let name = name.trim();
+    if name.ends_with('*') {
+        return Some(8);
+    }
+    let name = name
+        .strip_prefix("const ")
+        .or_else(|| name.strip_prefix("volatile "))
+        .unwrap_or(name)
+        .trim();
+    Some(match name {
+        "char" | "signed char" | "unsigned char" | "int8_t" | "uint8_t" | "byte" | "bool"
+        | "_Bool" => 1,
+        "short" | "unsigned short" | "int16_t" | "uint16_t" | "wchar_t" => 2,
+        "int" | "unsigned int" | "int32_t" | "uint32_t" | "long" | "unsigned long" | "float" => 4,
+        "longlong" | "ulonglong" | "int64_t" | "uint64_t" | "long long"
+        | "unsigned long long" | "double" => 8,
+        _ => return None,
+    })
+}
+
+fn array_parts(dbg: &DebugTypes, f: &DebugField) -> Option<(usize, usize, String)> {
+    let ty = f.type_name.trim();
+    let open = ty.rfind('[')?;
+    if !ty.ends_with(']') {
+        return None;
+    }
+    let count: usize = ty[open + 1..ty.len() - 1].trim().parse().ok()?;
+    if count == 0 || count > 64 {
+        return None;
+    }
+    let mut base = ty[..open].trim();
+    while let Some(rest) = base
+        .strip_prefix("const ")
+        .or_else(|| base.strip_prefix("volatile "))
+        .or_else(|| base.strip_prefix("struct "))
+        .or_else(|| base.strip_prefix("union "))
+    {
+        base = rest.trim_start();
+    }
+    let size = match dbg.struct_named(base) {
+        Some(s) => s.size,
+        None => primitive_field_size(base)?,
+    };
+    if size == 0 || size.saturating_mul(count) > f.size.max(size) {
+        return None;
+    }
+    Some((size, count, base.to_string()))
+}
+
 fn flattened_struct_fields(
     dbg: &DebugTypes,
     ds: &DebugStruct,
@@ -333,6 +383,76 @@ fn flattened_struct_fields(
         .map(|f| (f.offset as i64, f.size, f.name.clone()))
         .collect();
     walk(dbg, ds, 0, "", 0, &mut out);
+    for f in &ds.fields {
+        let Some((elem, count, base_ty)) = array_parts(dbg, f) else {
+            continue;
+        };
+        out.retain(|(off, _, name)| name != &f.name || *off != f.offset as i64);
+        for i in 0..count {
+            let off = f.offset as i64 + (i * elem) as i64;
+            match dbg.struct_named(&base_ty) {
+                Some(sub) => {
+                    for sf in &sub.fields {
+                        out.push((
+                            off + sf.offset as i64,
+                            sf.size,
+                            format!("{}[{}].{}", f.name, i, sf.name),
+                        ));
+                    }
+                }
+                None => out.push((off, elem, format!("{}[{}]", f.name, i))),
+            }
+        }
+    }
+    out
+}
+
+fn call_result_addrs(pinstrs: &[PInstr]) -> HashSet<u64> {
+    let mut out: HashSet<u64> = HashSet::default();
+    let mut pending: Option<u64> = None;
+    for pi in pinstrs {
+        for op in &pi.ops {
+            if let Some(pc) = pending
+                && matches!(
+                    op,
+                    POp::Return
+                        | POp::ReturnPop { .. }
+                        | POp::Branch { .. }
+                        | POp::BranchInd { .. }
+                        | POp::CBranch { .. }
+                )
+            {
+                pending = None;
+                let _ = pc;
+            }
+            if let Some(pc) = pending {
+                let writes = written_reg(op) == Some("rax");
+                let uses = reads_regs(op).contains(&"rax");
+                let narrow_use = match op {
+                    POp::Zext { src, .. } | POp::Sext { src, .. } => {
+                        matches!(src, PVar::Reg("rax"))
+                    }
+                    POp::IntAnd { a, .. }
+                    | POp::IntOr { a, .. }
+                    | POp::IntShr { a, .. }
+                    | POp::IntSar { a, .. } => matches!(a, PVar::Reg("rax")),
+                    _ => false,
+                };
+                if uses && (!writes || narrow_use) {
+                    out.insert(pc);
+                    pending = None;
+                } else if writes {
+                    pending = None;
+                }
+            }
+            if matches!(
+                op,
+                POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. }
+            ) {
+                pending = Some(pi.address);
+            }
+        }
+    }
     out
 }
 
@@ -1037,6 +1157,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         rbp_delta: recovery.as_ref().map(|r| r.rbp_delta).unwrap_or(0),
         rsp_at: recovery.as_ref().map(|r| r.rsp_at.clone()).unwrap_or_default(),
         hidden_locals,
+        call_result_addrs: call_result_addrs(pinstrs_in_func),
         var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
@@ -1475,7 +1596,11 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let t_tmp = t_tmp.elapsed();
     ghidra_type_names(&mut lines);
     ghidra_function_names(&mut lines);
-    infer_void_return(&mut lines);
+    let writes_rax = pinstrs_in_func
+        .iter()
+        .flat_map(|p| p.ops.iter())
+        .any(|op| written_reg(op) == Some("rax"));
+    infer_void_return(&mut lines, !writes_rax);
     alias::remove_unused_declarations(&mut lines);
     debug_goto_classes(func_name, &lines);
     debug_line_histogram(func_name, &lines);
@@ -1504,7 +1629,10 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
 
 
 
-fn infer_void_return(lines: &mut [PseudoLine]) {
+fn infer_void_return(lines: &mut [PseudoLine], allow: bool) {
+    if !allow {
+        return;
+    }
     let mut has_return = false;
     let mut has_value_return = false;
     for line in lines.iter().skip(1) {
@@ -3162,8 +3290,8 @@ mod graph_tests {
         let mut m: HashMap<String, String> = HashMap::default();
         m.insert("a".into(), "b".into());
         assert_eq!(
-            rename_identifiers("a = \"zażółć\" + 0xa;", &m),
-            "b = \"zażółć\" + 0xa;"
+            rename_identifiers("a = \"zaÅ¼Ã³Å‚Ä‡\" + 0xa;", &m),
+            "b = \"zaÅ¼Ã³Å‚Ä‡\" + 0xa;"
         );
     }
 
@@ -3342,5 +3470,96 @@ mod graph_tests {
         drop_save_restore_comments(&mut lines);
         let out: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(out, ["rax = 1;", "// WARNING: something", "// push rbx rcx"]);
+    }
+    fn dbg_struct(name: &str, size: usize, fields: Vec<(&str, usize, &str, usize)>) -> DebugStruct {
+        DebugStruct {
+            name: name.to_string(),
+            size,
+            fields: fields
+                .into_iter()
+                .map(|(n, off, ty, sz)| DebugField {
+                    name: n.to_string(),
+                    offset: off,
+                    type_name: ty.to_string(),
+                    size: sz,
+                    bitfield: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn dbg_types(structs: Vec<DebugStruct>) -> DebugTypes {
+        DebugTypes {
+            structs,
+            enums: Vec::new(),
+            functions: Default::default(),
+        }
+    }
+
+    #[test]
+    fn flattened_fields_expand_primitive_arrays() {
+        let dt = dbg_types(vec![dbg_struct(
+            "Buf",
+            12,
+            vec![("data", 0, "int32_t[3]", 12)],
+        )]);
+        let buf = dt.struct_named("Buf").unwrap();
+        let flat = flattened_struct_fields(&dt, buf);
+        assert_eq!(
+            flat,
+            vec![
+                (0, 4, "data[0]".to_string()),
+                (4, 4, "data[1]".to_string()),
+                (8, 4, "data[2]".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn flattened_fields_expand_struct_arrays_with_nested_names() {
+        let dt = dbg_types(vec![
+            dbg_struct(
+                "Arr",
+                16,
+                vec![("pts", 0, "Point[2]", 16)],
+            ),
+            dbg_struct(
+                "Point",
+                8,
+                vec![("x", 0, "int32_t", 4), ("y", 4, "int32_t", 4)],
+            ),
+        ]);
+        let arr = dt.struct_named("Arr").unwrap();
+        let flat = flattened_struct_fields(&dt, arr);
+        assert_eq!(
+            flat,
+            vec![
+                (0, 4, "pts[0].x".to_string()),
+                (4, 4, "pts[0].y".to_string()),
+                (8, 4, "pts[1].x".to_string()),
+                (12, 4, "pts[1].y".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn flattened_fields_keep_pointer_and_unknown_array_fields() {
+        let dt = dbg_types(vec![dbg_struct(
+            "Mixed",
+            24,
+            vec![
+                ("next", 0, "Node *", 8),
+                ("blob", 8, "SomeUnknown[2]", 16),
+            ],
+        )]);
+        let mixed = dt.struct_named("Mixed").unwrap();
+        let flat = flattened_struct_fields(&dt, mixed);
+        assert_eq!(
+            flat,
+            vec![
+                (0, 8, "next".to_string()),
+                (8, 16, "blob".to_string()),
+            ]
+        );
     }
 }

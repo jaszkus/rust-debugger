@@ -2273,3 +2273,70 @@ fn shifted_constant_is_not_rendered_as_a_data_address() {
     assert!(text.contains("0x300000000"), "{text}");
     assert!(!text.contains("DAT_300000000"), "{text}");
 }
+
+#[test]
+fn used_call_result_is_captured_in_a_variable() {
+    let insns = vec![
+        mk_insn(0x1000, "call", &[0xE8, 0xFB, 0x0F, 0, 0], "0x2000"),
+        mk_insn(0x1005, "movzx", &[0x0F, 0xB6, 0xC0], "eax, al"),
+        mk_insn(0x1008, "ret", &[0xC3], ""),
+    ];
+    let cfg = crate::analysis::cfg::build_cfg(&insns, 0x1000, 0x1009);
+    let pinstrs = crate::analysis::pcode::lift_func(&insns, 0x1000, 0x1009);
+    let sf = crate::analysis::stack::analyze_stack(&pinstrs, 0x1000, 0x1009, false, 0);
+    let lookup: rustc_hash::FxHashMap<u64, String> =
+        [(0x2000u64, "calc".to_string())].into_iter().collect();
+    let pc = crate::analysis::decompiler::decompile(crate::analysis::decompiler::LiftInput {
+        cfg: &cfg,
+        pinstrs_in_func: &pinstrs,
+        imap: &insns,
+        stack: &sf,
+        func_name: "t",
+        func_lookup: &lookup,
+        is64: true,
+        is_win64: true,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
+        imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
+        cancel: None,
+        debug_types: None,
+    });
+    let text = pc.lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(
+        text.contains("= calc();"),
+        "the used return value must be captured: {text}"
+    );
+    assert!(!text.contains("in_RAX"), "{text}");
+}
+
+#[test]
+fn unused_call_result_stays_a_plain_call() {
+    let insns = vec![
+        mk_insn(0x1000, "call", &[0xE8, 0xFB, 0x0F, 0, 0], "0x2000"),
+        mk_insn(0x1005, "xor", &[0x31, 0xC0], "eax, eax"),
+        mk_insn(0x1007, "ret", &[0xC3], ""),
+    ];
+    let cfg = crate::analysis::cfg::build_cfg(&insns, 0x1000, 0x1008);
+    let pinstrs = crate::analysis::pcode::lift_func(&insns, 0x1000, 0x1008);
+    let sf = crate::analysis::stack::analyze_stack(&pinstrs, 0x1000, 0x1008, false, 0);
+    let lookup: rustc_hash::FxHashMap<u64, String> =
+        [(0x2000u64, "calc".to_string())].into_iter().collect();
+    let pc = crate::analysis::decompiler::decompile(crate::analysis::decompiler::LiftInput {
+        cfg: &cfg,
+        pinstrs_in_func: &pinstrs,
+        imap: &insns,
+        stack: &sf,
+        func_name: "t",
+        func_lookup: &lookup,
+        is64: true,
+        is_win64: true,
+        thunk_targets: &rustc_hash::FxHashMap::default(),
+        imports: &rustc_hash::FxHashMap::default(),
+        switches: &[],
+        cancel: None,
+        debug_types: None,
+    });
+    let text = pc.lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("calc();"), "{text}");
+    assert!(!text.contains("= calc();"), "{text}");
+}

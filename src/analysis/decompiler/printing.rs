@@ -149,6 +149,7 @@ pub(crate) struct TypeHints {
     pub(crate) out_bytes: std::cell::Cell<usize>,
     pub(crate) out_truncated: std::cell::Cell<bool>,
     pub(crate) cur_pc: std::cell::Cell<u64>,
+    pub(crate) call_result_addrs: HashSet<u64>,
     pub(crate) var_names: Option<std::sync::Arc<crate::analysis::flow::variables::VarNames>>,
 }
 
@@ -377,13 +378,18 @@ pub(crate) fn render_op(
             } else {
                 take_call_args(reg_values, is64, hints.is_win64, push_args)
             };
-            let line = if args.is_empty() {
-                format!("{}();", name)
+            let expr = if args.is_empty() {
+                format!("{}()", name)
             } else {
-                format!("{}({});", name, args.join(", "))
+                format!("{}({})", name, args.join(", "))
             };
             clobber_call(reg_values, is64);
-            Some((line, LineKind::Call))
+            if hints.call_result_addrs.contains(&hints.cur_pc.get()) {
+                track(reg_values, &PVar::Reg("rax"), PVal::Opaque("rax"));
+                Some((format!("rax = {};", expr), LineKind::Call))
+            } else {
+                Some((format!("{};", expr), LineKind::Call))
+            }
         }
         POp::CallInd { target } => {
             let args = take_call_args(reg_values, is64, hints.is_win64, push_args);
@@ -391,19 +397,19 @@ pub(crate) fn render_op(
                 PVar::Addr(a) => hints.imports.get(a).map(|name| display_symbol(name).to_string()),
                 _ => None,
             };
-            let line = if let Some(name) = import_name {
+            let expr = if let Some(name) = import_name {
                 if args.is_empty() {
-                    format!("{}();", name)
+                    format!("{}()", name)
                 } else {
-                    format!("{}({});", name, args.join(", "))
+                    format!("{}({})", name, args.join(", "))
                 }
             } else {
                 let t = resolve_pval(target, reg_values);
                 let ts = pval_str(&t);
                 let mut line = if args.is_empty() {
-                    format!("(*{})();", ts)
+                    format!("(*{})()", ts)
                 } else {
-                    format!("(*{})({});", ts, args.join(", "))
+                    format!("(*{})({})", ts, args.join(", "))
                 };
                 if ts.starts_with("*(") || ts.contains(" + 0x") {
                     line.push_str("  // virtual call via vtable");
@@ -411,7 +417,12 @@ pub(crate) fn render_op(
                 line
             };
             clobber_call(reg_values, is64);
-            Some((line, LineKind::Call))
+            if hints.call_result_addrs.contains(&hints.cur_pc.get()) {
+                track(reg_values, &PVar::Reg("rax"), PVal::Opaque("rax"));
+                Some((format!("rax = {};", expr), LineKind::Call))
+            } else {
+                Some((format!("{};", expr), LineKind::Call))
+            }
         }
         POp::Return | POp::ReturnPop { .. } => {
             let float_ret = hints.ret_type.as_deref().is_some_and(|t| {
