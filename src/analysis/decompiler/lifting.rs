@@ -412,7 +412,14 @@ fn call_result_addrs(pinstrs: &[PInstr], return_reads_rax: bool) -> HashSet<u64>
     let mut pending: Option<u64> = None;
     for pi in pinstrs {
         for op in &pi.ops {
-            if let Some(_pc) = pending
+            if matches!(
+                op,
+                POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. }
+            ) {
+                pending = Some(pi.address);
+                continue;
+            }
+            if pending.is_some()
                 && (matches!(op, POp::Branch { .. } | POp::BranchInd { .. } | POp::CBranch { .. })
                     || (!return_reads_rax && matches!(op, POp::Return | POp::ReturnPop { .. })))
             {
@@ -1124,13 +1131,12 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 {
                     let flat = flattened_struct_fields(dbg, ds);
                     if local.type_name.trim_end().ends_with('*') {
-                        value_structs.insert(
-                            old_name.clone(),
-                            StructHint {
-                                fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
-                                owner: Some(display.clone()),
-                            },
-                        );
+                        let hint = StructHint {
+                            fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
+                            owner: Some(display.clone()),
+                        };
+                        value_structs.insert(old_name.clone(), hint.clone());
+                        value_structs.insert(display.clone(), hint);
                     } else {
                         stack_structs.push(StackStructHint {
                             base_reg: b,
@@ -1165,13 +1171,12 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             {
                 let flat = flattened_struct_fields(dbg, ds);
                 if local.type_name.trim_end().ends_with('*') {
-                    value_structs.insert(
-                        old_name.clone(),
-                        StructHint {
-                            fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
-                            owner: Some(new_name.clone()),
-                        },
-                    );
+                    let hint = StructHint {
+                        fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
+                        owner: Some(new_name.clone()),
+                    };
+                    value_structs.insert(old_name.clone(), hint.clone());
+                    value_structs.insert(new_name.clone(), hint);
                 } else {
                     stack_structs.push(StackStructHint {
                         base_reg: b,

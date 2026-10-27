@@ -595,13 +595,20 @@ pub(crate) fn fmt_var_with_hints(v: &PVar, hints: &TypeHints) -> String {
     match v {
         PVar::StackSlot { base, off } => {
             let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
-            if let Some(vn) = &hints.var_names {
-                let pc = hints.cur_pc.get();
-                if let Some(n) = vn.read_stack.get(&(pc, b, *off))
+            let pc = hints.cur_pc.get();
+            let norm = if b == 1 {
+                *off + hints.rsp_at.get(&pc).copied().unwrap_or(0)
+            } else {
+                *off + hints.rbp_delta
+            };
+            if let Some((name, _size)) = hints.stack_names.get(&norm) {
+                return name.clone();
+            }
+            if let Some(vn) = &hints.var_names
+                && let Some(n) = vn.read_stack.get(&(pc, b, *off))
                     .or_else(|| vn.write_stack.get(&(pc, b, *off)))
                     .or_else(|| vn.stack_by_raw.get(&(b, *off))) {
                     return n.clone();
-                }
             }
             fallback_slot_name(*off, hints)
         }
