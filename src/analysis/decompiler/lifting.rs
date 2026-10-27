@@ -3530,8 +3530,8 @@ mod graph_tests {
         let mut m: HashMap<String, String> = HashMap::default();
         m.insert("a".into(), "b".into());
         assert_eq!(
-            rename_identifiers("a = \"zaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¾ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡\" + 0xa;", &m),
-            "b = \"zaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¾ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡\" + 0xa;"
+            rename_identifiers("a = \"za\u{17c}\u{f3}\u{142}\u{107}\" + 0xa;", &m),
+            "b = \"za\u{17c}\u{f3}\u{142}\u{107}\" + 0xa;"
         );
     }
 
