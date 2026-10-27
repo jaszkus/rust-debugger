@@ -94,9 +94,8 @@ pub(crate) fn resolve_pval(v: &PVar, reg_values: &HashMap<&'static str, PVal>) -
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StructHint {
     pub(crate) fields: Vec<(i64, String)>,
-    
-    
-    
+    pub(crate) field_sizes: Vec<(i64, usize)>,
+
     pub(crate) owner: Option<String>,
 }
 
@@ -107,18 +106,46 @@ impl StructHint {
             .find(|(o, _)| *o == off)
             .map(|(_, n)| n.as_str())
     }
+
+    pub(crate) fn field_sized(&self, off: i64, size: usize) -> Option<&str> {
+        if self.field_sizes.is_empty() {
+            return self.field(off);
+        }
+        if !self
+            .field_sizes
+            .iter()
+            .any(|(o, s)| *o == off && (*s == size || *s == 0))
+        {
+            return None;
+        }
+        self.field(off)
+    }
+
+    pub(crate) fn from_shape(shape: &crate::analysis::symbols::type_archive::StructShape) -> Self {
+        let mut fields = Vec::with_capacity(shape.fields.len());
+        let mut field_sizes = Vec::with_capacity(shape.fields.len());
+        for f in &shape.fields {
+            fields.push((f.offset as i64, f.name.clone()));
+            field_sizes.push((f.offset as i64, if f.bitfield { 0 } else { f.size }));
+        }
+        Self {
+            fields,
+            field_sizes,
+            owner: Some(shape.name.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StackStructHint {
     pub(crate) base_reg: u8,
     pub(crate) base: i64,
-    
+
     pub(crate) base_norm: i64,
     pub(crate) base_display: Option<String>,
     pub(crate) size: usize,
     pub(crate) is_union: bool,
-    
+
     pub(crate) fields: Vec<(i64, usize, String)>,
 }
 

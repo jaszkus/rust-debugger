@@ -366,6 +366,14 @@ impl TypeArchiveSet {
             .map(|a| a.render(name))
     }
 
+    pub fn pointee(&self, name: &str) -> Option<String> {
+        self.archives.iter().find_map(|a| a.pointee(name))
+    }
+
+    pub fn size_of(&self, name: &str) -> Option<usize> {
+        self.archives.iter().find_map(|a| a.size_of(name))
+    }
+
     pub fn pointee_aggregate(&self, name: &str) -> Option<&ResolvedType> {
         self.archives
             .iter()

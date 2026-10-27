@@ -1,19 +1,18 @@
-use super::printing::*;
-use super::structure::{
-    GotoClass, Loops, Postdom, WalkCtx, classify_gotos, cleanup_labels, code_part,
-    compute_dowhile, elide_else_after_terminal, inline_terminal_block_regions,
-    inline_terminal_gotos, prune_unreachable_returns, retarget_goto_chains,
-    squash_empty_branches, walk_block,
-};
-use super::state_machine;
-use super::*;
 use super::alias;
-use crate::analysis::flow::cfg::CFG;
-use crate::analysis::operands::canonical_reg;
-use crate::analysis::symbols::debug_types::{DebugBase, DebugField, DebugStruct, DebugTypes};
 use super::pcode::StackBase;
+use super::printing::*;
+use super::state_machine;
+use super::structure::{
+    GotoClass, Loops, Postdom, WalkCtx, classify_gotos, cleanup_labels, code_part, compute_dowhile,
+    elide_else_after_terminal, inline_terminal_block_regions, inline_terminal_gotos,
+    prune_unreachable_returns, retarget_goto_chains, squash_empty_branches, walk_block,
+};
+use super::*;
+use crate::analysis::flow::cfg::CFG;
 use crate::analysis::flow::stack::StackFrame;
 use crate::analysis::flow::variables;
+use crate::analysis::operands::canonical_reg;
+use crate::analysis::symbols::debug_types::{DebugBase, DebugField, DebugStruct, DebugTypes};
 use crate::disasm::DisasmInstruction;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
@@ -134,8 +133,264 @@ fn function_struct_hints(cfg: &CFG, pinstrs: &[PInstr]) -> HashMap<String, Struc
     tr.analyze_function(pinstrs, entry, end);
     tr.function_fields(entry)
         .into_iter()
-        .map(|(reg, fields)| (reg, StructHint { fields, owner: None }))
+        .map(|(reg, fields)| {
+            (
+                reg,
+                StructHint {
+                    fields,
+                    field_sizes: Vec::new(),
+                    owner: None,
+                },
+            )
+        })
         .collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgOrigin {
+    Param(usize),
+    Stack(u8, i64),
+    AddrOfStack(u8, i64),
+}
+
+#[derive(Default)]
+struct ArchiveLocalTypes {
+    params: Vec<(usize, crate::analysis::symbols::type_archive::StructShape)>,
+    param_types: Vec<(usize, String)>,
+    stack: Vec<(
+        (u8, i64),
+        (crate::analysis::symbols::type_archive::StructShape, u64),
+    )>,
+    stack_scalars: Vec<((u8, i64), (String, usize))>,
+    regs: Vec<(
+        &'static str,
+        crate::analysis::symbols::type_archive::StructShape,
+    )>,
+}
+
+fn stack_base_id(base: StackBase) -> u8 {
+    if base == StackBase::Rbp { 0 } else { 1 }
+}
+
+fn archive_local_types(
+    cfg: &CFG,
+    pinstrs: &[PInstr],
+    idx: &'static crate::analysis::symbols::type_archive::ArchiveIndex,
+    resolve_callee: &dyn Fn(u64) -> Option<String>,
+    is64: bool,
+    is_win64: bool,
+) -> ArchiveLocalTypes {
+    let mut out = ArchiveLocalTypes::default();
+    let entry = cfg.func_entry;
+    let end = cfg.blocks.iter().map(|b| b.end).max().unwrap_or(entry);
+    if !is64 || end <= entry {
+        return out;
+    }
+    let arg_regs = archive_arg_registers(is_win64);
+    let mut prov: HashMap<&'static str, ArgOrigin> = HashMap::default();
+    for (i, r) in arg_regs.iter().enumerate() {
+        prov.insert(*r, ArgOrigin::Param(i));
+    }
+    let mut param_shapes: Vec<Option<crate::analysis::symbols::type_archive::StructShape>> =
+        vec![None; arg_regs.len()];
+    let mut param_pointer_types: Vec<Option<(String, Option<usize>)>> = vec![None; arg_regs.len()];
+    for pi in pinstrs {
+        if pi.address < entry || pi.address >= end {
+            continue;
+        }
+        for op in &pi.ops {
+            if let POp::Call { target } = op
+                && let Some(name) = resolve_callee(*target)
+                && let Some(sig) = idx.signature(&name)
+            {
+                for i in 0..sig.params.len() {
+                    let Some(reg) = arg_regs.get(i).copied() else {
+                        break;
+                    };
+                    let shape = sig.param_shapes.get(i).and_then(|s| s.as_ref()).cloned();
+                    let ptr_ty = sig.param_pointer_types.get(i).and_then(|t| t.clone());
+                    let ptr_size = sig.param_pointee_sizes.get(i).copied().flatten();
+                    match prov.get(reg) {
+                        Some(ArgOrigin::Param(k)) => {
+                            if let Some(shape) = &shape
+                                && param_shapes[*k].is_none()
+                            {
+                                param_shapes[*k] = Some(shape.clone());
+                            }
+                            if let Some(ptr_ty) = &ptr_ty
+                                && param_pointer_types[*k].is_none()
+                            {
+                                param_pointer_types[*k] = Some((ptr_ty.clone(), ptr_size));
+                            }
+                        }
+                        Some(ArgOrigin::AddrOfStack(b, o)) => {
+                            if let Some(shape) = &shape
+                                && !out.stack.iter().any(|(k, _)| k == &(*b, *o))
+                            {
+                                out.stack.push(((*b, *o), (shape.clone(), pi.address)));
+                            }
+                            if let (Some(ptr_ty), Some(size)) = (&ptr_ty, ptr_size)
+                                && !out.stack_scalars.iter().any(|(k, _)| k == &(*b, *o))
+                            {
+                                out.stack_scalars.push(((*b, *o), (ptr_ty.clone(), size)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            archive_track_provenance(op, &mut prov);
+        }
+    }
+
+    for (i, shape) in param_shapes.iter().enumerate() {
+        if let Some(shape) = shape {
+            out.params.push((i, shape.clone()));
+        }
+    }
+    for (i, ty) in param_pointer_types.iter().enumerate() {
+        if let Some((ty, _)) = ty {
+            out.param_types.push((i, ty.clone()));
+        }
+    }
+
+    let mut ptr: HashMap<&'static str, crate::analysis::symbols::type_archive::StructShape> =
+        HashMap::default();
+    for (i, shape) in &out.params {
+        if let Some(reg) = arg_regs.get(*i) {
+            ptr.insert(*reg, shape.clone());
+        }
+    }
+    let param_regs: HashSet<&'static str> = arg_regs.iter().copied().collect();
+    for pi in pinstrs {
+        if pi.address < entry || pi.address >= end {
+            continue;
+        }
+        for op in &pi.ops {
+            match op {
+                POp::Copy {
+                    dst: PVar::Reg(d),
+                    src: PVar::Reg(s),
+                    ..
+                } => match ptr.get(*s).cloned() {
+                    Some(t) => {
+                        ptr.insert(*d, t);
+                    }
+                    None => {
+                        ptr.remove(*d);
+                    }
+                },
+                POp::Load {
+                    dst: PVar::Reg(d),
+                    addr: PVar::Mem(base, disp),
+                    size,
+                } => {
+                    let next = match &**base {
+                        PVar::Reg(r) => ptr.get(*r).and_then(|a| {
+                            a.pointee_of(*disp as usize, *size as usize)
+                                .and_then(|n| idx.aggregate_named(n))
+                        }),
+                        _ => None,
+                    };
+                    match next {
+                        Some(t) => {
+                            ptr.insert(*d, t);
+                        }
+                        None => {
+                            ptr.remove(*d);
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(w) = written_reg(op) {
+                        ptr.remove(w);
+                    }
+                }
+            }
+        }
+    }
+    for (reg, shape) in ptr {
+        if param_regs.contains(reg) {
+            continue;
+        }
+        out.regs.push((reg, shape));
+    }
+    out.regs.sort_by_key(|(r, _)| *r);
+    out
+}
+
+fn archive_track_provenance(op: &POp, prov: &mut HashMap<&'static str, ArgOrigin>) {
+    match op {
+        POp::Copy {
+            dst: PVar::Reg(d),
+            src,
+            ..
+        } => match src {
+            PVar::Reg(s) => match prov.get(*s).copied() {
+                Some(o) => {
+                    prov.insert(*d, o);
+                }
+                None => {
+                    prov.remove(*d);
+                }
+            },
+            PVar::StackSlot { base, off } => {
+                prov.insert(*d, ArgOrigin::Stack(stack_base_id(*base), *off));
+            }
+            _ => {
+                prov.remove(*d);
+            }
+        },
+        POp::AddrOf {
+            dst: PVar::Reg(d),
+            base,
+            index,
+            disp,
+            ..
+        } => {
+            let mut origin = None;
+            if index.is_none()
+                && let Some(PVar::Reg(r)) = base.as_deref()
+            {
+                match *r {
+                    "rbp" | "ebp" => origin = Some(ArgOrigin::AddrOfStack(0, *disp)),
+                    "rsp" | "esp" => origin = Some(ArgOrigin::AddrOfStack(1, *disp)),
+                    _ => {
+                        if let Some(ArgOrigin::Stack(b, o)) = prov.get(*r).copied() {
+                            origin = Some(ArgOrigin::AddrOfStack(b, o));
+                        }
+                    }
+                }
+            }
+            match origin {
+                Some(o) => {
+                    prov.insert(*d, o);
+                }
+                None => {
+                    prov.remove(*d);
+                }
+            }
+        }
+        POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. } => {
+            for r in CALL_CLOBBERED {
+                prov.remove(*r);
+            }
+        }
+        _ => {
+            if let Some(w) = written_reg(op) {
+                prov.remove(w);
+            }
+        }
+    }
+}
+
+fn archive_arg_registers(is_win64: bool) -> &'static [&'static str] {
+    if is_win64 {
+        &["rcx", "rdx", "r8", "r9"]
+    } else {
+        &["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+    }
 }
 
 fn fmt_frame_slot(base_reg: &str, off: i64) -> String {
@@ -190,7 +445,6 @@ fn is_stack_bookkeeping(text: &str, bp_is_frame: bool) -> bool {
     parse_c_int(num.trim()).is_some()
 }
 
-
 fn is_float_mnemonic(mn: &str) -> bool {
     let base = match mn.strip_prefix('v') {
         Some(rest) if !rest.is_empty() => rest,
@@ -205,35 +459,118 @@ fn is_float_mnemonic(mn: &str) -> bool {
     }
     matches!(
         base,
-        "movss" | "movsd" | "movaps" | "movapd" | "movups" | "movupd"
-            | "addss" | "addsd" | "addps" | "addpd"
-            | "subss" | "subsd" | "subps" | "subpd"
-            | "mulss" | "mulsd" | "mulps" | "mulpd"
-            | "divss" | "divsd" | "divps" | "divpd"
-            | "sqrtss" | "sqrtsd" | "sqrtps" | "sqrtpd"
-            | "minss" | "minsd" | "maxss" | "maxsd"
-            | "comiss" | "comisd" | "ucomiss" | "ucomisd"
-            | "cvtss2sd" | "cvtsd2ss" | "cvtsi2ss" | "cvtsi2sd"
-            | "cvtss2si" | "cvtsd2si" | "cvttss2si" | "cvttsd2si"
-            | "roundss" | "roundsd"
-            | "andps" | "andpd" | "andnps" | "andnpd" | "orps" | "orpd"
-            | "fld" | "fst" | "fstp" | "fadd" | "faddp" | "fsub" | "fsubp" | "fsubr"
-            | "fsubrp" | "fmul" | "fmulp" | "fdiv" | "fdivp" | "fdivr" | "fdivrp"
-            | "fcom" | "fcomp" | "fcompp" | "fucom" | "fucomp" | "fucompp" | "fcomi"
-            | "fcomip" | "fucomi" | "fucomip" | "fchs" | "fabs" | "fsqrt" | "fxch"
-            | "xorps" | "xorpd" | "shufps" | "shufpd" | "unpcklps" | "unpcklpd"
-            | "movhps" | "movlps" | "movhpd" | "movlpd" | "movlhps" | "movhlps"
-            | "maxps" | "maxpd" | "minps" | "minpd" | "cvtps2pd" | "cvtpd2ps"
-            | "rsqrtss" | "rcpss" | "fild" | "fist" | "fistp" | "fisttp" | "fld1" | "fldz"
+        "movss"
+            | "movsd"
+            | "movaps"
+            | "movapd"
+            | "movups"
+            | "movupd"
+            | "addss"
+            | "addsd"
+            | "addps"
+            | "addpd"
+            | "subss"
+            | "subsd"
+            | "subps"
+            | "subpd"
+            | "mulss"
+            | "mulsd"
+            | "mulps"
+            | "mulpd"
+            | "divss"
+            | "divsd"
+            | "divps"
+            | "divpd"
+            | "sqrtss"
+            | "sqrtsd"
+            | "sqrtps"
+            | "sqrtpd"
+            | "minss"
+            | "minsd"
+            | "maxss"
+            | "maxsd"
+            | "comiss"
+            | "comisd"
+            | "ucomiss"
+            | "ucomisd"
+            | "cvtss2sd"
+            | "cvtsd2ss"
+            | "cvtsi2ss"
+            | "cvtsi2sd"
+            | "cvtss2si"
+            | "cvtsd2si"
+            | "cvttss2si"
+            | "cvttsd2si"
+            | "roundss"
+            | "roundsd"
+            | "andps"
+            | "andpd"
+            | "andnps"
+            | "andnpd"
+            | "orps"
+            | "orpd"
+            | "fld"
+            | "fst"
+            | "fstp"
+            | "fadd"
+            | "faddp"
+            | "fsub"
+            | "fsubp"
+            | "fsubr"
+            | "fsubrp"
+            | "fmul"
+            | "fmulp"
+            | "fdiv"
+            | "fdivp"
+            | "fdivr"
+            | "fdivrp"
+            | "fcom"
+            | "fcomp"
+            | "fcompp"
+            | "fucom"
+            | "fucomp"
+            | "fucompp"
+            | "fcomi"
+            | "fcomip"
+            | "fucomi"
+            | "fucomip"
+            | "fchs"
+            | "fabs"
+            | "fsqrt"
+            | "fxch"
+            | "xorps"
+            | "xorpd"
+            | "shufps"
+            | "shufpd"
+            | "unpcklps"
+            | "unpcklpd"
+            | "movhps"
+            | "movlps"
+            | "movhpd"
+            | "movlpd"
+            | "movlhps"
+            | "movhlps"
+            | "maxps"
+            | "maxpd"
+            | "minps"
+            | "minpd"
+            | "cvtps2pd"
+            | "cvtpd2ps"
+            | "rsqrtss"
+            | "rcpss"
+            | "fild"
+            | "fist"
+            | "fistp"
+            | "fisttp"
+            | "fld1"
+            | "fldz"
     )
 }
 
 fn is_fp_reg(tok: &str) -> bool {
     let t = tok.trim();
     let has = |p: &str| {
-        t.len() >= p.len()
-            && t.is_char_boundary(p.len())
-            && t[..p.len()].eq_ignore_ascii_case(p)
+        t.len() >= p.len() && t.is_char_boundary(p.len()) && t[..p.len()].eq_ignore_ascii_case(p)
     };
     for p in ["xmm", "ymm", "zmm"] {
         if has(p) {
@@ -287,8 +624,8 @@ fn primitive_field_size(name: &str) -> Option<usize> {
         | "_Bool" => 1,
         "short" | "unsigned short" | "int16_t" | "uint16_t" | "wchar_t" => 2,
         "int" | "unsigned int" | "int32_t" | "uint32_t" | "long" | "unsigned long" | "float" => 4,
-        "longlong" | "ulonglong" | "int64_t" | "uint64_t" | "long long"
-        | "unsigned long long" | "double" => 8,
+        "longlong" | "ulonglong" | "int64_t" | "uint64_t" | "long long" | "unsigned long long"
+        | "double" => 8,
         _ => return None,
     })
 }
@@ -322,10 +659,7 @@ fn array_parts(dbg: &DebugTypes, f: &DebugField) -> Option<(usize, usize, String
     Some((size, count, base.to_string()))
 }
 
-fn flattened_struct_fields(
-    dbg: &DebugTypes,
-    ds: &DebugStruct,
-) -> Vec<(i64, usize, String)> {
+fn flattened_struct_fields(dbg: &DebugTypes, ds: &DebugStruct) -> Vec<(i64, usize, String)> {
     fn walk(
         dbg: &DebugTypes,
         ds: &DebugStruct,
@@ -366,14 +700,7 @@ fn flattened_struct_fields(
                     format!("{}.{}", path, sf.name),
                 ));
             }
-            walk(
-                dbg,
-                sub,
-                base + f.offset as i64,
-                &path,
-                depth + 1,
-                out,
-            );
+            walk(dbg, sub, base + f.offset as i64, &path, depth + 1, out);
         }
     }
 
@@ -420,8 +747,10 @@ fn call_result_addrs(pinstrs: &[PInstr], return_reads_rax: bool) -> HashSet<u64>
                 continue;
             }
             if pending.is_some()
-                && (matches!(op, POp::Branch { .. } | POp::BranchInd { .. } | POp::CBranch { .. })
-                    || (!return_reads_rax && matches!(op, POp::Return | POp::ReturnPop { .. })))
+                && (matches!(
+                    op,
+                    POp::Branch { .. } | POp::BranchInd { .. } | POp::CBranch { .. }
+                ) || (!return_reads_rax && matches!(op, POp::Return | POp::ReturnPop { .. })))
             {
                 pending = None;
             }
@@ -464,10 +793,7 @@ struct PointerUses {
 
 fn slot_key(v: &PVar) -> Option<(u8, i64)> {
     match v {
-        PVar::StackSlot { base, off } => Some((
-            if *base == StackBase::Rbp { 0 } else { 1 },
-            *off,
-        )),
+        PVar::StackSlot { base, off } => Some((if *base == StackBase::Rbp { 0 } else { 1 }, *off)),
         _ => None,
     }
 }
@@ -735,7 +1061,12 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         stats.skipped_too_large = true;
         let lines = vec![PseudoLine {
             indent: 0,
-            text: format!("// WARNING: function '{}' has {} CFG blocks (> {}), structured decompilation skipped to avoid OOM; use disassemble_function / analyze_control_flow instead", func_name, cfg.blocks.len(), MAX_DECOMP_BLOCKS),
+            text: format!(
+                "// WARNING: function '{}' has {} CFG blocks (> {}), structured decompilation skipped to avoid OOM; use disassemble_function / analyze_control_flow instead",
+                func_name,
+                cfg.blocks.len(),
+                MAX_DECOMP_BLOCKS
+            ),
             kind: LineKind::Comment,
             source_addr: None,
         }];
@@ -801,14 +1132,17 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let mut recovery = recovery;
     let debug = debug_types.map(|a| a.as_ref());
     let debug_sig = debug.and_then(|d| d.function(cfg.func_entry));
+    let archive_lookup = crate::analysis::symbols::type_archive::index(if is64 { 8 } else { 4 });
+    let archive_sig = if debug_sig.is_none() {
+        archive_lookup.and_then(|idx| idx.signature(func_name).cloned())
+    } else {
+        None
+    };
     let callee_params = build_callee_params(debug, imports, thunk_targets);
     let param_names: HashSet<String> = debug_sig
         .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
         .unwrap_or_default();
-    
-    
-    
-    
+
     let mut param_renames: HashMap<String, String> = HashMap::default();
     let mut preferred_structs: HashMap<String, String> = HashMap::default();
     let mut value_structs: HashMap<String, StructHint> = HashMap::default();
@@ -861,11 +1195,15 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     param_types_by_reg.insert(reg.to_string(), dp.type_name.clone());
                     if let Some(shape) = shape {
                         if is_pointer {
-                            preferred_structs.insert(reg.to_string(), dp.struct_name.clone().unwrap_or_default());
+                            preferred_structs.insert(
+                                reg.to_string(),
+                                dp.struct_name.clone().unwrap_or_default(),
+                            );
                             owner_by_reg.insert(reg.to_string(), old_name.clone());
                             value_structs.insert(
                                 old_name.clone(),
                                 StructHint {
+                                    field_sizes: Vec::new(),
                                     fields: shape
                                         .fields
                                         .iter()
@@ -892,6 +1230,82 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
+    if let Some(sig) = archive_sig.as_ref()
+        && let Some(rv) = recovery.as_mut()
+    {
+        for (i, &id) in rv.params.iter().enumerate() {
+            let Some((dp_ty, dp_name)) = sig.params.get(i) else {
+                break;
+            };
+            let v = &mut rv.vars[id as usize];
+            let old_name = v.name.clone();
+            let mut new_name = sanitize_param_name(dp_name, &old_name);
+            if new_name != v.name {
+                let base = new_name.clone();
+                let mut n = 2u32;
+                while used_names.contains(&new_name) && new_name != v.name {
+                    new_name = format!("{}_{}", base, n);
+                    n += 1;
+                }
+                if new_name != v.name {
+                    used_names.insert(new_name.clone());
+                    param_renames.insert(v.name.clone(), new_name.clone());
+                    v.name = new_name;
+                }
+            }
+            let _ = dp_ty;
+        }
+        for (i, &id) in rv.params.iter().enumerate() {
+            let Some(shape) = sig.param_shapes.get(i).and_then(|s| s.as_ref()) else {
+                continue;
+            };
+            let name = rv.vars[id as usize].name.clone();
+            value_structs
+                .entry(name)
+                .or_insert_with(|| StructHint::from_shape(shape));
+        }
+    }
+
+    if let Some(shape) = archive_lookup.and_then(|idx| idx.windows_struct("PEB")) {
+        value_structs
+            .entry("ProcessEnvironmentBlock".to_string())
+            .or_insert_with(|| StructHint::from_shape(&shape));
+    }
+
+    let archive_types = if let (Some(rv), Some(idx)) = (recovery.as_ref(), archive_lookup) {
+        let callee_name = |target: u64| -> Option<String> {
+            let real = thunk_targets.get(&target).copied().unwrap_or(target);
+            imports
+                .get(&real)
+                .or_else(|| imports.get(&target))
+                .or_else(|| func_lookup.get(&real))
+                .or_else(|| func_lookup.get(&target))
+                .map(|n| n.rsplit('!').next().unwrap_or(n).to_string())
+        };
+        let mut types =
+            archive_local_types(cfg, pinstrs_in_func, idx, &callee_name, is64, is_win64);
+        for (index, shape) in &types.params {
+            if let Some(id) = rv.params.get(*index)
+                && let Some(v) = rv.vars.get(*id as usize)
+            {
+                value_structs
+                    .entry(v.name.clone())
+                    .or_insert_with(|| StructHint::from_shape(shape));
+            }
+        }
+        for (slot, shape) in &types.stack {
+            if let Some(name) = rv.names.stack_by_raw.get(slot) {
+                value_structs
+                    .entry(name.clone())
+                    .or_insert_with(|| StructHint::from_shape(&shape.0));
+            }
+        }
+        types.regs.retain(|(_, shape)| !shape.fields.is_empty());
+        Some(types)
+    } else {
+        None
+    };
+
     let final_param_names: HashSet<String> = recovery
         .as_ref()
         .map(|rv| {
@@ -903,11 +1317,13 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         .unwrap_or_default();
 
     let mut structs = function_struct_hints(cfg, pinstrs_in_func);
+    if let Some(types) = &archive_types {
+        for (reg, shape) in &types.regs {
+            let hint = StructHint::from_shape(shape);
+            structs.entry((*reg).to_string()).or_insert(hint);
+        }
+    }
     if let Some(dbg) = debug {
-        
-        
-        
-        
         for (reg, sname) in &preferred_structs {
             if let Some(ds) = dbg.struct_named(sname) {
                 let hint = structs.entry(reg.clone()).or_default();
@@ -932,20 +1348,21 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
-    
-    
-    
     if let (Some(dbg), Some(rv)) = (debug, recovery.as_ref()) {
         let mut hint_by_reg: HashMap<&str, StructHint> = HashMap::default();
         for (reg, sname) in &preferred_structs {
             if let Some(ds) = dbg.struct_named(sname) {
-                hint_by_reg.insert(reg.as_str(), StructHint {
-                    fields: flattened_struct_fields(dbg, ds)
-                        .into_iter()
-                        .map(|(off, _, name)| (off, name))
-                        .collect(),
-                    owner: None,
-                });
+                hint_by_reg.insert(
+                    reg.as_str(),
+                    StructHint {
+                        field_sizes: Vec::new(),
+                        fields: flattened_struct_fields(dbg, ds)
+                            .into_iter()
+                            .map(|(off, _, name)| (off, name))
+                            .collect(),
+                        owner: None,
+                    },
+                );
             }
         }
         if !hint_by_reg.is_empty() {
@@ -982,9 +1399,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                         };
                         if let Some(name) = rv.names.stack_by_raw.get(&(b, *off)) {
                             let mut h = hint.clone();
-                            
-                            
-                            
+
                             if writes.get(&(b, *off)).copied() == Some(1) {
                                 h.owner = owner_by_reg.get(*reg).cloned();
                             }
@@ -999,12 +1414,67 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
-    
-    
-    
-    
     let mut stack_structs: Vec<StackStructHint> = Vec::new();
     let mut local_types: HashMap<String, String> = HashMap::default();
+    if let Some(types) = &archive_types
+        && let Some(rv) = recovery.as_ref()
+    {
+        for (index, ty) in &types.param_types {
+            if let Some(id) = rv.params.get(*index)
+                && let Some(v) = rv.vars.get(*id as usize)
+            {
+                local_types
+                    .entry(v.name.clone())
+                    .or_insert_with(|| ty.clone());
+            }
+        }
+        for (slot, (ty, size)) in &types.stack_scalars {
+            let Some(name) = rv.names.stack_by_raw.get(slot) else {
+                continue;
+            };
+            if rv.names.size_of.get(name).map(|s| *s as usize) == Some(*size) {
+                local_types
+                    .entry(name.clone())
+                    .or_insert_with(|| ty.clone());
+            }
+        }
+        for (slot, (shape, pc)) in &types.stack {
+            let (base, raw_off) = *slot;
+            if shape.size == 0 {
+                continue;
+            }
+            let display = rv
+                .names
+                .stack_by_raw
+                .get(&(base, raw_off))
+                .cloned()
+                .unwrap_or_else(|| fallback_slot_name(raw_off, &TypeHints::default()));
+            let base_norm = if base == 0 {
+                rv.rbp_delta + raw_off
+            } else {
+                raw_off + rv.rsp_at.get(pc).copied().unwrap_or(0)
+            };
+            if stack_structs
+                .iter()
+                .any(|s| s.base_reg == base && s.base_norm == base_norm)
+            {
+                continue;
+            }
+            stack_structs.push(StackStructHint {
+                base_reg: base,
+                base: raw_off,
+                base_norm,
+                base_display: Some(display),
+                size: shape.size,
+                is_union: shape.is_union,
+                fields: shape
+                    .fields
+                    .iter()
+                    .map(|f| (f.offset as i64, f.size, f.name.clone()))
+                    .collect(),
+            });
+        }
+    }
     let mut hidden_locals: HashSet<String> = HashSet::default();
     if let Some(rv) = recovery.as_ref() {
         let mut seen: HashSet<(u8, i64)> = HashSet::default();
@@ -1071,17 +1541,14 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     }
 
     let mut stack_names: HashMap<i64, (String, usize)> = HashMap::default();
-    
-    
-    
+
     if let (Some(dbg), Some(sig), Some(rv)) = (debug, debug_sig, recovery.as_ref()) {
         let uses_rbp = rv
             .vars
             .iter()
             .any(|v| matches!(v.storage, variables::Loc::Stack { base: 0, .. }));
         let ptr = if is64 { 8 } else { 4 };
-        
-        
+
         let rsp_body = {
             let mut freq: HashMap<i64, usize> = HashMap::default();
             for &d in rv.rsp_at.values() {
@@ -1130,6 +1597,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                     let flat = flattened_struct_fields(dbg, ds);
                     if local.type_name.trim_end().ends_with('*') {
                         let hint = StructHint {
+                            field_sizes: Vec::new(),
                             fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
                             owner: Some(display.clone()),
                         };
@@ -1170,6 +1638,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                 let flat = flattened_struct_fields(dbg, ds);
                 if local.type_name.trim_end().ends_with('*') {
                     let hint = StructHint {
+                        field_sizes: Vec::new(),
                         fields: flat.iter().map(|(o, _, n)| (*o, n.clone())).collect(),
                         owner: Some(new_name.clone()),
                     };
@@ -1210,10 +1679,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
                             .get(reg)
                             .is_some_and(|slots| slots.iter().any(|s| ptr.slots.contains(s)))
                 }
-                variables::Loc::Stack { base, off } => ptr.slots.contains(&(
-                    if base == 0 { 0 } else { 1 },
-                    off,
-                )),
+                variables::Loc::Stack { base, off } => {
+                    ptr.slots.contains(&(if base == 0 { 0 } else { 1 }, off))
+                }
                 _ => false,
             };
             if is_pointer && !local_types.contains_key(&v.name) {
@@ -1246,7 +1714,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             }
             let mut first_by_off: HashMap<usize, String> = HashMap::default();
             for f in &st.fields {
-                first_by_off.entry(f.offset).or_insert_with(|| f.name.clone());
+                first_by_off
+                    .entry(f.offset)
+                    .or_insert_with(|| f.name.clone());
             }
             for f in &st.fields {
                 if let Some((bit, width)) = f.bitfield
@@ -1261,7 +1731,11 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .values()
             .chain(value_structs.values())
             .flat_map(|h| h.fields.iter().map(|(_, n)| n.as_str()))
-            .chain(stack_structs.iter().flat_map(|s| s.fields.iter().map(|(_, _, n)| n.as_str())))
+            .chain(
+                stack_structs
+                    .iter()
+                    .flat_map(|s| s.fields.iter().map(|(_, _, n)| n.as_str())),
+            )
             .map(|n| n.rsplit('.').next().unwrap_or(n))
             .collect();
         enum_fields.retain(|k, _| used.contains(k.as_str()));
@@ -1286,7 +1760,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         is_win64,
         thunk_targets: thunk_targets.clone(),
         callee_params,
-        ret_type: debug_sig.map(|s| s.ret.clone()),
+        ret_type: debug_sig
+            .map(|s| s.ret.clone())
+            .or_else(|| archive_sig.as_ref().map(|s| s.ret.clone())),
         structs,
         value_structs,
         stack_structs,
@@ -1296,13 +1772,25 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         enum_fields,
         bitfields,
         rbp_delta: recovery.as_ref().map(|r| r.rbp_delta).unwrap_or(0),
-        rsp_at: recovery.as_ref().map(|r| r.rsp_at.clone()).unwrap_or_default(),
+        rsp_at: recovery
+            .as_ref()
+            .map(|r| r.rsp_at.clone())
+            .unwrap_or_default(),
         hidden_locals,
-        call_result_addrs: call_result_addrs(pinstrs_in_func, debug_sig.is_some_and(|s| {
-            let t = s.ret.trim();
-            !t.is_empty() && !t.eq_ignore_ascii_case("void")
-        })),
-        var_names: recovery.as_ref().map(|r| std::sync::Arc::new(r.names.clone())),
+        call_result_addrs: call_result_addrs(pinstrs_in_func, {
+            let debug_ret = debug_sig.is_some_and(|s| {
+                let t = s.ret.trim();
+                !t.is_empty() && !t.eq_ignore_ascii_case("void")
+            });
+            let archive_ret = archive_sig.as_ref().is_some_and(|s| {
+                let t = s.ret.trim();
+                !t.is_empty() && !t.eq_ignore_ascii_case("void")
+            });
+            debug_ret || archive_ret
+        }),
+        var_names: recovery
+            .as_ref()
+            .map(|r| std::sync::Arc::new(r.names.clone())),
         ..Default::default()
     };
     stats.t_hints = t_phase.elapsed();
@@ -1321,18 +1809,42 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
             .map(|(i, dp)| {
                 let name = recovery
                     .as_ref()
-                    .and_then(|rv| {
-                        rv.params
-                            .get(i)
-                            .and_then(|id| rv.vars.get(*id as usize))
-                    })
+                    .and_then(|rv| rv.params.get(i).and_then(|id| rv.vars.get(*id as usize)))
                     .map(|v| v.name.clone())
-                    .unwrap_or_else(|| {
-                        sanitize_param_name(&dp.name, &format!("param_{}", i + 1))
-                    });
+                    .unwrap_or_else(|| sanitize_param_name(&dp.name, &format!("param_{}", i + 1)));
                 format!("{} {}", normalize_type(&dp.type_name), name)
             })
             .collect();
+        (ret, params)
+    } else if let Some(sig) = archive_sig.as_ref() {
+        let ret = if sig.ret.trim().is_empty() {
+            "void".to_string()
+        } else {
+            sig.ret.clone()
+        };
+        let mut params: Vec<String> = Vec::with_capacity(sig.params.len());
+        for (i, (ty, pname)) in sig.params.iter().enumerate() {
+            let name = recovery
+                .as_ref()
+                .and_then(|rv| rv.params.get(i).and_then(|id| rv.vars.get(*id as usize)))
+                .map(|v| v.name.clone())
+                .unwrap_or_else(|| sanitize_param_name(pname, &format!("param_{}", i + 1)));
+            params.push(format!("{} {}", ty, name));
+        }
+        if sig.varargs {
+            params.push("...".to_string());
+        }
+        if let Some(rv) = recovery.as_ref() {
+            for &id in rv.params.iter().skip(sig.params.len()) {
+                let v = &rv.vars[id as usize];
+                let ty = hints
+                    .local_types
+                    .get(&v.name)
+                    .cloned()
+                    .unwrap_or_else(|| v.ty.c_str().to_string());
+                params.push(format!("{} {}", ty, v.name));
+            }
+        }
         (ret, params)
     } else {
         let ret = recovery
@@ -1532,7 +2044,11 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         for v in &view.state_vars {
             eprintln!(
                 "[ssa-state] {func_name}: header={} base={:?} kind={:?} dispatch={:?} consts={:?}",
-                v.header, v.base, v.kind, v.dispatch.as_ref().map(|d| d.values.clone()), v.const_writes
+                v.header,
+                v.base,
+                v.kind,
+                v.dispatch.as_ref().map(|d| d.values.clone()),
+                v.const_writes
             );
         }
     }
@@ -1658,18 +2174,12 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         }
     }
 
-    
-    
-    
     drop_stack_canary(&mut lines);
     debug_check_braces("drop_stack_canary", func_name, &lines, 1);
     let bp_is_frame = recovery.as_ref().is_none_or(|rv| {
-        rv.vars.iter().any(|v| {
-            matches!(
-                v.storage,
-                variables::Loc::Stack { base: 0, .. }
-            )
-        })
+        rv.vars
+            .iter()
+            .any(|v| matches!(v.storage, variables::Loc::Stack { base: 0, .. }))
     });
     lines.retain(|l| !is_stack_bookkeeping(&l.text, bp_is_frame));
     drop_save_restore_comments(&mut lines);
@@ -1775,10 +2285,6 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     stats.t_total = t_total.elapsed();
     (make_pseudocode(cfg, func_name, lines), stats)
 }
-
-
-
-
 
 fn infer_void_return(lines: &mut [PseudoLine], allow: bool) {
     if !allow {
@@ -1925,7 +2431,12 @@ fn substitute_enum_values(lines: &mut [PseudoLine], hints: &TypeHints) {
     let by_value: HashMap<&str, HashMap<i64, &str>> = hints
         .enum_variants
         .iter()
-        .map(|(e, vs)| (e.as_str(), vs.iter().map(|(n, v)| (*v, n.as_str())).collect()))
+        .map(|(e, vs)| {
+            (
+                e.as_str(),
+                vs.iter().map(|(n, v)| (*v, n.as_str())).collect(),
+            )
+        })
         .collect();
     const OPS: [&str; 7] = [" >= ", " <= ", " == ", " != ", " > ", " < ", " = "];
 
@@ -2057,18 +2568,16 @@ fn field_expr_start(text: &str, dot: usize) -> Option<usize> {
     (first.is_ascii_alphabetic() || first == '_').then_some(start)
 }
 
-fn bitfield_store_value(
-    rhs: &str,
-    lhs: &str,
-    hints: &TypeHints,
-) -> Option<(String, String)> {
+fn bitfield_store_value(rhs: &str, lhs: &str, hints: &TypeHints) -> Option<(String, String)> {
     let and_at = rhs.find(" & ")?;
     let or_at = rhs[and_at + 3..].find(" | ")? + and_at + 3;
     let src = rhs[..and_at].trim().trim_matches(|c| c == '(' || c == ')');
     if src != lhs {
         return None;
     }
-    let mask_text = rhs[and_at + 3..or_at].trim().trim_matches(|c| c == '(' || c == ')');
+    let mask_text = rhs[and_at + 3..or_at]
+        .trim()
+        .trim_matches(|c| c == '(' || c == ')');
     let value_text = rhs[or_at + 3..]
         .trim()
         .trim_end_matches(';')
@@ -2362,8 +2871,8 @@ fn drop_save_restore_comments(lines: &mut Vec<PseudoLine>) {
             return true;
         };
         let rest = rest.trim();
-        let is_reg = !rest.is_empty()
-            && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let is_reg =
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         !is_reg
     });
 }
@@ -2464,7 +2973,6 @@ fn drop_stack_canary(lines: &mut Vec<PseudoLine>) {
         keep
     });
 }
-
 
 fn fmt_decl(ty: &str, name: &str) -> String {
     let ty = normalize_type(ty);
@@ -2669,13 +3177,14 @@ fn known_import_param_count(name: &str) -> Option<usize> {
         "__stack_chk_fail" | "__stack_chk_fail_local" => Some(0),
         "abort" => Some(0),
         "getlasterror" | "getprocessid" | "getcurrentprocessid" => Some(0),
-        "free" | "malloc" | "strlen" | "puts" | "exit" | "_exit" | "sleep"
-        | "closehandle" | "exitprocess" | "fclose" | "close" | "loadlibrarya"
-        | "loadlibraryw" | "getmodulehandlea" | "getmodulehandlew" => Some(1),
-        "memcpy" | "memmove" | "memset" | "strncmp" | "strncpy" | "heapalloc"
-        | "heapfree" | "read" | "write" => Some(3),
-        "strcpy" | "strcmp" | "calloc" | "realloc" | "strcat" | "fopen"
-        | "getprocaddress" => Some(2),
+        "free" | "malloc" | "strlen" | "puts" | "exit" | "_exit" | "sleep" | "closehandle"
+        | "exitprocess" | "fclose" | "close" | "loadlibrarya" | "loadlibraryw"
+        | "getmodulehandlea" | "getmodulehandlew" => Some(1),
+        "memcpy" | "memmove" | "memset" | "strncmp" | "strncpy" | "heapalloc" | "heapfree"
+        | "read" | "write" => Some(3),
+        "strcpy" | "strcmp" | "calloc" | "realloc" | "strcat" | "fopen" | "getprocaddress" => {
+            Some(2)
+        }
         _ => None,
     }
 }
@@ -3195,7 +3704,6 @@ pub(crate) fn transfer(op: &POp, env: &mut HashMap<&'static str, Lattice>) {
     }
 }
 
-
 #[inline]
 fn bit_set(bits: &mut [u64], i: usize) {
     bits[i / 64] |= 1u64 << (i % 64);
@@ -3610,7 +4118,15 @@ mod graph_tests {
 
     #[test]
     fn float_mnemonics_include_vex_and_x87() {
-        for m in ["addss", "vaddsd", "vmovss", "cvttsd2si", "vfmadd231ss", "fadd", "fucomip"] {
+        for m in [
+            "addss",
+            "vaddsd",
+            "vmovss",
+            "cvttsd2si",
+            "vfmadd231ss",
+            "fadd",
+            "fucomip",
+        ] {
             assert!(is_float_mnemonic(m), "{m}");
         }
         for m in ["mov", "add", "verw", "lea", "pxor"] {
@@ -3655,17 +4171,29 @@ mod graph_tests {
     #[test]
     fn msvc_cookie_bookkeeping_is_removed() {
         fn pl(text: &str, kind: LineKind) -> PseudoLine {
-            PseudoLine { indent: 0, text: text.into(), kind, source_addr: None }
+            PseudoLine {
+                indent: 0,
+                text: text.into(),
+                kind,
+                source_addr: None,
+            }
         }
         let mut lines = vec![
-            pl("uVar1 = *(longlong *)&DAT_1800c1230 ^ rsp + -0x110;", LineKind::Assignment),
+            pl(
+                "uVar1 = *(longlong *)&DAT_1800c1230 ^ rsp + -0x110;",
+                LineKind::Assignment,
+            ),
             pl("local_48 = uVar1;", LineKind::Assignment),
             pl("FUN_180084C50(local_48 ^ rsp);", LineKind::Call),
             pl("uVar1 = 3;", LineKind::Assignment),
             pl("return;", LineKind::Return),
         ];
         drop_stack_canary(&mut lines);
-        let out = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let out = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(!out.contains("DAT_1800c1230"), "{out}");
         assert!(!out.contains("local_48"), "{out}");
         assert!(!out.contains("FUN_180084C50"), "{out}");
@@ -3675,10 +4203,18 @@ mod graph_tests {
     #[test]
     fn stack_canary_bookkeeping_is_removed() {
         fn pl(text: &str, kind: LineKind) -> PseudoLine {
-            PseudoLine { indent: 0, text: text.into(), kind, source_addr: None }
+            PseudoLine {
+                indent: 0,
+                text: text.into(),
+                kind,
+                source_addr: None,
+            }
         }
         let mut lines = vec![
-            pl("rax = *(fs:64 + 0x28);  // TLS/PEB via fs", LineKind::Assignment),
+            pl(
+                "rax = *(fs:64 + 0x28);  // TLS/PEB via fs",
+                LineKind::Assignment,
+            ),
             pl("local_10 = *(fs:64 + 0x28);", LineKind::Assignment),
             pl("int64_t local_10;  // [rbp-0x8]", LineKind::Declaration),
             pl("rdx = local_10;", LineKind::Assignment),
@@ -3688,7 +4224,11 @@ mod graph_tests {
             pl("return rax;", LineKind::Return),
         ];
         drop_stack_canary(&mut lines);
-        let out = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let out = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(!out.contains("fs:"), "{out}");
         assert!(!out.contains("local_10"), "{out}");
         assert!(!out.contains("__stack_chk_fail"), "{out}");
@@ -3698,7 +4238,12 @@ mod graph_tests {
     #[test]
     fn save_restore_comments_are_dropped() {
         fn pl(text: &str, kind: LineKind) -> PseudoLine {
-            PseudoLine { indent: 0, text: text.into(), kind, source_addr: None }
+            PseudoLine {
+                indent: 0,
+                text: text.into(),
+                kind,
+                source_addr: None,
+            }
         }
         let mut lines = vec![
             pl("// push rbx", LineKind::Comment),
@@ -3709,7 +4254,10 @@ mod graph_tests {
         ];
         drop_save_restore_comments(&mut lines);
         let out: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(out, ["rax = 1;", "// WARNING: something", "// push rbx rcx"]);
+        assert_eq!(
+            out,
+            ["rax = 1;", "// WARNING: something", "// push rbx rcx"]
+        );
     }
     fn dbg_struct(name: &str, size: usize, fields: Vec<(&str, usize, &str, usize)>) -> DebugStruct {
         DebugStruct {
@@ -3758,11 +4306,7 @@ mod graph_tests {
     #[test]
     fn flattened_fields_expand_struct_arrays_with_nested_names() {
         let dt = dbg_types(vec![
-            dbg_struct(
-                "Arr",
-                16,
-                vec![("pts", 0, "Point[2]", 16)],
-            ),
+            dbg_struct("Arr", 16, vec![("pts", 0, "Point[2]", 16)]),
             dbg_struct(
                 "Point",
                 8,
@@ -3787,19 +4331,13 @@ mod graph_tests {
         let dt = dbg_types(vec![dbg_struct(
             "Mixed",
             24,
-            vec![
-                ("next", 0, "Node *", 8),
-                ("blob", 8, "SomeUnknown[2]", 16),
-            ],
+            vec![("next", 0, "Node *", 8), ("blob", 8, "SomeUnknown[2]", 16)],
         )]);
         let mixed = dt.struct_named("Mixed").unwrap();
         let flat = flattened_struct_fields(&dt, mixed);
         assert_eq!(
             flat,
-            vec![
-                (0, 8, "next".to_string()),
-                (8, 16, "blob".to_string()),
-            ]
+            vec![(0, 8, "next".to_string()), (8, 16, "blob".to_string()),]
         );
     }
 }

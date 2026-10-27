@@ -3,3 +3,4 @@ pub mod debug_types;
 pub mod demangle;
 pub mod dwarf_types;
 pub mod pdb_types;
+pub mod type_archive;

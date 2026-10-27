@@ -1,8 +1,9 @@
 use super::super::*;
-use crate::analysis::decompiler::pcode::StackBase;
 use super::{
-    c_type_for_size, fmt_const, mentions_reg, pval_str, resolve_pval, PVal, TypeHints, ABI_ARG_REGS, SSE_ARG_REGS, WIN64_ARG_REGS,
+    ABI_ARG_REGS, PVal, SSE_ARG_REGS, TypeHints, WIN64_ARG_REGS, c_type_for_size, fmt_const,
+    mentions_reg, pval_str, resolve_pval,
 };
+use crate::analysis::decompiler::pcode::StackBase;
 use crate::analysis::flow::cfg::CFG;
 use crate::disasm::DisasmInstruction;
 use rustc_hash::FxHashMap as HashMap;
@@ -23,119 +24,100 @@ fn is_shift_constant(value: u64) -> bool {
     value > u32::MAX as u64 && value & 0xffff_ffff == 0
 }
 
-pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
-    let mut out = Vec::new();
-    fn visit(v: &PVar, out: &mut Vec<&'static str>) {
-        match v {
-            PVar::Reg(r) => out.push(r),
-            PVar::Mem(b, _) => visit(b, out),
-            PVar::Scaled { base, index, .. } => {
-                visit(base, out);
-                visit(index, out);
-            }
-            _ => {}
-        }
+fn push_call_regs(out: &mut Vec<&'static str>) {
+    out.extend_from_slice(&ABI_ARG_REGS);
+    out.extend_from_slice(&WIN64_ARG_REGS);
+    out.extend_from_slice(&SSE_ARG_REGS);
+    out.extend_from_slice(&["rax", "rsp", "eax", "esp"]);
+}
+
+#[inline]
+fn dst_addr_regs(dst: &PVar, out: &mut Vec<&'static str>) {
+    if !matches!(dst, PVar::Reg(_)) {
+        collect_pvar_regs(dst, out);
     }
+}
+
+fn reads_regs_into(op: &POp, out: &mut Vec<&'static str>) {
     match op {
         POp::Copy { dst, src, .. } => {
-            visit(src, &mut out);
-            let _ = dst;
+            dst_addr_regs(dst, out);
+            collect_pvar_regs(src, out);
         }
-        POp::IntAdd { a, b, .. }
-        | POp::IntSub { a, b, .. }
-        | POp::IntMul { a, b, .. }
-        | POp::IntDiv { a, b, .. }
-        | POp::IntSDiv { a, b, .. }
-        | POp::IntAnd { a, b, .. }
-        | POp::IntOr { a, b, .. }
-        | POp::IntXor { a, b, .. }
-        | POp::IntLeft { a, b, .. }
-        | POp::IntShr { a, b, .. }
-        | POp::IntSar { a, b, .. } => {
-            visit(a, &mut out);
-            visit(b, &mut out);
+        POp::IntAdd { dst, a, b, .. }
+        | POp::IntSub { dst, a, b, .. }
+        | POp::IntMul { dst, a, b, .. }
+        | POp::IntDiv { dst, a, b, .. }
+        | POp::IntSDiv { dst, a, b, .. }
+        | POp::IntAnd { dst, a, b, .. }
+        | POp::IntOr { dst, a, b, .. }
+        | POp::IntXor { dst, a, b, .. }
+        | POp::IntLeft { dst, a, b, .. }
+        | POp::IntShr { dst, a, b, .. }
+        | POp::IntSar { dst, a, b, .. } => {
+            dst_addr_regs(dst, out);
+            collect_pvar_regs(a, out);
+            collect_pvar_regs(b, out);
         }
-        POp::Zext { src, .. } | POp::Sext { src, .. } | POp::Cvt { src, .. } => {
-            visit(src, &mut out)
+        POp::FloatBinop { a, b, .. }
+        | POp::FloatCmp { a, b, .. }
+        | POp::Cmp { a, b, .. }
+        | POp::Test { a, b, .. }
+        | POp::BitTest { a, b, .. } => {
+            collect_pvar_regs(a, out);
+            collect_pvar_regs(b, out);
         }
-        POp::FloatBinop { a, b, .. } => {
-            visit(a, &mut out);
-            visit(b, &mut out);
-        }
-        POp::FloatCmp { a, b, .. } => {
-            visit(a, &mut out);
-            visit(b, &mut out);
-        }
-        POp::Load { addr, .. } => visit(addr, &mut out),
+        POp::Zext { src, .. }
+        | POp::Sext { src, .. }
+        | POp::Cvt { src, .. }
+        | POp::Push { src, .. } => collect_pvar_regs(src, out),
+        POp::Load { addr, .. } => collect_pvar_regs(addr, out),
         POp::Store { addr, src, .. } => {
-            visit(addr, &mut out);
-            visit(src, &mut out);
-        }
-        POp::Cmp { a, b, .. } | POp::Test { a, b, .. } | POp::BitTest { a, b, .. } => {
-            visit(a, &mut out);
-            visit(b, &mut out);
+            collect_pvar_regs(addr, out);
+            collect_pvar_regs(src, out);
         }
         POp::CondCopy { dst, src, .. } => {
-            visit(dst, &mut out);
-            visit(src, &mut out);
+            collect_pvar_regs(dst, out);
+            collect_pvar_regs(src, out);
         }
         POp::BitModify { dst, bit, .. } => {
-            visit(dst, &mut out);
-            visit(bit, &mut out);
+            collect_pvar_regs(dst, out);
+            collect_pvar_regs(bit, out);
         }
         POp::Cmpxchg { addr, src, .. } => {
-            visit(addr, &mut out);
-            visit(src, &mut out);
+            collect_pvar_regs(addr, out);
+            collect_pvar_regs(src, out);
             out.push("rax");
         }
-        POp::Push { src, .. } => visit(src, &mut out),
         POp::AddrOf { base, index, .. } => {
             if let Some(b) = base {
-                visit(b, &mut out);
+                collect_pvar_regs(b, out);
             }
             if let Some(i) = index {
-                visit(i, &mut out);
+                collect_pvar_regs(i, out);
             }
         }
-        POp::BranchInd { target } => visit(target, &mut out),
+        POp::BranchInd { target } => collect_pvar_regs(target, out),
         POp::CallInd { target } => {
-            visit(target, &mut out);
-            for r in ABI_ARG_REGS {
-                out.push(r);
-            }
-            for r in WIN64_ARG_REGS {
-                out.push(r);
-            }
-            for r in SSE_ARG_REGS {
-                out.push(r);
-            }
+            collect_pvar_regs(target, out);
+            push_call_regs(out);
         }
-        POp::Call { .. } => {
-            for r in ABI_ARG_REGS {
-                out.push(r);
-            }
-            for r in WIN64_ARG_REGS {
-                out.push(r);
-            }
-            for r in SSE_ARG_REGS {
-                out.push(r);
-            }
-            for r in ["rax", "rsp", "eax", "esp"] {
-                out.push(r);
-            }
-        }
+        POp::Call { .. } => push_call_regs(out),
         POp::Return | POp::ReturnPop { .. } => {
-            for r in ["rax", "rbp", "rsp", "eax", "ebp", "esp", "xmm0"] {
-                out.push(r);
-            }
+            out.extend_from_slice(&["rax", "rbp", "rsp", "eax", "ebp", "esp", "xmm0"]);
         }
         _ => {}
     }
+}
+
+pub(crate) fn reads_regs(op: &POp) -> Vec<&'static str> {
+    let mut out = Vec::with_capacity(8);
+    reads_regs_into(op, &mut out);
     out
 }
 
 pub(crate) fn written_reg(op: &POp) -> Option<&'static str> {
-    match op {
+    let dst = match op {
         POp::Copy { dst, .. }
         | POp::IntAdd { dst, .. }
         | POp::IntSub { dst, .. }
@@ -154,15 +136,16 @@ pub(crate) fn written_reg(op: &POp) -> Option<&'static str> {
         | POp::SetCC { dst, .. }
         | POp::Pop { dst, .. }
         | POp::LeaAddr { dst, .. }
-        | POp::AddrOf { dst, .. } => match dst {
-            PVar::Reg(r) => Some(r),
-            _ => None,
-        },
-        POp::CondCopy { dst, .. } | POp::BitModify { dst, .. } => match dst {
-            PVar::Reg(r) => Some(r),
-            _ => None,
-        },
-        POp::Cmpxchg { .. } => Some("rax"),
+        | POp::AddrOf { dst, .. }
+        | POp::CondCopy { dst, .. }
+        | POp::BitModify { dst, .. }
+        | POp::Cvt { dst, .. }
+        | POp::FloatBinop { dst, .. } => dst,
+        POp::Cmpxchg { .. } => return Some("rax"),
+        _ => return None,
+    };
+    match dst {
+        PVar::Reg(r) => Some(*r),
         _ => None,
     }
 }
@@ -208,29 +191,27 @@ pub(crate) fn cse_key(
     op: &POp,
     reg_values: &HashMap<&'static str, PVal>,
 ) -> Option<(String, Vec<&'static str>)> {
-    let (sym, a, b) = match op {
-        POp::IntAdd { a, b, .. } => ("+", a, b),
-        POp::IntMul { a, b, .. } => ("*", a, b),
-        POp::IntAnd { a, b, .. } => ("&", a, b),
-        POp::IntOr { a, b, .. } => ("|", a, b),
-        POp::IntXor { a, b, .. } => ("^", a, b),
-        POp::IntSub { a, b, .. } => ("-", a, b),
+    let (sym, size, a, b) = match op {
+        POp::IntAdd { a, b, size, .. } => ("+", *size, a, b),
+        POp::IntMul { a, b, size, .. } => ("*", *size, a, b),
+        POp::IntAnd { a, b, size, .. } => ("&", *size, a, b),
+        POp::IntOr { a, b, size, .. } => ("|", *size, a, b),
+        POp::IntXor { a, b, size, .. } => ("^", *size, a, b),
+        POp::IntSub { a, b, size, .. } => ("-", *size, a, b),
         _ => return None,
     };
     written_reg(op)?;
-    let mut parts = [
-        pval_str(&resolve_pval(a, reg_values)),
-        pval_str(&resolve_pval(b, reg_values)),
-    ];
-    if matches!(sym, "+" | "*" | "&" | "|" | "^") {
-        parts.sort();
+    let mut pa = pval_str(&resolve_pval(a, reg_values));
+    let mut pb = pval_str(&resolve_pval(b, reg_values));
+    if sym != "-" && pa > pb {
+        std::mem::swap(&mut pa, &mut pb);
     }
-    let mut oregs = Vec::new();
+    let mut oregs = Vec::with_capacity(4);
     collect_pvar_regs(a, &mut oregs);
     collect_pvar_regs(b, &mut oregs);
-    oregs.sort();
+    oregs.sort_unstable();
     oregs.dedup();
-    Some((format!("{}|{}|{}", sym, parts[0], parts[1]), oregs))
+    Some((format!("{}|{}|{}|{}", sym, size, pa, pb), oregs))
 }
 
 pub(crate) fn cse_invalidate(
@@ -240,24 +221,20 @@ pub(crate) fn cse_invalidate(
     cse.retain(|_, (holder, oregs)| *holder != w && !oregs.contains(&w));
 }
 
-pub(crate) fn clobber_call(reg_values: &mut HashMap<&'static str, PVal>, is64: bool) {
-    let _ = is64;
-    let removed: Vec<&'static str> = CALL_CLOBBERED
-        .iter()
-        .copied()
-        .chain(SSE_ARG_REGS)
-        .collect();
-    for r in &removed {
+pub(crate) fn clobber_call(reg_values: &mut HashMap<&'static str, PVal>, _is64: bool) {
+    for r in CALL_CLOBBERED.iter().chain(SSE_ARG_REGS.iter()) {
         reg_values.remove(*r);
     }
-    if !reg_values.is_empty() {
-        let stale: Vec<&'static str> = reg_values
+    if reg_values.is_empty() {
+        return;
+    }
+    for (k, v) in reg_values.iter_mut() {
+        if CALL_CLOBBERED
             .iter()
-            .filter(|kv| removed.iter().any(|r| mentions_reg(kv.1, r)))
-            .map(|kv| *kv.0)
-            .collect();
-        for k in stale {
-            reg_values.insert(k, PVal::Opaque(k));
+            .chain(SSE_ARG_REGS.iter())
+            .any(|r| mentions_reg(v, r))
+        {
+            *v = PVal::Opaque(k);
         }
     }
 }
@@ -267,23 +244,30 @@ pub(crate) fn collect_call_args(
     is64: bool,
     is_win64: bool,
 ) -> Vec<String> {
-    let mut args = Vec::new();
     if !is64 {
-        return args;
+        return Vec::new();
     }
     let regs: &[&str] = if is_win64 {
         &WIN64_ARG_REGS
     } else {
         &ABI_ARG_REGS
     };
-    for r in regs {
-        if let Some(v) = reg_values.get(r) {
-            let s = pval_str(v);
-            if s != *r || matches!(v, PVal::Opaque(_)) {
-                args.push(s);
+    let mut args: Vec<String> = Vec::with_capacity(regs.len());
+    let mut known = 0usize;
+    for (i, r) in regs.iter().enumerate() {
+        let s = match reg_values.get(*r) {
+            Some(v) => {
+                let s = pval_str(v);
+                if s != *r || matches!(v, PVal::Opaque(_)) {
+                    known = i + 1;
+                }
+                s
             }
-        }
+            None => (*r).to_string(),
+        };
+        args.push(s);
     }
+    args.truncate(known);
     args
 }
 
@@ -295,12 +279,15 @@ pub(crate) fn take_call_args_sig(
     push_args: &mut Vec<PVal>,
 ) -> Vec<String> {
     if !is64 {
-        return take_call_args(reg_values, is64, is_win64, push_args);
+        let mut args = take_call_args(reg_values, is64, is_win64, push_args);
+        if !params.is_empty() {
+            args.truncate(params.len());
+        }
+        return args;
     }
     push_args.clear();
-    let mut out = Vec::new();
-    let mut gp = 0usize;
-    let mut sse = 0usize;
+    let mut out = Vec::with_capacity(params.len());
+    let (mut gp, mut sse) = (0usize, 0usize);
     for (idx, &is_float) in params.iter().enumerate() {
         let reg = if is_win64 {
             if idx >= WIN64_ARG_REGS.len() {
@@ -324,17 +311,12 @@ pub(crate) fn take_call_args_sig(
             gp += 1;
             r
         };
-        match reg_values.get(reg) {
-            Some(v) => {
-                let s = pval_str(v);
-                if s != reg || matches!(v, PVal::Opaque(_)) {
-                    out.push(s);
-                } else {
-                    out.push(reg.to_string());
-                }
-            }
-            None => out.push(reg.to_string()),
-        }
+        out.push(
+            reg_values
+                .get(reg)
+                .map(pval_str)
+                .unwrap_or_else(|| reg.to_string()),
+        );
     }
     out
 }
@@ -346,19 +328,16 @@ pub(crate) fn take_call_args(
     push_args: &mut Vec<PVal>,
 ) -> Vec<String> {
     if !is64 && !push_args.is_empty() {
-        let mut vals: Vec<String> = push_args.drain(..).map(|v| pval_str(&v)).collect();
-        vals.reverse();
-        return vals;
+        return push_args.drain(..).rev().map(|v| pval_str(&v)).collect();
     }
     push_args.clear();
     collect_call_args(reg_values, is64, is_win64)
 }
 
-
-
 pub(crate) fn struct_member_expr(
     base: &PVar,
     off: i64,
+    size: usize,
     base_text: &str,
     hints: Option<&TypeHints>,
 ) -> Option<String> {
@@ -366,21 +345,94 @@ pub(crate) fn struct_member_expr(
     let PVar::Reg(r) = base else {
         return None;
     };
-    
-    
-    if base_text.contains('+') || base_text.contains('-') {
+    if base_text.contains(['+', '-']) {
         return None;
     }
-    let (st, display) = if let Some(st) = hints.value_structs.get(base_text) {
-        (st, st.owner.as_deref().unwrap_or(base_text))
-    } else {
-        (hints.structs.get(*r)?, base_text)
+    let (st, display) = match hints.value_structs.get(base_text) {
+        Some(st) => (
+            st,
+            st.owner.clone().unwrap_or_else(|| base_text.to_string()),
+        ),
+        None => (hints.structs.get(*r)?, base_text.to_string()),
     };
-    let field = st.field(off)?;
+    let field = st.field_sized(off, size)?;
     if field.starts_with("field_0x") {
         return None;
     }
     Some(format!("{}->{}", display, field))
+}
+
+#[inline]
+fn stack_key(base: &StackBase, off: i64, h: &TypeHints) -> (u8, i64) {
+    if *base == StackBase::Rbp {
+        (0, off + h.rbp_delta)
+    } else {
+        (1, off + h.rsp_at.get(&h.cur_pc.get()).copied().unwrap_or(0))
+    }
+}
+
+fn stack_var_name(h: &TypeHints, b: u8, off: i64) -> String {
+    let pc = h.cur_pc.get();
+    h.var_names
+        .as_ref()
+        .and_then(|vn| {
+            vn.read_stack
+                .get(&(pc, b, off))
+                .or_else(|| vn.write_stack.get(&(pc, b, off)))
+                .or_else(|| vn.stack_by_raw.get(&(b, off)))
+        })
+        .cloned()
+        .unwrap_or_else(|| fallback_slot_name(off, h))
+}
+
+fn subst_reg(v: &PVar, reg_values: &HashMap<&'static str, PVal>) -> String {
+    let s = fmt_var(v);
+    match reg_values.get(s.as_str()) {
+        Some(pv) => pval_str(pv),
+        None => s,
+    }
+}
+
+fn is_compound(s: &str) -> bool {
+    let mut depth = 0i32;
+    for (i, c) in s.bytes().enumerate() {
+        match c {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'*' | b'-' | b'&' | b'!' | b'~' if i == 0 => {}
+            b' ' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'?'
+                if depth == 0 =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn paren(s: &str) -> std::borrow::Cow<'_, str> {
+    if is_compound(s) {
+        std::borrow::Cow::Owned(format!("({})", s))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+fn deref_disp(ty: &str, base: &str, disp: i64) -> String {
+    match disp {
+        0 => format!("*({} *){}", ty, paren(base)),
+        d if d > 0 => format!("*({} *)({} + {:#x})", ty, base, d),
+        d => format!("*({} *)({} - {:#x})", ty, base, d.unsigned_abs()),
+    }
+}
+
+fn fmt_plain_deref(inner: &str, disp: i64) -> String {
+    match disp {
+        0 => format!("*({})", inner),
+        d if d > 0 => format!("*({} + {:#x})", inner, d),
+        d => format!("*({} - {:#x})", inner, d.unsigned_abs()),
+    }
 }
 
 pub(crate) fn fmt_load(
@@ -390,89 +442,59 @@ pub(crate) fn fmt_load(
     float_hint: Option<bool>,
     hints: Option<&TypeHints>,
 ) -> String {
-    let ty: String = match float_hint {
-        Some(true) => {
-            if size == 8 {
-                "double".into()
-            } else {
-                "float".into()
-            }
-        }
-        _ => c_type_for_size(size).to_string(),
+    let ty: &str = match float_hint {
+        Some(true) if size == 8 => "double",
+        Some(true) => "float",
+        _ => c_type_for_size(size),
     };
-    let ty = ty.as_str();
+    let usz = size as usize;
     match addr {
         PVar::StackSlot { base, off } => {
-            let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
-            if let Some(h) = hints {
-                let pc = h.cur_pc.get();
-                let norm = if b == 1 {
-                    *off + h.rsp_at.get(&pc).copied().unwrap_or(0)
-                } else {
-                    *off + h.rbp_delta
-                };
-                if let Some(st) = h.stack_structs.iter().find(|s| {
-                    s.base_reg == b
-                        && norm >= s.base_norm
-                        && norm < s.base_norm.saturating_add(s.size as i64)
-                }) {
-                    let base_name = st
-                        .base_display
-                        .clone()
-                        .or_else(|| {
-                            h.var_names
-                                .as_ref()
-                                .and_then(|vn| vn.stack_by_raw.get(&(b, st.base)))
-                                .cloned()
-                        })
-                        .unwrap_or_else(|| fallback_slot_name(st.base, h));
-                    let rel = norm - st.base_norm;
-                    if st.is_union
-                        && let Some((_, _fsize, fname)) = st
-                            .fields
-                            .iter()
-                            .find(|(o, fs, _)| *o == rel && *fs == size as usize)
-                    {
-                        return format!("{}.{}", base_name, fname);
-                    }
-                    if norm == st.base_norm && size as usize >= st.size {
-                        return base_name;
-                    }
-                    if let Some((_, _fsize, fname)) = st
-                        .fields
-                        .iter()
-                        .find(|(o, fs, _)| *o == rel && *fs == size as usize)
-                    {
-                        return format!("{}.{}", base_name, fname);
-                    }
-                }
-                if let Some((name, local_size)) = h.stack_names.get(&norm)
-                    && *local_size == size as usize
+            let Some(h) = hints else {
+                return format!("*({0} *)&{1}", ty, fmt_var(addr));
+            };
+            let (b, norm) = stack_key(base, *off, h);
+            if let Some(st) = h.stack_structs.iter().find(|s| {
+                s.base_reg == b
+                    && norm >= s.base_norm
+                    && norm < s.base_norm.saturating_add(s.size as i64)
+            }) {
+                let base_name = st
+                    .base_display
+                    .clone()
+                    .or_else(|| {
+                        h.var_names
+                            .as_ref()
+                            .and_then(|vn| vn.stack_by_raw.get(&(b, st.base)))
+                            .cloned()
+                    })
+                    .unwrap_or_else(|| fallback_slot_name(st.base, h));
+                let rel = norm - st.base_norm;
+                let field = st.fields.iter().find(|(o, fs, _)| *o == rel && *fs == usz);
+                if st.is_union
+                    && let Some((_, _, fname)) = field
                 {
-                    return name.clone();
+                    return format!("{}.{}", base_name, fname);
+                }
+                if norm == st.base_norm && usz >= st.size {
+                    return base_name;
+                }
+                if let Some((_, _, fname)) = field {
+                    return format!("{}.{}", base_name, fname);
                 }
             }
-            let name = if let Some(h) = hints {
-                if let Some(vn) = &h.var_names {
-                    let pc = h.cur_pc.get();
-                    if let Some(n) = vn.read_stack.get(&(pc, b, *off))
-                        .or_else(|| vn.write_stack.get(&(pc, b, *off)))
-                        .or_else(|| vn.stack_by_raw.get(&(b, *off))) {
-                        n.clone()
-                    } else {
-                        fallback_slot_name(*off, h)
-                    }
-                } else {
-                    fallback_slot_name(*off, h)
-                }
-            } else {
-                if *off < 0 { format!("local_{:X}", off.unsigned_abs()) } else { format!("arg_{:X}", off) }
-            };
-            if let Some(h) = hints
-                && let Some(vn) = &h.var_names
-                    && vn.size_of.get(&name).copied() == Some(size) {
-                        return name;
-                    }
+            if let Some((name, local_size)) = h.stack_names.get(&norm)
+                && *local_size == usz
+            {
+                return name.clone();
+            }
+            let name = stack_var_name(h, b, *off);
+            if h.var_names
+                .as_ref()
+                .is_some_and(|vn| vn.size_of.get(&name).copied() == Some(size))
+            {
+                return name;
+            }
             format!("*({0} *)&{1}", ty, name)
         }
         PVar::Addr(a) if is_small_abs_addr(*a) => {
@@ -484,24 +506,17 @@ pub(crate) fn fmt_load(
                 .get(r)
                 .map(pval_str)
                 .unwrap_or_else(|| r.to_string());
-            if let Some(m) = struct_member_expr(addr, 0, &base, hints) {
+            if let Some(m) = struct_member_expr(addr, 0, usz, &base, hints) {
                 return m;
             }
-            format!("*({} *){}", ty, base)
+            format!("*({} *){}", ty, paren(&base))
         }
         PVar::Mem(base, disp) => {
-            let b = fmt_var(base);
-            let b = reg_values.get(b.as_str()).map(pval_str).unwrap_or(b);
-            if let Some(m) = struct_member_expr(base, *disp, &b, hints) {
+            let b = subst_reg(base, reg_values);
+            if let Some(m) = struct_member_expr(base, *disp, usz, &b, hints) {
                 return m;
             }
-            if *disp == 0 {
-                format!("*({} *){}", ty, b)
-            } else if *disp > 0 {
-                format!("*({} *)({} + {:#x})", ty, b, disp)
-            } else {
-                format!("*({} *)({} - {:#x})", ty, b, -disp)
-            }
+            deref_disp(ty, &b, *disp)
         }
         PVar::Scaled {
             base,
@@ -509,40 +524,30 @@ pub(crate) fn fmt_load(
             scale,
             disp,
         } => {
-            let b = fmt_var(base);
-            let b = reg_values.get(b.as_str()).map(pval_str).unwrap_or(b);
-            let i = fmt_var(index);
-            let i = reg_values.get(i.as_str()).map(pval_str).unwrap_or(i);
+            let b = subst_reg(base, reg_values);
+            let i = subst_reg(index, reg_values);
             let inner = if *scale == 1 {
                 format!("{} + {}", b, i)
             } else {
-                format!("{} + {} * {}", b, i, scale)
+                format!("{} + {} * {}", b, paren(&i), scale)
             };
-            if *disp == 0 {
-                format!("*({} *)({})", ty, inner)
-            } else if *disp > 0 {
-                format!("*({} *)({} + {:#x})", ty, inner, disp)
-            } else {
-                format!("*({} *)({} - {:#x})", ty, inner, -disp)
-            }
+            deref_disp(ty, &inner, *disp)
         }
-        other => format!("*({} *){}", ty, fmt_var(other)),
+        other => format!("*({} *){}", ty, paren(&fmt_var(other))),
     }
 }
 
 pub(crate) fn fallback_slot_name(off: i64, hints: &TypeHints) -> String {
     if off < 0 {
-        format!("local_{:X}", off.unsigned_abs())
-    } else if hints.spill_slots.contains(&off) || hints.local_slots.contains(&off) {
-        if hints.spill_slots.contains(&off) && !hints.local_slots.contains(&off) {
-            format!("stk_{:X}", off)
-        } else {
-            format!("local_{:X}", off)
-        }
-    } else if hints.param_slots.contains(&off) {
-        format!("param_{:X}", off)
-    } else {
-        format!("arg_{:X}", off)
+        return format!("local_{:X}", off.unsigned_abs());
+    }
+    let spill = hints.spill_slots.contains(&off);
+    let local = hints.local_slots.contains(&off);
+    match (spill, local) {
+        (true, false) => format!("stk_{:X}", off),
+        (_, true) => format!("local_{:X}", off),
+        _ if hints.param_slots.contains(&off) => format!("param_{:X}", off),
+        _ => format!("arg_{:X}", off),
     }
 }
 
@@ -557,15 +562,7 @@ pub(crate) fn fmt_var(v: &PVar) -> String {
                 format!("arg_{:X}", off)
             }
         }
-        PVar::Mem(base, disp) => {
-            if *disp == 0 {
-                format!("*({})", fmt_var(base))
-            } else if *disp > 0 {
-                format!("*({} + {:#x})", fmt_var(base), disp)
-            } else {
-                format!("*({} - {:#x})", fmt_var(base), -disp)
-            }
-        }
+        PVar::Mem(base, disp) => fmt_plain_deref(&fmt_var(base), *disp),
         PVar::Scaled {
             base,
             index,
@@ -577,13 +574,7 @@ pub(crate) fn fmt_var(v: &PVar) -> String {
             } else {
                 format!("{} + {} * {}", fmt_var(base), fmt_var(index), scale)
             };
-            if *disp == 0 {
-                format!("*({})", inner)
-            } else if *disp > 0 {
-                format!("*({} + {:#x})", inner, disp)
-            } else {
-                format!("*({} - {:#x})", inner, -disp)
-            }
+            fmt_plain_deref(&inner, *disp)
         }
         PVar::Addr(a) if is_small_abs_addr(*a) || is_shift_constant(*a) => fmt_const(*a as i64),
         PVar::Addr(a) => format!("DAT_{:x}", a),
@@ -594,23 +585,11 @@ pub(crate) fn fmt_var(v: &PVar) -> String {
 pub(crate) fn fmt_var_with_hints(v: &PVar, hints: &TypeHints) -> String {
     match v {
         PVar::StackSlot { base, off } => {
-            let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
-            let pc = hints.cur_pc.get();
-            let norm = if b == 1 {
-                *off + hints.rsp_at.get(&pc).copied().unwrap_or(0)
-            } else {
-                *off + hints.rbp_delta
-            };
+            let (b, norm) = stack_key(base, *off, hints);
             if let Some((name, _size)) = hints.stack_names.get(&norm) {
                 return name.clone();
             }
-            if let Some(vn) = &hints.var_names
-                && let Some(n) = vn.read_stack.get(&(pc, b, *off))
-                    .or_else(|| vn.write_stack.get(&(pc, b, *off)))
-                    .or_else(|| vn.stack_by_raw.get(&(b, *off))) {
-                    return n.clone();
-            }
-            fallback_slot_name(*off, hints)
+            stack_var_name(hints, b, *off)
         }
         PVar::Mem(base, off) => {
             if let PVar::Reg(r) = &**base
@@ -637,22 +616,22 @@ pub(crate) fn resolve_pval_with_hints(
             .cloned()
             .unwrap_or_else(|| PVal::E(r.to_string())),
         PVar::Const(c) => PVal::C(*c),
-        PVar::StackSlot { base, off } => {
-            let b = if *base == StackBase::Rbp { 0u8 } else { 1u8 };
-            let pc = hints.cur_pc.get();
-            let norm = if b == 1 {
-                *off + hints.rsp_at.get(&pc).copied().unwrap_or(0)
-            } else {
-                *off + hints.rbp_delta
-            };
-            if let Some((name, _)) = hints.stack_names.get(&norm) {
-                PVal::E(name.clone())
-            } else {
-                PVal::E(fmt_var_with_hints(v, hints))
-            }
-        }
         other => PVal::E(fmt_var_with_hints(other, hints)),
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlagSrc {
+    None,
+    Cmp,
+    Float,
+    Bit,
+    Setter,
+    AhMask,
+}
+
+fn is_cond_jump(m: &str) -> bool {
+    m.starts_with('j') && !matches!(m, "jmp" | "jecxz" | "jrcxz" | "jcxz")
 }
 
 pub(crate) fn recover_condition(
@@ -666,169 +645,208 @@ pub(crate) fn recover_condition(
     if block_id >= cfg.blocks.len() {
         return "cond".into();
     }
+    let Some(ops) = bops.get(block_id) else {
+        return "cond".into();
+    };
 
     let cv = |v: &PVar| -> String {
-        match v {
-            PVar::Reg(r) => match consts.get(r) {
-                Some(Lattice::Const(c)) => fmt_const(*c),
-                _ => {
-                    if let Some(h) = hints { fmt_var_with_hints(v, h) } else { fmt_var(v) }
-                }
-            },
-            _ => {
-                if let Some(h) = hints { fmt_var_with_hints(v, h) } else { fmt_var(v) }
-            }
+        if let PVar::Reg(r) = v
+            && let Some(Lattice::Const(c)) = consts.get(r)
+        {
+            return fmt_const(*c);
+        }
+        match hints {
+            Some(h) => fmt_var_with_hints(v, h),
+            None => fmt_var(v),
         }
     };
 
-    let mut cmp_pair: Option<(PVar, PVar, bool)> = None;
+    let mut cmp_pair: Option<(&PVar, &PVar, bool)> = None;
     let mut cmp_size: u32 = 8;
-    let mut float_cmp_pair: Option<(PVar, PVar)> = None;
-    let mut bit_test: Option<(PVar, PVar)> = None;
-    let mut flag_setter: Option<(String, PVar, PVar, String)> = None;
-    let mut jcc_mnemonic = String::new();
-    let mut ah_float_cmp: Option<(PVar, PVar)> = None;
+    let mut float_cmp_pair: Option<(&PVar, &PVar)> = None;
+    let mut bit_test: Option<(&PVar, &PVar)> = None;
+    let mut flag_setter: Option<(&'static str, &PVar, &PVar, &PVar)> = None;
+    let mut jcc = String::new();
     let mut ah_test_mask: Option<i64> = None;
+    let mut last = FlagSrc::None;
     let mut ops_since_sub: usize = usize::MAX;
     let mut cmp_follows_sub = false;
 
-    for (addr, op) in &bops[block_id] {
-        if let Some(di) = imap_get(imap, *addr) {
-            if di.mnemonic.starts_with('j') && di.mnem() != "jmp" && di.mnem() != "jecxz" {
-                jcc_mnemonic = di.mnemonic.to_string();
+    for &(addr, op) in ops {
+        let di = imap_get(imap, addr);
+        if let Some(d) = di {
+            let m = d.mnem();
+            if is_cond_jump(m) {
+                jcc = m.to_string();
                 break;
             }
-            if di.mnem() == "lahf" || di.mnem() == "sahf" {
+            if m == "lahf" || m == "sahf" {
                 continue;
             }
         }
         match op {
             POp::Cmp { a, b, size } => {
-                cmp_pair = Some((a.clone(), b.clone(), false));
+                cmp_pair = Some((a, b, false));
                 cmp_size = *size;
                 cmp_follows_sub = ops_since_sub <= 1;
+                last = FlagSrc::Cmp;
             }
             POp::Test { a, b, size } => {
                 cmp_size = *size;
                 cmp_follows_sub = ops_since_sub <= 1;
                 let is_ah = matches!(a, PVar::Reg(_))
-                    && imap_get(imap, *addr)
-                        .map(|d| d.ops().to_ascii_lowercase().starts_with("ah"))
-                        .unwrap_or(false);
+                    && di.is_some_and(|d| {
+                        d.ops()
+                            .as_bytes()
+                            .get(..2)
+                            .is_some_and(|p| p.eq_ignore_ascii_case(b"ah"))
+                    });
                 if is_ah {
-                    if ah_float_cmp.is_some()
-                        && let PVar::Const(m) = b {
-                            ah_test_mask = Some(*m);
-                        }
+                    if float_cmp_pair.is_some()
+                        && let PVar::Const(mask) = b
+                    {
+                        ah_test_mask = Some(*mask);
+                        last = FlagSrc::AhMask;
+                    }
                 } else {
-                    cmp_pair = Some((a.clone(), b.clone(), true));
+                    cmp_pair = Some((a, b, true));
+                    last = FlagSrc::Cmp;
                 }
             }
             POp::FloatCmp { a, b, .. } => {
-                float_cmp_pair = Some((a.clone(), b.clone()));
-                ah_float_cmp = Some((a.clone(), b.clone()));
+                float_cmp_pair = Some((a, b));
                 ah_test_mask = None;
+                last = FlagSrc::Float;
             }
             POp::BitTest { a, b, .. } => {
-                bit_test = Some((a.clone(), b.clone()));
+                bit_test = Some((a, b));
+                last = FlagSrc::Bit;
             }
             POp::IntAdd { dst, a, b, .. } => {
-                flag_setter = Some(("add".into(), a.clone(), b.clone(), fmt_var(dst)))
+                flag_setter = Some(("add", a, b, dst));
+                last = FlagSrc::Setter;
             }
             POp::IntSub { dst, a, b, .. } => {
-                flag_setter = Some(("sub".into(), a.clone(), b.clone(), fmt_var(dst)))
+                flag_setter = Some(("sub", a, b, dst));
+                last = FlagSrc::Setter;
             }
             POp::IntAnd { dst, a, b, .. } => {
-                flag_setter = Some(("and".into(), a.clone(), b.clone(), fmt_var(dst)))
+                flag_setter = Some(("and", a, b, dst));
+                last = FlagSrc::Setter;
             }
             POp::IntOr { dst, a, b, .. } => {
-                flag_setter = Some(("or".into(), a.clone(), b.clone(), fmt_var(dst)))
+                flag_setter = Some(("or", a, b, dst));
+                last = FlagSrc::Setter;
             }
             POp::IntXor { dst, a, b, .. } => {
-                flag_setter = Some(("xor".into(), a.clone(), b.clone(), fmt_var(dst)))
+                flag_setter = Some(("xor", a, b, dst));
+                last = FlagSrc::Setter;
+            }
+            POp::IntLeft { dst, a, b, .. } => {
+                flag_setter = Some(("shl", a, b, dst));
+                last = FlagSrc::Setter;
+            }
+            POp::IntShr { dst, a, b, .. } => {
+                flag_setter = Some(("shr", a, b, dst));
+                last = FlagSrc::Setter;
+            }
+            POp::IntSar { dst, a, b, .. } => {
+                flag_setter = Some(("sar", a, b, dst));
+                last = FlagSrc::Setter;
             }
             _ => {}
         }
-        if matches!(op, POp::IntSub { .. }) {
-            ops_since_sub = 0;
+        ops_since_sub = if matches!(op, POp::IntSub { .. }) {
+            0
         } else {
-            ops_since_sub = ops_since_sub.saturating_add(1);
-        }
-    }
-
-    if !jcc_mnemonic.is_empty()
-        && let (Some(mask), Some((fa, fb))) = (ah_test_mask, ah_float_cmp.clone()) {
-            let av = cv(&fa);
-            let bv = cv(&fb);
-            return float_cc_via_mask(&jcc_mnemonic, mask, &av, &bv);
-        }
-
-    if let Some((a, b)) = bit_test {
-        let av = cv(&a);
-        let bv = cv(&b);
-        let expr = format!("(({} >> {}) & 1)", av, bv);
-        return match jcc_mnemonic.as_str() {
-            "jc" | "jb" | "jnae" => format!("{} != 0", expr),
-            "jnc" | "jae" | "jnb" => format!("{} == 0", expr),
-            _ => "cond".into(),
+            ops_since_sub.saturating_add(1)
         };
     }
 
-    if let Some((a, b, is_test)) = cmp_pair {
-        if let Some((kind, fa, fb, dst)) = &flag_setter
-            && kind == "sub"
-            && cmp_follows_sub
-            && cmp_tests_flag_result(&a, &b, is_test, dst)
-            && let Some(cond) = flag_condition(
-                kind,
-                &cv(fa),
-                &cv(fb),
-                &jcc_mnemonic,
-                cmp_size,
-                is_test,
-            )
-        {
-            return cond;
+    let has_jcc = !jcc.is_empty();
+    let jcc = jcc.as_str();
+
+    match last {
+        FlagSrc::AhMask if has_jcc => {
+            if let (Some(mask), Some((fa, fb))) = (ah_test_mask, float_cmp_pair) {
+                return float_cc_via_mask(jcc, mask, &cv(fa), &cv(fb));
+            }
         }
-        let av = cv(&a);
-        let bv = cv(&b);
-        return jcc_to_expr(&jcc_mnemonic, &av, &bv, is_test, cmp_size);
-    }
-
-    if let Some((a, b)) = float_cmp_pair {
-        let av = cv(&a);
-        let bv = cv(&b);
-        return match jcc_mnemonic.as_str() {
-            "je" | "jz" => format!("{} == {}", av, bv),
-            "jne" | "jnz" => format!("{} != {}", av, bv),
-            "ja" | "jnbe" => format!("{} > {}", av, bv),
-            "jae" | "jnb" | "jnc" => format!("{} >= {}", av, bv),
-            "jb" | "jnae" | "jc" => format!("{} < {}", av, bv),
-            "jbe" | "jna" => format!("{} <= {}", av, bv),
-            _ => "cond".into(),
-        };
-    }
-
-    if let Some((kind, a, b, dst)) = flag_setter {
-        let expr = match kind.as_str() {
-            "add" => format!("({} + {})", cv(&a), cv(&b)),
-            "sub" => format!("({} - {})", cv(&a), cv(&b)),
-            "and" => format!("({} & {})", cv(&a), cv(&b)),
-            "or" => format!("({} | {})", cv(&a), cv(&b)),
-            "xor" => format!("({} ^ {})", cv(&a), cv(&b)),
-            _ => dst,
-        };
-        let cond = result_cond(&jcc_mnemonic, &expr);
-        if cond != "cond" {
-            return cond;
+        FlagSrc::Bit => {
+            if let Some((a, b)) = bit_test {
+                let expr = format!("(({} >> {}) & 1)", cv(a), cv(b));
+                return match jcc {
+                    "jc" | "jb" | "jnae" => format!("{} != 0", expr),
+                    "jnc" | "jae" | "jnb" => format!("{} == 0", expr),
+                    _ => "cond".into(),
+                };
+            }
         }
+        FlagSrc::Cmp => {
+            if let Some((a, b, is_test)) = cmp_pair {
+                if !has_jcc {
+                    return "cond".into();
+                }
+                if let Some((kind, fa, fb, dst)) = flag_setter
+                    && kind == "sub"
+                    && cmp_follows_sub
+                    && cmp_tests_flag_result(a, b, is_test, &fmt_var(dst))
+                    && let Some(cond) =
+                        flag_condition(kind, &cv(fa), &cv(fb), jcc, cmp_size, is_test)
+                {
+                    return cond;
+                }
+                return jcc_to_expr(jcc, &cv(a), &cv(b), is_test, cmp_size);
+            }
+        }
+        FlagSrc::Float => {
+            if let Some((a, b)) = float_cmp_pair {
+                let (av, bv) = (cv(a), cv(b));
+                return match jcc {
+                    "je" | "jz" => format!("{av} == {bv}"),
+                    "jne" | "jnz" => format!("{av} != {bv}"),
+                    "ja" | "jnbe" => format!("{av} > {bv}"),
+                    "jae" | "jnb" | "jnc" => format!("{av} >= {bv}"),
+                    "jb" | "jnae" | "jc" => format!("{av} < {bv}"),
+                    "jbe" | "jna" => format!("{av} <= {bv}"),
+                    "jp" | "jpe" => format!("isnan({av}) || isnan({bv})"),
+                    "jnp" | "jpo" => format!("!isnan({av}) && !isnan({bv})"),
+                    _ => "cond".into(),
+                };
+            }
+        }
+        FlagSrc::Setter => {
+            if let Some((kind, a, b, dst)) = flag_setter {
+                let expr = match kind {
+                    "add" => format!("({} + {})", cv(a), cv(b)),
+                    "sub" => format!("({} - {})", cv(a), cv(b)),
+                    "and" => format!("({} & {})", cv(a), cv(b)),
+                    "or" => format!("({} | {})", cv(a), cv(b)),
+                    "xor" => format!("({} ^ {})", cv(a), cv(b)),
+                    _ => cv(dst),
+                };
+                let cond = match kind {
+                    "and" | "or" | "xor" => logic_result_cond(jcc, &expr),
+                    "shl" | "shr" | "sar" => match jcc {
+                        "jz" | "je" | "jnz" | "jne" | "js" | "jns" | "jl" | "jnge" | "jle"
+                        | "jng" | "jg" | "jnle" | "jge" | "jnl" => result_cond(jcc, &expr),
+                        _ => "cond".into(),
+                    },
+                    _ => result_cond(jcc, &expr),
+                };
+                if cond != "cond" {
+                    return cond;
+                }
+            }
+        }
+        _ => {}
     }
 
-    if !jcc_mnemonic.is_empty() {
-        return jcc_only_expr(&jcc_mnemonic);
+    if has_jcc {
+        jcc_only_expr(jcc)
+    } else {
+        "cond".into()
     }
-
-    "cond".into()
 }
 
 fn cmp_tests_flag_result(a: &PVar, b: &PVar, is_test: bool, dst: &str) -> bool {
@@ -858,8 +876,7 @@ fn flag_condition(
                 "or" => "|",
                 _ => "^",
             };
-            let expr = format!("({} {} {})", a, op, b);
-            let cond = result_cond(jcc, &expr);
+            let cond = logic_result_cond(jcc, &format!("({} {} {})", a, op, b));
             (cond != "cond").then_some(cond)
         }
         "add" => {
@@ -875,32 +892,52 @@ fn flag_condition(
 }
 
 pub(crate) fn float_cc_via_mask(jcc: &str, mask: i64, a: &str, b: &str) -> String {
-    let eq = format!("{} == {}", a, b);
-    let ne = format!("{} != {}", a, b);
-    let lt = format!("{} < {}", a, b);
-    let le = format!("{} <= {}", a, b);
-    let gt = format!("{} > {}", a, b);
-    let ge = format!("{} >= {}", a, b);
-    match mask {
-        0x40 => match jcc {
-            "je" | "jz" => eq,
-            "jne" | "jnz" => ne,
-            _ => "cond".into(),
-        },
-        0x41 | 0x44 | 0x45 => match jcc {
-            "je" | "jz" => eq,
-            "jne" | "jnz" => ne,
-            "ja" | "jnbe" => gt,
-            "jbe" | "jna" => le,
-            "jb" | "jnae" | "jc" => lt,
-            "jae" | "jnb" | "jnc" => ge,
-            _ => "cond".into(),
-        },
-        0x01 => match jcc {
-            "jb" | "jnae" | "jc" => lt,
-            "jae" | "jnb" | "jnc" => ge,
-            _ => "cond".into(),
-        },
+    const AH: [i64; 4] = [0x00, 0x01, 0x40, 0x45];
+    let mut taken = 0u8;
+    for (i, ah) in AH.iter().enumerate() {
+        let v = (*ah & mask) & 0xff;
+        let zf = v == 0;
+        let pf = v.count_ones().is_multiple_of(2);
+        let hit = match jcc {
+            "je" | "jz" | "jbe" | "jna" | "jle" | "jng" => zf,
+            "jne" | "jnz" | "ja" | "jnbe" | "jg" | "jnle" => !zf,
+            "jp" | "jpe" => pf,
+            "jnp" | "jpo" => !pf,
+            "jb" | "jnae" | "jc" | "jl" | "jnge" | "js" | "jo" => false,
+            "jae" | "jnb" | "jnc" | "jge" | "jnl" | "jns" | "jno" => true,
+            _ => return "cond".into(),
+        };
+        taken |= (hit as u8) << i;
+    }
+    match taken {
+        0b0001 => format!("{a} > {b}"),
+        0b0010 => format!("{a} < {b}"),
+        0b0100 => format!("{a} == {b}"),
+        0b0101 => format!("{a} >= {b}"),
+        0b0110 => format!("{a} <= {b}"),
+        0b0011 => format!("({a} < {b} || {a} > {b})"),
+        0b1011 => format!("{a} != {b}"),
+        0b1100 => format!("{a} == {b}"),
+        0b1110 => format!("!({a} > {b})"),
+        0b1101 => format!("!({a} < {b})"),
+        0b1010 => format!("!({a} >= {b})"),
+        0b1001 => format!("!({a} <= {b})"),
+        0b1000 => format!("isnan({a}) || isnan({b})"),
+        0b0111 => format!("!isnan({a}) && !isnan({b})"),
+        _ => "cond".into(),
+    }
+}
+
+pub(crate) fn logic_result_cond(jcc: &str, expr: &str) -> String {
+    match jcc {
+        "jz" | "je" | "jbe" | "jna" => format!("{} == 0", expr),
+        "jnz" | "jne" | "ja" | "jnbe" => format!("{} != 0", expr),
+        "js" | "jl" | "jnge" => format!("{} < 0", expr),
+        "jns" | "jge" | "jnl" => format!("{} >= 0", expr),
+        "jle" | "jng" => format!("{} <= 0", expr),
+        "jg" | "jnle" => format!("{} > 0", expr),
+        "jb" | "jnae" | "jc" | "jo" => "0".into(),
+        "jae" | "jnb" | "jnc" | "jno" => "1".into(),
         _ => "cond".into(),
     }
 }
@@ -927,20 +964,13 @@ pub(crate) fn result_cond(jcc: &str, expr: &str) -> String {
 
 pub(crate) fn jcc_to_expr(jcc: &str, a: &str, b: &str, is_test: bool, size: u32) -> String {
     if is_test {
-        if a == b {
-            return match jcc {
-                "jz" | "je" => format!("{} == 0", a),
-                "jnz" | "jne" => format!("{} != 0", a),
-                "js" => format!("{} < 0", a),
-                "jns" => format!("{} >= 0", a),
-                _ => format!("{} & {}", a, b),
-            };
-        }
-        return match jcc {
-            "jz" | "je" => format!("({} & {}) == 0", a, b),
-            "jnz" | "jne" => format!("({} & {}) != 0", a, b),
-            _ => format!("({} & {})", a, b),
+        let expr = if a == b {
+            a.to_string()
+        } else {
+            format!("({} & {})", a, b)
         };
+        let cond = logic_result_cond(jcc, &expr);
+        return if cond == "cond" { expr } else { cond };
     }
     let unsigned = if size >= 8 { "ulonglong" } else { "uint" };
     match jcc {
@@ -960,22 +990,31 @@ pub(crate) fn jcc_to_expr(jcc: &str, a: &str, b: &str, is_test: bool, size: u32)
         "jno" => format!("!overflow({} - {})", a, b),
         "jp" | "jpe" => format!("parity({} - {})", a, b),
         "jnp" | "jpo" => format!("!parity({} - {})", a, b),
-        _ => format!("{} ? {}", a, b),
+        _ => "cond".into(),
     }
 }
 
 pub(crate) fn jcc_only_expr(jcc: &str) -> String {
-    match jcc {
-        "jz" | "je" => "ZF".into(),
-        "jnz" | "jne" => "!ZF".into(),
-        "js" => "SF".into(),
-        "jns" => "!SF".into(),
-        "jc" | "jb" => "CF".into(),
-        "jnc" | "jnb" => "!CF".into(),
-        "jo" => "OF".into(),
-        "jno" => "!OF".into(),
-        _ => "cond".into(),
-    }
+    let s: &str = match jcc {
+        "jz" | "je" => "ZF",
+        "jnz" | "jne" => "!ZF",
+        "js" => "SF",
+        "jns" => "!SF",
+        "jc" | "jb" | "jnae" => "CF",
+        "jnc" | "jnb" | "jae" => "!CF",
+        "jo" => "OF",
+        "jno" => "!OF",
+        "jp" | "jpe" => "PF",
+        "jnp" | "jpo" => "!PF",
+        "jbe" | "jna" => "CF || ZF",
+        "ja" | "jnbe" => "!CF && !ZF",
+        "jl" | "jnge" => "SF != OF",
+        "jge" | "jnl" => "SF == OF",
+        "jle" | "jng" => "ZF || SF != OF",
+        "jg" | "jnle" => "!ZF && SF == OF",
+        _ => "cond",
+    };
+    s.into()
 }
 
 #[cfg(test)]
@@ -1021,13 +1060,48 @@ mod tests {
 
     #[test]
     fn unsigned_casts_follow_operand_width() {
-        assert_eq!(
-            jcc_to_expr("jb", "a", "b", false, 4),
-            "(uint)a < (uint)b"
-        );
+        assert_eq!(jcc_to_expr("jb", "a", "b", false, 4), "(uint)a < (uint)b");
         assert_eq!(
             jcc_to_expr("jae", "a", "b", false, 8),
             "(ulonglong)a >= (ulonglong)b"
         );
+    }
+
+    #[test]
+    fn test_instruction_covers_signed_and_unsigned_jumps() {
+        assert_eq!(jcc_to_expr("jg", "x", "x", true, 4), "x > 0");
+        assert_eq!(jcc_to_expr("jle", "x", "x", true, 4), "x <= 0");
+        assert_eq!(jcc_to_expr("jl", "a", "b", true, 4), "(a & b) < 0");
+        assert_eq!(jcc_to_expr("ja", "x", "x", true, 4), "x != 0");
+    }
+
+    #[test]
+    fn x87_status_word_masks() {
+        assert_eq!(float_cc_via_mask("je", 0x45, "a", "b"), "a > b");
+        assert_eq!(float_cc_via_mask("jne", 0x41, "a", "b"), "!(a > b)");
+        assert_eq!(float_cc_via_mask("jne", 0x40, "a", "b"), "a == b");
+        assert_eq!(float_cc_via_mask("jp", 0x44, "a", "b"), "a != b");
+    }
+
+    #[test]
+    fn deref_parenthesises_compound_bases_and_survives_min_disp() {
+        assert_eq!(deref_disp("int", "rax", 0), "*(int *)rax");
+        assert_eq!(deref_disp("int", "rax + rcx", 0), "*(int *)(rax + rcx)");
+        assert_eq!(deref_disp("int", "rax", -8), "*(int *)(rax - 0x8)");
+        let _ = deref_disp("int", "rax", i64::MIN);
+    }
+
+    #[test]
+    fn jcc_only_covers_unsigned_and_signed() {
+        assert_eq!(jcc_only_expr("jbe"), "CF || ZF");
+        assert_eq!(jcc_only_expr("jg"), "!ZF && SF == OF");
+    }
+
+    #[test]
+    fn call_args_keep_positions_for_missing_registers() {
+        let mut regs: HashMap<&'static str, PVal> = HashMap::default();
+        regs.insert("rdi", PVal::C(1));
+        regs.insert("rdx", PVal::C(3));
+        assert_eq!(collect_call_args(&regs, true, false), vec!["1", "rsi", "3"]);
     }
 }
