@@ -1150,6 +1150,240 @@ fn tokens_contain_reg(text: &str, reg: &str) -> bool {
 
 
 
+pub(crate) fn forward_single_use_locals(lines: &mut Vec<PseudoLine>, safe: &HashSet<String>) {
+    let index = name_line_index(lines);
+    let mut writes: HashMap<String, Vec<usize>> = HashMap::default();
+    for (i, line) in lines.iter().enumerate() {
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        if let Some((lhs, _)) = assignment_parts(&line.text) {
+            let lhs = lhs.trim();
+            if is_identifier(lhs) {
+                writes.entry(lhs.to_string()).or_default().push(i);
+            }
+        }
+    }
+    let mut names: Vec<&String> = safe.iter().collect();
+    names.sort();
+    let mut forwarded = 0usize;
+    let mut blocked_multi = 0usize;
+    let mut blocked_addr = 0usize;
+    for name in names {
+        let mut assign_idx: Option<usize> = None;
+        let mut assign_rhs = String::new();
+        let mut read_lines: Vec<usize> = Vec::new();
+        let mut bad = false;
+        for &i in index.get(name).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let line = &lines[i];
+            if line.kind == LineKind::Declaration {
+                continue;
+            }
+            let code = line.text.split("//").next().unwrap_or("");
+            if code.contains(&format!("&{name}")) {
+                bad = true;
+                blocked_addr += 1;
+                break;
+            }
+            if let Some((lhs, rhs)) = assignment_parts(code)
+                && lhs.trim() == name
+            {
+                if assign_idx.is_some() {
+                    bad = true;
+                    blocked_multi += 1;
+                    break;
+                }
+                assign_idx = Some(i);
+                assign_rhs = rhs.trim().to_string();
+                continue;
+            }
+            read_lines.push(i);
+        }
+        let Some(ai) = assign_idx else {
+            continue;
+        };
+        if bad || read_lines.is_empty() || assign_rhs.contains(';') || assign_rhs.is_empty() {
+            continue;
+        }
+        if read_lines.iter().any(|&i| i < ai) {
+            continue;
+        }
+        let simple = is_identifier(&assign_rhs) || is_number(&assign_rhs);
+        if !simple {
+            if read_lines.len() > 1 {
+                continue;
+            }
+            let mut limit = usize::MAX;
+            for_each_ident(&assign_rhs, |word| {
+                if let Some(list) = writes.get(word)
+                    && let Some(&next) = list.iter().find(|&&w| w > ai)
+                {
+                    limit = limit.min(next);
+                }
+            });
+            if read_lines.iter().any(|&i| i >= limit) {
+                continue;
+            }
+            let replacement = if rhs_needs_parens(&assign_rhs) {
+                format!("({})", assign_rhs)
+            } else {
+                assign_rhs
+            };
+            for i in read_lines {
+                lines[i].text = replace_word(&lines[i].text, name, &replacement);
+            }
+            lines[ai].text.clear();
+            continue;
+        }
+        let limit = writes
+            .get(&assign_rhs)
+            .and_then(|list| list.iter().copied().find(|&w| w > ai))
+            .unwrap_or(usize::MAX);
+        let mut replaced = 0usize;
+        for &i in &read_lines {
+            if i >= limit {
+                continue;
+            }
+            lines[i].text = replace_word(&lines[i].text, name, &assign_rhs);
+            replaced += 1;
+        }
+        if replaced == read_lines.len() {
+            lines[ai].text.clear();
+            forwarded += 1;
+        }
+    }
+    if std::env::var_os("RD_DEBUG_CANARY").is_some() && (forwarded > 0 || !safe.is_empty()) {
+        eprintln!(
+            "[forward] safe={} done={} multi={} addr={}",
+            safe.len(),
+            forwarded,
+            blocked_multi,
+            blocked_addr
+        );
+    }
+    lines.retain(|l| !l.text.is_empty());
+}
+pub(crate) fn forward_readonly_copies(lines: &mut Vec<PseudoLine>) {
+    let address_taken = address_taken_names(lines);
+    for _ in 0..2 {
+        let index = name_line_index(lines);
+        let mut assigns: HashMap<String, usize> = HashMap::default();
+        for line in lines.iter() {
+            if line.kind == LineKind::Declaration {
+                continue;
+            }
+            if let Some((lhs, _)) = assignment_parts(&line.text) {
+                let lhs = lhs.trim();
+                if is_identifier(lhs) {
+                    *assigns.entry(lhs.to_string()).or_default() += 1;
+                }
+            }
+        }
+        let immutable = |name: &str, assigns: &HashMap<String, usize>| {
+            name.starts_with("param_")
+                || name.starts_with("arg_")
+                || (is_identifier(name) && assigns.get(name).copied().unwrap_or(0) == 0)
+        };
+        let mut remove: Vec<usize> = Vec::new();
+        let mut changed = false;
+        for i in 0..lines.len() {
+            if lines[i].kind == LineKind::Declaration {
+                continue;
+            }
+            let Some((lhs, rhs)) = assignment_parts(&lines[i].text) else {
+                continue;
+            };
+            let lhs = lhs.trim().to_string();
+            let rhs = rhs.trim().trim_end_matches(';').trim().to_string();
+            if !is_identifier(&lhs)
+                || lhs.starts_with("param_")
+                || lhs.starts_with("arg_")
+                || assigns.get(&lhs).copied().unwrap_or(0) != 1
+                || !immutable(&rhs, &assigns)
+            {
+                continue;
+            }
+            if address_taken.contains(&lhs) {
+                continue;
+            }
+            let hits = index.get(&lhs).cloned().unwrap_or_default();
+            for j in hits {
+                if j == i || lines[j].kind == LineKind::Declaration {
+                    continue;
+                }
+                lines[j].text = replace_word(&lines[j].text, &lhs, &rhs);
+            }
+            remove.push(i);
+            changed = true;
+        }
+        if !remove.is_empty() {
+            let mut i = 0usize;
+            lines.retain(|_| {
+                let keep = !remove.contains(&i);
+                i += 1;
+                keep
+            });
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+fn name_line_index(lines: &[PseudoLine]) -> HashMap<String, Vec<usize>> {
+    let mut out: HashMap<String, Vec<usize>> = HashMap::default();
+    for (i, line) in lines.iter().enumerate() {
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        let code = line.text.split("//").next().unwrap_or("");
+        let bytes = code.as_bytes();
+        let mut j = 0usize;
+        while j < bytes.len() {
+            if !(bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+                j += 1;
+                continue;
+            }
+            let start = j;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
+            let list = out.entry(code[start..j].to_string()).or_default();
+            if list.last() != Some(&i) {
+                list.push(i);
+            }
+        }
+    }
+    out
+}
+fn address_taken_names(lines: &[PseudoLine]) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::default();
+    for line in lines {
+        if line.kind == LineKind::Declaration {
+            continue;
+        }
+        let code = line.text.split("//").next().unwrap_or("");
+        let bytes = code.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] != b'&' {
+                i += 1;
+                continue;
+            }
+            i += 1;
+            while i < bytes.len() && bytes[i] == b' ' {
+                i += 1;
+            }
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if i > start && (bytes[start].is_ascii_alphabetic() || bytes[start] == b'_') {
+                out.insert(code[start..i].to_string());
+            }
+        }
+    }
+    out
+}
 pub(crate) fn collect_identifiers(lines: &[PseudoLine]) -> HashSet<String> {
     let mut out: HashSet<String> = HashSet::default();
     for line in lines {

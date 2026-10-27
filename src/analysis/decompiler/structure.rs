@@ -465,6 +465,7 @@ pub(crate) struct WalkCtx<'a> {
     pub(crate) is64: bool,
     pub(crate) hints: &'a TypeHints,
     pub(crate) switches: &'a [crate::analysis::advanced::SwitchTable],
+    pub(crate) ssa: Option<&'a crate::analysis::decompiler::ssa::SsaFunction>,
     
     
     pub(crate) clone: bool,
@@ -1420,6 +1421,10 @@ fn parse_equality(cond: &str) -> Option<(String, String, bool)> {
 }
 
 fn dispatch_block_is_pure(ctx: &WalkCtx<'_>, block: usize) -> bool {
+    let known = ctx
+        .ssa
+        .and_then(|s| s.state_var_for_block(block))
+        .is_some();
     ctx.bops.get(block).is_some_and(|ops| {
         ops.iter().all(|(_, op)| {
             matches!(
@@ -1428,7 +1433,7 @@ fn dispatch_block_is_pure(ctx: &WalkCtx<'_>, block: usize) -> bool {
                     | POp::Test { .. }
                     | POp::CBranch { .. }
                     | POp::Branch { .. }
-            )
+            ) || (known && matches!(op, POp::Copy { .. } | POp::Load { .. }))
         })
     })
 }
@@ -3982,6 +3987,7 @@ mod cleanup_tests {
             is64: false,
             hints: &hints,
             switches: &[],
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };
@@ -4062,6 +4068,7 @@ mod cleanup_tests {
             is64: true,
             hints: &hints,
             switches: &[],
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };
@@ -4153,6 +4160,7 @@ mod cleanup_tests {
             is64: true,
             hints: &hints,
             switches: &switches,
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };
@@ -4229,6 +4237,7 @@ mod cleanup_tests {
             is64: true,
             hints: &hints,
             switches: &[],
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };
@@ -4245,6 +4254,137 @@ mod cleanup_tests {
             !lines.iter().any(|l| l.text.contains("goto")),
             "join clone must not emit a goto"
         );
+    }
+
+    #[test]
+    fn ssa_dispatch_allows_copy_before_compare() {
+        use crate::analysis::cfg::{BasicBlock, Edge, EdgeKind, CFG};
+        use crate::analysis::decompiler::ssa::SsaFunction;
+        use crate::disasm::operand_enum::OperandList;
+        use crate::disasm::{DisasmInstruction, InsnBytes};
+
+        let spec: Vec<Vec<(usize, EdgeKind)>> = vec![
+            vec![(3, EdgeKind::BranchTrue), (1, EdgeKind::BranchFalse)],
+            vec![(4, EdgeKind::BranchTrue), (2, EdgeKind::BranchFalse)],
+            vec![(5, EdgeKind::BranchTrue), (6, EdgeKind::BranchFalse)],
+            vec![(6, EdgeKind::Jump)],
+            vec![(6, EdgeKind::Jump)],
+            vec![(6, EdgeKind::Jump)],
+            vec![],
+        ];
+        let mut blocks: Vec<BasicBlock> = spec
+            .into_iter()
+            .enumerate()
+            .map(|(id, succ)| BasicBlock {
+                id,
+                start: 0x1000 + id as u64 * 0x10,
+                end: 0x1010 + id as u64 * 0x10,
+                instr_indices: id..id + 1,
+                successors: succ
+                    .into_iter()
+                    .map(|(target, kind)| Edge { target, kind })
+                    .collect(),
+                predecessors: vec![],
+            })
+            .collect();
+        for s in 0..blocks.len() {
+            for e in blocks[s].successors.clone() {
+                blocks[e.target].predecessors.push(s);
+            }
+        }
+        let mut block_at = HashMap::default();
+        for b in &blocks {
+            block_at.insert(b.start, b.id);
+        }
+        let cfg = CFG {
+            func_entry: 0x1000,
+            blocks,
+            block_at,
+        };
+        let copies: Vec<POp> = (0..3)
+            .map(|_| POp::Copy {
+                dst: PVar::Reg("rbx"),
+                src: PVar::Reg("rax"),
+                size: 8,
+            })
+            .collect();
+        let cmps: Vec<POp> = (1..=3)
+            .map(|v| POp::Cmp {
+                a: PVar::Reg("rbx"),
+                b: PVar::Const(v),
+                size: 8,
+            })
+            .collect();
+        let brs: Vec<POp> = (0..3)
+            .map(|i| POp::CBranch {
+                target: 0x1030 + i as u64 * 0x10,
+                cond: "je".into(),
+            })
+            .collect();
+        let cases: Vec<POp> = (0..3).map(|_| POp::Branch { target: 0x1060 }).collect();
+        let ret = POp::Return;
+        let bops: Vec<Vec<(u64, &POp)>> = vec![
+            vec![(0x1000, &copies[0]), (0x1001, &cmps[0]), (0x1002, &brs[0])],
+            vec![(0x1010, &copies[1]), (0x1011, &cmps[1]), (0x1012, &brs[1])],
+            vec![(0x1020, &copies[2]), (0x1021, &cmps[2]), (0x1022, &brs[2])],
+            vec![(0x1030, &cases[0])],
+            vec![(0x1040, &cases[1])],
+            vec![(0x1050, &cases[2])],
+            vec![(0x1060, &ret)],
+        ];
+        let insn = |address: u64, mnemonic: &'static str, operands: &str| DisasmInstruction {
+            address,
+            bytes: InsnBytes::from_slice(&[0x90]),
+            mnemonic,
+            operands: OperandList::Text(operands.into()),
+        };
+        let imap = vec![
+            insn(0x1000, "mov", "rbx, rax"),
+            insn(0x1001, "cmp", "rbx, 1"),
+            insn(0x1002, "je", "0x1030"),
+            insn(0x1010, "mov", "rbx, rax"),
+            insn(0x1011, "cmp", "rbx, 2"),
+            insn(0x1012, "je", "0x1040"),
+            insn(0x1020, "mov", "rbx, rax"),
+            insn(0x1021, "cmp", "rbx, 3"),
+            insn(0x1022, "je", "0x1050"),
+        ];
+        let block_consts: Vec<HashMap<&'static str, Lattice>> =
+            (0..cfg.blocks.len()).map(|_| HashMap::default()).collect();
+        let func_lookup = HashMap::default();
+        let back_edges = HashMap::default();
+        let dowhile = HashSet::default();
+        let dead = HashSet::default();
+        let postdom = Postdom::compute(&cfg);
+        let loops = Loops::compute(&cfg, 0, &[]);
+        let hints = TypeHints::default();
+        let ctx = WalkCtx {
+            cfg: &cfg,
+            bops: &bops,
+            imap: &imap,
+            func_lookup: &func_lookup,
+            back_edges: &back_edges,
+            block_consts: &block_consts,
+            dowhile: &dowhile,
+            dead: &dead,
+            cancel: None,
+            postdom: &postdom,
+            loops: &loops,
+            is64: true,
+            hints: &hints,
+            switches: &[],
+            ssa: None,
+            clone: false,
+            clone_depth: 0,
+        };
+        assert!(detect_compare_chain(&ctx, 0, 6).is_none());
+        let ssa = SsaFunction::build(&cfg, &bops).expect("ssa");
+        let with_ssa = WalkCtx {
+            ssa: Some(&ssa),
+            ..ctx
+        };
+        let chain = detect_compare_chain(&with_ssa, 0, 6).expect("ssa compare chain");
+        assert_eq!(chain.cases.len(), 3);
     }
 
     #[test]
@@ -4411,6 +4551,7 @@ mod cleanup_tests {
             is64: true,
             hints: &hints,
             switches: &[],
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };
@@ -4568,6 +4709,7 @@ mod cleanup_tests {
             is64: true,
             hints: &hints,
             switches: &[],
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };
@@ -4644,6 +4786,7 @@ mod cleanup_tests {
             is64: true,
             hints: &hints,
             switches: &[],
+            ssa: None,
             clone: false,
             clone_depth: 0,
         };

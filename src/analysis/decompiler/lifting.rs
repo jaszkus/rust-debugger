@@ -1244,7 +1244,9 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     let dowhile = compute_dowhile(cfg, &bops, imap, &back_edges, &block_consts, &hints);
     let postdom = Postdom::compute(cfg);
     let loops = Loops::compute(cfg, entry_id, &back_edge_list);
+    let t_ssa = Instant::now();
     let ssa = ssa::SsaFunction::build(cfg, &bops);
+    let t_ssa_build = t_ssa.elapsed();
     if ssa.is_none() && std::env::var_os("RD_DEBUG_SSA").is_some() {
         eprintln!("[ssa] {func_name}: skipped ({} blocks)", cfg.blocks.len());
     }
@@ -1254,9 +1256,46 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     {
         eprintln!("[ssa] {func_name}: {err}");
     }
+    if let Some(view) = &ssa
+        && std::env::var_os("RD_DEBUG_CANARY").is_some()
+    {
+        for v in &view.state_vars {
+            eprintln!(
+                "[ssa-state] {func_name}: header={} base={:?} kind={:?} dispatch={:?} consts={:?}",
+                v.header, v.base, v.kind, v.dispatch.as_ref().map(|d| d.values.clone()), v.const_writes
+            );
+        }
+    }
+    let t_dce = Instant::now();
     let mut dead = compute_dead_ops_g(&graph, entry_id, &bops, cancel);
     if let Some(view) = &ssa {
         dead.extend(view.dead_stmts(cfg, &bops));
+    }
+    let t_ssa_dce = t_dce.elapsed();
+    let mut safe_locals: HashSet<String> = HashSet::default();
+    if let (Some(view), Some(rv)) = (&ssa, &recovery) {
+        let mut stack_vars = 0usize;
+        let mut one_def = 0usize;
+        for v in &rv.vars {
+            let variables::Loc::Stack { base, off } = v.storage else {
+                continue;
+            };
+            stack_vars += 1;
+            if view.def_count(ssa::BaseVar::Stack(base, off)) != 1 {
+                continue;
+            }
+            one_def += 1;
+            if let Some(name) = rv.names.stack_by_raw.get(&(base, off)) {
+                safe_locals.insert(name.clone());
+            }
+        }
+        if std::env::var_os("RD_DEBUG_CANARY").is_some() && stack_vars > 0 {
+            eprintln!(
+                "[safelocals] {func_name}: vars={} stack={stack_vars} one={one_def} safe={}",
+                rv.vars.len(),
+                safe_locals.len()
+            );
+        }
     }
     stats.dead_ops = dead.len();
     stats.t_dataflow = t_phase.elapsed();
@@ -1283,6 +1322,7 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
         is64,
         hints: &hints,
         switches,
+        ssa: ssa.as_ref(),
         clone: false,
         clone_depth: 0,
     };
@@ -1365,7 +1405,14 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     drop_save_restore_comments(&mut lines);
     alias::propagate_aliases(&mut lines);
     alias::drop_callee_saved_bookkeeping(&mut lines);
+    let t_forward = Instant::now();
     alias::drop_saved_register_restores(&mut lines);
+    for _ in 0..2 {
+        alias::forward_single_use_locals(&mut lines, &safe_locals);
+        alias::forward_readonly_copies(&mut lines);
+    }
+    let t_forward = t_forward.elapsed();
+
     alias::inline_single_assignment_registers(&mut lines);
     alias::cse_repeated_expressions(&mut lines);
     alias::propagate_aliases(&mut lines);
@@ -1419,11 +1466,13 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     alias::name_remaining_registers(&mut lines, !bp_is_frame);
     alias::inline_single_use_temps(&mut lines);
     alias::propagate_aliases(&mut lines);
+    let t_tmp = Instant::now();
     if let Some(view) = &ssa {
         let existing = alias::collect_identifiers(&lines);
         let plan = view.temp_name_plan(&bops, &existing);
         alias::name_temporary_values(&mut lines, &plan);
     }
+    let t_tmp = t_tmp.elapsed();
     ghidra_type_names(&mut lines);
     ghidra_function_names(&mut lines);
     alias::remove_unused_declarations(&mut lines);
@@ -1431,6 +1480,19 @@ pub fn decompile_with_stats(input: LiftInput<'_>) -> (Pseudocode, DecompStats) {
     debug_line_histogram(func_name, &lines);
     debug_other_shapes(func_name, &lines);
 
+    if std::env::var_os("RD_DEBUG_TIME").is_some() {
+        eprintln!(
+            "[t] {:x} b={} T={} S={} D={} H={} F={} M={}",
+            cfg.func_entry,
+            cfg.blocks.len(),
+            t_total.elapsed().as_micros(),
+            t_ssa_build.as_micros(),
+            t_ssa_dce.as_micros(),
+            stats.t_hints.as_micros(),
+            t_forward.as_micros(),
+            t_tmp.as_micros()
+        );
+    }
     stats.emitted_lines = lines.len();
     stats.output_bytes = lines.iter().map(|l| l.text.len()).sum();
     stats.t_total = t_total.elapsed();

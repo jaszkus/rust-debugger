@@ -299,9 +299,6 @@ pub(crate) fn render_op(
                         hints.var_names.as_ref().and_then(|vn| {
                             vn.stack_by_raw
                                 .get(&(base_id, *disp))
-                                .filter(|name| {
-                                    name.starts_with("local_") || name.starts_with("arg_")
-                                })
                                 .cloned()
                         })
                     }

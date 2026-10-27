@@ -1,4 +1,4 @@
-﻿use super::pcode::{reg_size, POp, PVar, StackBase};
+﻿use super::pcode::{POp, PVar, StackBase, reg_size};
 use crate::analysis::flow::cfg::CFG;
 use crate::analysis::operands::canonical_reg;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -82,6 +82,7 @@ pub(crate) enum LoopVarKind {
 #[derive(Clone, Debug)]
 pub(crate) struct DispatchInfo {
     pub block: usize,
+    pub base: BaseVar,
     pub values: Vec<i64>,
 }
 
@@ -144,7 +145,6 @@ fn visit(var: &PVar, f: &mut impl FnMut(&PVar)) {
         _ => {}
     }
 }
-
 
 pub(crate) fn for_each_read(op: &POp, f: &mut impl FnMut(&PVar)) {
     match op {
@@ -230,7 +230,11 @@ pub(crate) fn for_each_read(op: &POp, f: &mut impl FnMut(&PVar)) {
             visit(b, f);
         }
         POp::Bswap { src, .. } => visit(src, f),
-        POp::Branch { .. } | POp::CBranch { .. } | POp::Pop { .. } | POp::Nop | POp::LeaAddr { .. } => {}
+        POp::Branch { .. }
+        | POp::CBranch { .. }
+        | POp::Pop { .. }
+        | POp::Nop
+        | POp::LeaAddr { .. } => {}
     }
 }
 
@@ -261,7 +265,17 @@ pub(crate) fn for_each_write(op: &POp, f: &mut impl FnMut(&PVar)) {
         | POp::Cvt { dst, .. }
         | POp::Rotate { dst, .. }
         | POp::Bswap { dst, .. } => visit(dst, f),
-        POp::Cmpxchg { .. } => f(&PVar::Reg("rax")),
+        POp::Store { addr, .. } => {
+            if matches!(addr, PVar::StackSlot { .. }) {
+                visit(addr, f);
+            }
+        }
+        POp::Cmpxchg { addr, .. } => {
+            f(&PVar::Reg("rax"));
+            if matches!(addr, PVar::StackSlot { .. }) {
+                visit(addr, f);
+            }
+        }
         POp::Call { .. } | POp::CallInd { .. } | POp::CallOther { .. } => {
             for r in CALL_DEFS {
                 f(&PVar::Reg(r));
@@ -278,9 +292,16 @@ pub(crate) fn for_each_write(op: &POp, f: &mut impl FnMut(&PVar)) {
             }
         }
         POp::Push { .. } => f(&PVar::Reg("rsp")),
-        POp::Store { .. } | POp::Branch { .. } | POp::CBranch { .. } | POp::Return
-        | POp::ReturnPop { .. } | POp::Nop | POp::Cmp { .. } | POp::Test { .. }
-        | POp::FloatCmp { .. } | POp::BitTest { .. } | POp::BranchInd { .. } => {}
+        POp::Branch { .. }
+        | POp::CBranch { .. }
+        | POp::Return
+        | POp::ReturnPop { .. }
+        | POp::Nop
+        | POp::Cmp { .. }
+        | POp::Test { .. }
+        | POp::FloatCmp { .. }
+        | POp::BitTest { .. }
+        | POp::BranchInd { .. } => {}
     }
 }
 
@@ -375,8 +396,7 @@ fn write_size(op: &POp) -> u32 {
         POp::Zext { to_size, .. } | POp::Sext { to_size, .. } => *to_size,
         POp::LeaAddr { .. } | POp::AddrOf { .. } | POp::Cmpxchg { .. } => 8,
         POp::Cvt {
-            dst: PVar::Reg(r),
-            ..
+            dst: PVar::Reg(r), ..
         } => reg_size(r),
         POp::Cvt { .. } => 8,
         _ => 8,
@@ -490,6 +510,7 @@ fn compute_idoms(cfg: &CFG, entry: usize, rpo: &[usize], rpo_index: &[usize]) ->
 fn compute_df(cfg: &CFG, idom: &[usize], reachable: &[bool]) -> Vec<Vec<usize>> {
     let n = cfg.blocks.len();
     let mut df: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut seen: Vec<HashSet<usize>> = (0..n).map(|_| HashSet::default()).collect();
     for b in 0..n {
         if !reachable[b] || cfg.blocks[b].predecessors.len() < 2 {
             continue;
@@ -503,7 +524,7 @@ fn compute_df(cfg: &CFG, idom: &[usize], reachable: &[bool]) -> Vec<Vec<usize>> 
             let mut steps = 0usize;
             while runner != stop && runner < n && steps <= n {
                 steps += 1;
-                if !df[runner].contains(&b) {
+                if seen[runner].insert(b) {
                     df[runner].push(b);
                 }
                 let next = idom[runner];
@@ -553,8 +574,11 @@ impl SsaFunction {
             signed: bool,
         }
         let mut info: HashMap<u32, Info> = HashMap::default();
-        let note = |base: BaseVar, pos: (usize, usize), size: u32, op: &POp,
-                        info: &mut HashMap<u32, Info>| {
+        let note = |base: BaseVar,
+                    pos: (usize, usize),
+                    size: u32,
+                    op: &POp,
+                    info: &mut HashMap<u32, Info>| {
             let BaseVar::Tmp(id) = base else {
                 return;
             };
@@ -679,6 +703,9 @@ impl SsaFunction {
         let mut phi_index: Vec<HashMap<BaseVar, usize>> = vec![HashMap::default(); n];
         let mut phi_total = 0usize;
         for base in bases {
+            if matches!(base, BaseVar::Stack(..)) {
+                continue;
+            }
             let mut work: Vec<usize> = def_blocks.get(&base).cloned().unwrap_or_default();
             let mut has: HashSet<usize> = work.iter().copied().collect();
             let mut i = 0usize;
@@ -1102,10 +1129,10 @@ impl SsaFunction {
     }
 
     fn detect_state_vars(&mut self, cfg: &CFG, bops: &[Vec<(u64, &POp)>]) {
-        let mut dispatch_sites: Vec<DispatchInfo> = Vec::new();
-        for (b, ops) in bops.iter().enumerate().take(cfg.blocks.len()) {
+        let mut block_values: Vec<Vec<(BaseVar, i64)>> = Vec::new();
+        for ops in bops.iter().take(cfg.blocks.len()) {
             let mut origins: HashMap<&'static str, BaseVar> = HashMap::default();
-            let mut per_base: HashMap<BaseVar, Vec<i64>> = HashMap::default();
+            let mut found: Vec<(BaseVar, i64)> = Vec::new();
             for (_, op) in ops {
                 match op {
                     POp::Cmp { a, b, .. } if matches!(b, PVar::Const(_)) => {
@@ -1121,10 +1148,7 @@ impl SsaFunction {
                             continue;
                         };
                         let PVar::Const(k) = b else { continue };
-                        let list = per_base.entry(base).or_default();
-                        if !list.contains(k) {
-                            list.push(*k);
-                        }
+                        found.push((base, *k));
                     }
                     POp::Call { .. }
                     | POp::CallInd { .. }
@@ -1142,26 +1166,38 @@ impl SsaFunction {
                     }
                 }
             }
-            let mut best: Option<DispatchInfo> = None;
-            for (base, values) in per_base {
+            block_values.push(found);
+        }
+        let mut base_values: HashMap<BaseVar, Vec<i64>> = HashMap::default();
+        for found in &block_values {
+            for &(base, value) in found {
+                let list = base_values.entry(base).or_default();
+                if !list.contains(&value) {
+                    list.push(value);
+                }
+            }
+        }
+        let mut dispatch_sites: Vec<DispatchInfo> = Vec::new();
+        for (block, found) in block_values.iter().enumerate() {
+            for &(base, _) in found {
+                let Some(values) = base_values.get(&base) else {
+                    continue;
+                };
                 if values.len() < 2 {
                     continue;
                 }
-                let _ = base;
-                if best.as_ref().is_none_or(|d| d.values.len() < values.len()) {
-                    best = Some(DispatchInfo {
-                        block: b,
-                        values,
-                    });
+                if dispatch_sites.iter().any(|d| d.block == block) {
+                    continue;
                 }
-            }
-            if let Some(d) = best {
-                dispatch_sites.push(d);
+                dispatch_sites.push(DispatchInfo {
+                    block,
+                    base,
+                    values: values.clone(),
+                });
             }
         }
         dispatch_sites.sort_by_key(|d| d.block);
         self.dispatch_sites = dispatch_sites;
-
         let mut state_vars = Vec::new();
         for lp in &self.loops {
             let phis: Vec<(BaseVar, Vec<Option<VarId>>)> = self.blocks[lp.header]
@@ -1185,11 +1221,24 @@ impl SsaFunction {
                 if !carried {
                     continue;
                 }
+                let mut dispatch: Option<DispatchInfo> = None;
+                for site in &self.dispatch_sites {
+                    if site.base == base
+                        && lp.blocks.contains(&site.block)
+                        && dispatch
+                            .as_ref()
+                            .is_none_or(|old| old.values.len() < site.values.len())
+                    {
+                        dispatch = Some(site.clone());
+                    }
+                }
+                if dispatch.is_none() {
+                    continue;
+                }
                 let mut const_writes = Vec::new();
                 let mut arith = false;
                 let mut loads = false;
                 let mut copies = 0usize;
-                let mut dispatch: Option<DispatchInfo> = None;
                 for &b in &lp.blocks {
                     let Some(ops) = bops.get(b) else { continue };
                     for (_, op) in ops {
@@ -1210,8 +1259,12 @@ impl SsaFunction {
                                     copies += 1;
                                 }
                             }
-                            POp::IntAnd { .. } | POp::IntOr { .. } | POp::IntXor { .. }
-                            | POp::IntLeft { .. } | POp::IntShr { .. } | POp::IntSar { .. } => {
+                            POp::IntAnd { .. }
+                            | POp::IntOr { .. }
+                            | POp::IntXor { .. }
+                            | POp::IntLeft { .. }
+                            | POp::IntShr { .. }
+                            | POp::IntSar { .. } => {
                                 arith = true;
                             }
                             POp::Load { .. } => loads = true,
@@ -1221,8 +1274,10 @@ impl SsaFunction {
                     if let Some(d) = self
                         .dispatch_sites
                         .iter()
-                        .find(|d| d.block == b && lp.blocks.contains(&b))
-                        && dispatch.as_ref().is_none_or(|old| old.values.len() < d.values.len())
+                        .find(|d| d.block == b && d.base == base)
+                        && dispatch
+                            .as_ref()
+                            .is_none_or(|old| old.values.len() < d.values.len())
                     {
                         dispatch = Some(d.clone());
                     }
@@ -1250,6 +1305,15 @@ impl SsaFunction {
         self.state_vars = state_vars;
     }
 
+    pub(crate) fn def_count(&self, base: BaseVar) -> usize {
+        self.blocks
+            .iter()
+            .flat_map(|b| b.stmts.iter())
+            .flat_map(|s| s.defs.iter())
+            .filter(|v| self.vars[v.0 as usize].base == base)
+            .count()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn loop_state_var(&self, header: usize) -> Option<&LoopStateVar> {
         self.state_vars.iter().find(|v| v.header == header)
@@ -1257,9 +1321,7 @@ impl SsaFunction {
 
     #[allow(dead_code)]
     pub(crate) fn state_var_for_block(&self, block: usize) -> Option<&DispatchInfo> {
-        self.dispatch_sites
-            .iter()
-            .find(|d| d.block == block)
+        self.dispatch_sites.iter().find(|d| d.block == block)
     }
 
     #[allow(dead_code)]
@@ -1498,10 +1560,11 @@ impl SsaFunction {
                     let v = stmt.defs[0];
                     let base = self.vars[v.0 as usize].base;
                     if let Some(&id) = ids.get(&base)
-                        && !test_bit(&live, id) {
-                            dead.insert((b, i));
-                            removed = true;
-                        }
+                        && !test_bit(&live, id)
+                    {
+                        dead.insert((b, i));
+                        removed = true;
+                    }
                 }
                 if !removed {
                     for v in &stmt.defs {
@@ -1576,8 +1639,8 @@ fn write_reg_of(op: &POp) -> Option<&PVar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::flow::cfg::{BasicBlock, Edge, EdgeKind};
     use crate::analysis::decompiler::pcode::StackBase;
+    use crate::analysis::flow::cfg::{BasicBlock, Edge, EdgeKind};
 
     fn make_cfg(spec: &[&[(usize, EdgeKind)]]) -> CFG {
         let mut blocks: Vec<BasicBlock> = spec
@@ -1644,18 +1707,21 @@ mod tests {
             vec![copy_rax(1)],
             vec![copy_rax(2)],
             vec![copy_rax(3)],
-            vec![POp::Copy {
-                dst: PVar::Reg("rbx"),
-                src: PVar::Reg("rax"),
-                size: 8,
-            }, POp::Store {
-                addr: PVar::StackSlot {
-                    base: StackBase::Rsp,
-                    off: -8,
+            vec![
+                POp::Copy {
+                    dst: PVar::Reg("rbx"),
+                    src: PVar::Reg("rax"),
+                    size: 8,
                 },
-                src: PVar::Reg("rbx"),
-                size: 8,
-            }],
+                POp::Store {
+                    addr: PVar::StackSlot {
+                        base: StackBase::Rsp,
+                        off: -8,
+                    },
+                    src: PVar::Reg("rbx"),
+                    size: 8,
+                },
+            ],
         ]);
         let ssa = SsaFunction::build(&cfg, bops).expect("ssa");
         ssa.validate(&cfg).expect("valid ssa");
@@ -1759,15 +1825,18 @@ mod tests {
         ]);
         let bops = make_bops(vec![
             vec![copy_rax(1)],
-            vec![POp::IntAdd {
-                dst: PVar::Reg("rax"),
-                a: PVar::Reg("rax"),
-                b: PVar::Const(1),
-                size: 8,
-            }, POp::CBranch {
-                target: 0x1020,
-                cond: "jne".into(),
-            }],
+            vec![
+                POp::IntAdd {
+                    dst: PVar::Reg("rax"),
+                    a: PVar::Reg("rax"),
+                    b: PVar::Const(1),
+                    size: 8,
+                },
+                POp::CBranch {
+                    target: 0x1020,
+                    cond: "jne".into(),
+                },
+            ],
             vec![POp::Copy {
                 dst: PVar::Reg("rax"),
                 src: PVar::Reg("rax"),
